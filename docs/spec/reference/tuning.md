@@ -204,6 +204,12 @@ watch, then restore. Verify the restore.
 chat uses `LIBERADO_TELEGRAM_*`. Set `deliver = false` so the schedule does not also push a
 session summary into the Telegram-bound chat.
 
+The Matrix room is separate. It starts only when `LIBERADO_MATRIX_HOMESERVER`,
+`LIBERADO_MATRIX_AS_TOKEN`, `LIBERADO_MATRIX_HS_TOKEN`, `LIBERADO_MATRIX_OWNER`, and
+`LIBERADO_MATRIX_MAIN_ROOM` are all set. None of them set leaves the daemon as it is.
+The values are environment variables, not `config.toml`. The hookup is in
+[`deploy/homelab/README.md`](../../../deploy/homelab/README.md).
+
 `[vault_reminders] enabled` defaults to false. The minute tick does nothing until that
 switch is on. `tasks` and `events` default to true and apply only while the switch is on.
 A task or event also needs its own `#remind` tag, or `remind` / `reminder` set to

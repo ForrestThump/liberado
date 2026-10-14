@@ -1,0 +1,27 @@
+# Tuwunel application-service registration for the Liberado main room.
+#
+# Replace both tokens before you register this file. They are secrets.
+# Keep this example free of real tokens.
+#
+# `id` must be set. Tuwunel 1.6 and later do not infer it from the file name.
+# `sender_localpart` is the bridge bot. The daemon acts as `@liberado` by masquerade
+# (`user_id` on each Client-Server call). That user is already inside the namespace below.
+#
+# The user regex is case-insensitive on Tuwunel. It covers `@liberado` and
+# `@liberado_<suffix>` on `matrix.homelab.local`.
+# Tuwunel matches an unanchored expression, so both patterns start with ^ and end with $.
+
+id: liberado
+url: http://liberado:4202
+as_token: replace-with-a-long-random-token
+hs_token: replace-with-a-different-long-random-token
+sender_localpart: liberado_bridge
+rate_limited: false
+receive_ephemeral: false
+namespaces:
+  users:
+    - exclusive: true
+      regex: "^@liberado(_[a-z0-9._=-]+)?:matrix\\.homelab\\.local$"
+  aliases:
+    - exclusive: true
+      regex: "^#liberado_.*:matrix\\.homelab\\.local$"

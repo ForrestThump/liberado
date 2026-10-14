@@ -120,6 +120,94 @@ just latency-homelab --json
 The command reads the configured journal from the running container. The Rust cost crate calculates
 the per-role p50, p95, maximum, time to first token, and token count.
 
+## Matrix room
+
+Matrix is a second chat next to Telegram. It stays off until the five variables below are set.
+With none of them set, the daemon does not listen and does not log past one debug line.
+Telegram is unchanged, and it remains the channel for background cards.
+
+The homeserver is Tuwunel. One application service drives the existing user
+`@liberado:matrix.homelab.local` by masquerade: every Client-Server call sends the
+application-service token and `user_id=@liberado:…`. Tuwunel allows that when the user id
+matches the registration namespace. The account can already exist. `LIBERADO_MATRIX_MAIN_USER`
+is the localpart (default `liberado`). A full user id is kept as written.
+
+The main room is the existing `#liberado` room. Put its room id in `LIBERADO_MATRIX_MAIN_ROOM`.
+An alias is resolved at startup. The daemon joins when `@liberado` is not already in the room.
+It does not create that room. Rooms it creates later lock encryption off. This room must stay
+unencrypted. Do not send `m.room.encryption`. Element X shows an unencrypted badge. That is expected.
+
+### Tokens and registration
+
+Generate two different tokens on the homelab host:
+
+```bash
+openssl rand -hex 32
+openssl rand -hex 32
+```
+
+Put the first in `as_token` and `LIBERADO_MATRIX_AS_TOKEN`. Put the second in `hs_token` and
+`LIBERADO_MATRIX_HS_TOKEN`. The example file is
+[`matrix/liberado-appservice.yaml.example`](matrix/liberado-appservice.yaml.example).
+`id` is `liberado`. Set it. Do not rely on the file name.
+
+Register it in the Tuwunel admin room. That is the default. Send:
+
+```text
+!admin appservices register
+```
+
+Then send the YAML in a code block. The same fields can live in `tuwunel.toml` under
+`[global.appservice.liberado]`. Set `id` there too. Restart Tuwunel after a file edit.
+
+Tuwunel matches an unanchored expression. The example anchors both patterns:
+
+```text
+^@liberado(_[a-z0-9._=-]+)?:matrix\.homelab\.local$
+^#liberado_.*:matrix\.homelab\.local$
+```
+
+The registration `url` is `http://liberado:4202`. Both containers are on the external `homelab`
+network, so that name resolves. If Tuwunel still cannot resolve `liberado`, set
+`dns_passthru_appservices = true` in the Tuwunel config. Do not publish port 4202 on the host.
+The sample Compose file uses `expose: ["4202"]` only. Do not add `ports:` for 4202, and do not
+add `EXPOSE 4202` to the Dockerfile.
+
+### Variables
+
+Set these on the liberado service. Secrets stay in the host environment, not in `config.toml`.
+
+| Variable | Required | Purpose |
+|---|---|---|
+| `LIBERADO_MATRIX_HOMESERVER` | yes | Base URL, `http://tuwunel:8008` |
+| `LIBERADO_MATRIX_AS_TOKEN` | yes | Token the daemon sends to Tuwunel |
+| `LIBERADO_MATRIX_HS_TOKEN` | yes | Token Tuwunel sends to the daemon |
+| `LIBERADO_MATRIX_OWNER` | yes | Only this user is acted on, `@shiloh:matrix.homelab.local` |
+| `LIBERADO_MATRIX_MAIN_ROOM` | yes | Room id, or an alias that resolves at startup |
+| `LIBERADO_MATRIX_SERVER_NAME` | no | Defaults to the domain in the owner id |
+| `LIBERADO_MATRIX_MAIN_USER` | no | Localpart, default `liberado` |
+| `LIBERADO_MATRIX_AS_LISTEN` | no | Default `0.0.0.0:4202` |
+| `LIBERADO_MATRIX_AS_ID` | no | Default `liberado` |
+| `LIBERADO_MATRIX_SENDER_LOCALPART` | no | Default `liberado_bridge`. Not one of the five. |
+
+If some of the five are set and some are missing, the daemon logs one warning that names the
+missing variables and leaves Matrix off. A failed whoami or join does the same. The rest of
+the daemon keeps running.
+
+Processed transaction ids are stored in `<data_dir>/matrix-txns.json`. A restart does not
+replay them.
+
+### Check
+
+1. Recreate the liberado container after the variables and the `expose` line are in place.
+2. In the Tuwunel admin room, `!admin appservices list` shows `liberado`.
+   `!admin appservices show-config liberado` shows the registration, including the anchored patterns.
+3. Tuwunel pings `http://liberado:4202/_matrix/app/v1/ping` with the homeserver token.
+   A live registration answers `{}`.
+4. In Element X, open `#liberado` and send `status`. Liberado replies with the status text.
+   `status`, `/status`, and `!status` are the same command. `status of the build` is a normal
+   message. `help` lists the commands.
+
 ## Configuration and image boundaries
 
 Deployment ships code. The host's `topology.toml` and `policy.toml` remain mounted configuration.
