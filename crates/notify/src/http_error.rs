@@ -1,7 +1,7 @@
 //! Format Telegram HTTP failures so the bot token cannot reach a log or a caller.
 //!
 //! The request URL is `…/bot<token>/<method>`. Reqwest includes that URL in the
-//! error's Display. [`line`] drops the URL, then runs [`liberado_common::redact_secrets`]
+//! error's Display. [`line()`] drops the URL, then runs [`liberado_common::redact_secrets`]
 //! so a token that survives in the message text is still removed.
 
 use liberado_messaging::MessagingError;

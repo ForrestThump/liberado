@@ -1,6 +1,6 @@
 //! Strip secrets from text before it is logged or returned to a client.
 //!
-//! Reqwest puts the full request URL in [`std::fmt::Display`] for [`reqwest::Error`].
+//! Reqwest puts the full request URL in [`std::fmt::Display`] for `reqwest::Error`.
 //! Callers that have the error value must pass `err.without_url()` first. This
 //! function is the second pass: it still removes a Telegram bot token, URL
 //! userinfo, or a secret query value when the URL text is already a string.
