@@ -44,4 +44,44 @@ fn telegram_rows_and_card_options_come_from_one_table() {
         already_decided_phrase("session"),
         "already decided: Approved for this session"
     );
+    assert_eq!(
+        permission_receipt("✅", "Approved once", "needs write"),
+        "✅ Approved once — needs write"
+    );
+}
+
+#[test]
+fn resolved_elsewhere_targets_only_the_originating_surface() {
+    assert_eq!(
+        resolved_elsewhere_target(Some("telegram"), "webui", Some("telegram")).as_deref(),
+        Some("telegram")
+    );
+    assert_eq!(
+        resolved_elsewhere_target(Some("telegram"), "telegram", Some("telegram")),
+        None
+    );
+    assert_eq!(
+        resolved_elsewhere_target(Some("web"), "webui", Some("telegram")),
+        None
+    );
+    assert_eq!(
+        resolved_elsewhere_target(None, "webui", Some("telegram")),
+        None
+    );
+    assert_eq!(
+        resolved_elsewhere_target(Some("matrix"), "webui", Some("telegram")).as_deref(),
+        Some("matrix")
+    );
+    assert_eq!(
+        resolved_elsewhere_target(Some("background"), "webui", Some("telegram")).as_deref(),
+        Some("telegram")
+    );
+    assert_eq!(
+        resolved_elsewhere_target(Some("background"), "telegram", Some("telegram")),
+        None
+    );
+    assert_eq!(
+        resolved_elsewhere_target(Some("background"), "webui", None),
+        None
+    );
 }

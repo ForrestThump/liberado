@@ -186,6 +186,7 @@ impl ChatSessions {
             .create_with_grant(Some(title.clone()), grant)
             .await
             .map_err(|e| e.to_string())?;
+        self.schedule_matrix_reconcile();
         Ok(CreateAgentResult {
             conversation_id: id.to_string(),
             profile,

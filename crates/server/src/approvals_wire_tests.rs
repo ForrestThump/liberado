@@ -12,8 +12,10 @@ use liberado_telegram_approvals::PermissionResolver;
 use liberado_test_support::InvocationRecordingRuntime;
 use liberado_vault::Vault;
 
+use liberado_common::{ChannelKind, SessionChannel};
+
 use super::{ApprovalHub, wire_approvals};
-use crate::sticky::StickySession;
+use crate::bindings::{BindingKey, ChannelBindings};
 
 struct Nop;
 
@@ -64,28 +66,40 @@ fn assert_wired(resolver: &Arc<PermissionResolver>, hub: &ApprovalHub) {
     assert!(resolver.ledger().is_some());
 }
 
-async fn sticky_with_id() -> (StickySession, Ulid) {
-    let sticky = StickySession::ephemeral();
+async fn bound_with_id() -> (ChannelBindings, Ulid) {
+    let bindings = ChannelBindings::ephemeral();
     let id = Ulid::new();
-    sticky.set(Some(id)).await;
-    (sticky, id)
+    bindings
+        .set(&BindingKey::telegram("chat", "bot"), Some(id))
+        .await;
+    (bindings, id)
+}
+
+fn published(chat: &ChatSessions) -> Vec<SessionChannel> {
+    chat.binding_slot().lock().unwrap().clone()
 }
 
 #[tokio::test]
 async fn chat_with_a_notifier_gets_a_sink_and_the_sticky_id() {
     let world = World::open().await;
     let chat = world.chat();
-    let (sticky, id) = sticky_with_id().await;
+    let (bindings, id) = bound_with_id().await;
     let (resolver, hub) = wire_approvals(
         Some(&chat),
-        &sticky,
+        &bindings,
         world.vault.clone(),
         world.path(),
         Some(Arc::new(Nop)),
     )
     .await;
     assert!(chat.has_permission_sink());
-    assert_eq!(*chat.sticky_slot().lock().unwrap(), Some(id));
+    assert_eq!(
+        published(&chat),
+        vec![SessionChannel {
+            session_id: id.to_string(),
+            channel: ChannelKind::Telegram,
+        }]
+    );
     assert_wired(&resolver, &hub);
 }
 
@@ -93,17 +107,23 @@ async fn chat_with_a_notifier_gets_a_sink_and_the_sticky_id() {
 async fn chat_without_a_notifier_still_receives_the_sticky_id() {
     let world = World::open().await;
     let chat = world.chat();
-    let (sticky, id) = sticky_with_id().await;
+    let (bindings, id) = bound_with_id().await;
     let (resolver, hub) = wire_approvals(
         Some(&chat),
-        &sticky,
+        &bindings,
         world.vault.clone(),
         world.path(),
         None,
     )
     .await;
     assert!(!chat.has_permission_sink());
-    assert_eq!(*chat.sticky_slot().lock().unwrap(), Some(id));
+    assert_eq!(
+        published(&chat),
+        vec![SessionChannel {
+            session_id: id.to_string(),
+            channel: ChannelKind::Telegram,
+        }]
+    );
     assert_wired(&resolver, &hub);
 }
 
@@ -111,17 +131,17 @@ async fn chat_without_a_notifier_still_receives_the_sticky_id() {
 async fn no_chat_does_not_publish_the_sticky_id() {
     let world = World::open().await;
     let unused = world.chat();
-    let (sticky, _id) = sticky_with_id().await;
+    let (bindings, _id) = bound_with_id().await;
     let (resolver, hub) = wire_approvals(
         None,
-        &sticky,
+        &bindings,
         world.vault.clone(),
         world.path(),
         Some(Arc::new(Nop)),
     )
     .await;
     assert!(!unused.has_permission_sink());
-    assert_eq!(*unused.sticky_slot().lock().unwrap(), None);
+    assert!(published(&unused).is_empty());
     assert_wired(&resolver, &hub);
 }
 
@@ -129,10 +149,10 @@ async fn no_chat_does_not_publish_the_sticky_id() {
 async fn no_chat_and_no_notifier_still_builds_the_hub() {
     let world = World::open().await;
     let unused = world.chat();
-    let (sticky, _id) = sticky_with_id().await;
+    let (bindings, _id) = bound_with_id().await;
     let (resolver, hub) =
-        wire_approvals(None, &sticky, world.vault.clone(), world.path(), None).await;
+        wire_approvals(None, &bindings, world.vault.clone(), world.path(), None).await;
     assert!(!unused.has_permission_sink());
-    assert_eq!(*unused.sticky_slot().lock().unwrap(), None);
+    assert!(published(&unused).is_empty());
     assert_wired(&resolver, &hub);
 }

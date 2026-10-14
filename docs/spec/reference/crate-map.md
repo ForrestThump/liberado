@@ -5,7 +5,7 @@
 > Layer semantics and dependency rules: [contracts.md](../architecture/contracts.md) and
 > `crates/test-support/tests/layer_rules.rs` (the same role tags, mechanically enforced).
 
-56 workspace crates.
+57 workspace crates.
 
 ## foundation
 
@@ -82,6 +82,7 @@ Out-of-process adapters: MCP servers, bots, the forge.
 | Crate | Internal deps | Description |
 |---|---|---|
 | [`liberado-chat-search-mcp`](../../../crates/chat-search-mcp/) | `liberado-chat-search`, `liberado-config` | MCP server exposing conversation history search as a tool, so the dispatcher can search chat history mid-reasoning (not just the human, via the webui). Registered in topology.toml as a stdio MCP; built in-workspace, not a managed (cargo-installed-from-git) MCP. |
+| [`liberado-matrix`](../../../crates/matrix/) | `liberado-commands`, `liberado-markdown`, `liberado-messaging` | Matrix application-service transport: homeserver client, transaction listener, and one direct chat per agent. |
 | [`liberado-mcp-forge`](../../../crates/mcp-forge/) | `liberado-common`, `liberado-config` | Builds and installs Liberado MCP servers from git URLs via `cargo install --git`, wiring them to `McpTransport::Managed` entries in topology.toml by convention. |
 | [`liberado-memory-mcp`](../../../crates/memory-mcp/) | `liberado-common`, `liberado-config`, `liberado-memory-store`, `liberado-vault` | MCP server exposing general memory (user facts/preferences) and procedural memory (tool-selection guidance) as agent-callable tools, backed by liberado-memory-store. Registered in topology.toml as a stdio MCP; built in-workspace, not a managed (cargo-installed-from-git) MCP. Replaces the old liberado-tool-helper-mcp, which proxied every call over HTTP to an external mem0 service. |
 | [`liberado-operator-dogfood-mcp`](../../../crates/operator-dogfood-mcp/) | *none* | Stdio MCP for an external operator agent to dogfood Liberado through the existing HTTP API: find or create an Agents-shelf session, open a chat, post an explicit human turn, continue that session, and read history. |
@@ -106,7 +107,7 @@ Composition roots: the only crates allowed to see everything.
 | [`liberado-bootstrap`](../../../crates/bootstrap/) | `liberado-coder-agent`, `liberado-coder-core`, `liberado-common`, `liberado-config`, `liberado-cron`, `liberado-daemon`, `liberado-dispatch-pack`, `liberado-dispatcher`, `liberado-executor`, `liberado-mcp`, `liberado-notify`, `liberado-orchestrator`, `liberado-provider`, `liberado-provider-openai-compat` | Composition helpers that build Liberado's provider/dispatcher/orchestrator from the process environment — the shared daemon-assembly logic for every binary, so the env wiring lives in one place. |
 | [`liberado-cli`](../../../crates/cli/) | `chat-client-contract`, `liberado-coder-core`, `liberado-common`, `liberado-config`, `liberado-config-loader`, `liberado-harness-eval`, `liberado-ops`, `liberado-server` | the `liberado` binary: a client + launcher — `serve` runs the daemon/API, `chat` is a streaming client |
 | [`liberado-daemon`](../../../crates/daemon/) | `liberado-common`, `liberado-config`, `liberado-dispatcher`, `liberado-notify`, `liberado-orchestrator`, `liberado-provider`, `liberado-session`, `liberado-vault` | The Liberado daemon (Decision 2, daemon-first): the long-running core that watches the vault, attributes changes (loop-breaking), and emits reactable events. v1 vertical slice. |
-| [`liberado-server`](../../../crates/server/) | `chat-client-contract`, `liberado-bootstrap`, `liberado-chat-search`, `liberado-coder-agent`, `liberado-coder-core`, `liberado-commands`, `liberado-common`, `liberado-config`, `liberado-conversation-store`, `liberado-cost`, `liberado-daemon`, `liberado-dispatcher`, `liberado-executor`, `liberado-main-agent`, `liberado-mcp`, `liberado-memory-store`, `liberado-messaging`, `liberado-notify`, `liberado-provider`, `liberado-session`, `liberado-session-store`, `liberado-telegram-approvals`, `liberado-vault` | The Liberado daemon's API server (library): the watch loop + chat + HTTP/SSE API. Runnable via `liberado serve`. |
+| [`liberado-server`](../../../crates/server/) | `chat-client-contract`, `liberado-bootstrap`, `liberado-chat-search`, `liberado-coder-agent`, `liberado-coder-core`, `liberado-commands`, `liberado-common`, `liberado-config`, `liberado-conversation-store`, `liberado-cost`, `liberado-daemon`, `liberado-dispatcher`, `liberado-executor`, `liberado-main-agent`, `liberado-matrix`, `liberado-mcp`, `liberado-memory-store`, `liberado-messaging`, `liberado-notify`, `liberado-provider`, `liberado-session`, `liberado-session-store`, `liberado-telegram-approvals`, `liberado-vault` | The Liberado daemon's API server (library): the watch loop + chat + HTTP/SSE API. Runnable via `liberado serve`. |
 
 ## tooling
 

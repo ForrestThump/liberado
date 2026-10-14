@@ -150,7 +150,23 @@ async fn create_standard_conversation(
     };
 
     match sessions.list().await {
-        Ok(headers) => header_or_missing(headers, id, true),
+        Ok(headers) => {
+            schedule_agent_dm(sessions, &headers, id);
+            header_or_missing(headers, id, true)
+        }
         Err(e) => chat_error(e),
+    }
+}
+
+fn schedule_agent_dm(
+    sessions: &liberado_main_agent::ChatSessions,
+    headers: &[liberado_conversation_store::ConversationHeader],
+    id: liberado_conversation_store::Ulid,
+) {
+    if headers
+        .iter()
+        .any(|header| header.id == id && liberado_main_agent::is_agent_dm_session(header))
+    {
+        sessions.schedule_matrix_reconcile();
     }
 }

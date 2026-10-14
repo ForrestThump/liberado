@@ -197,12 +197,20 @@ string stamped onto the goal. Re-check the offset when DST flips.
 To test a schedule without waiting: set `cron_expr` a few minutes out, `up -d --force-recreate`,
 watch, then restore. Verify the restore.
 
-### Mechanical reminders — vault notes, not the sticky chat
+### Mechanical reminders — vault notes, not the Telegram-bound chat
 
 `task-ping`, `event-ping`, `habit-ping`, and `vault-reminder-tick` do not call a model. They send through
-`LIBERADO_REMINDER_BOT_TOKEN` and `LIBERADO_REMINDER_CHAT_ID`. That is a second bot. The sticky
+`LIBERADO_REMINDER_BOT_TOKEN` and `LIBERADO_REMINDER_CHAT_ID`. That is a second bot. The Telegram-bound
 chat uses `LIBERADO_TELEGRAM_*`. Set `deliver = false` so the schedule does not also push a
-session summary into the sticky chat.
+session summary into the Telegram-bound chat.
+
+The Matrix room is separate. It starts only when `LIBERADO_MATRIX_HOMESERVER`,
+`LIBERADO_MATRIX_AS_TOKEN`, `LIBERADO_MATRIX_HS_TOKEN`, `LIBERADO_MATRIX_OWNER`, and
+`LIBERADO_MATRIX_MAIN_ROOM` are all set. None of them set leaves the daemon as it is.
+The values are environment variables, not `config.toml`. The hookup is in
+[`deploy/homelab/README.md`](../../../deploy/homelab/README.md).
+Agent DMs are not the reminder path. `@liberado_pings` is not provisioned. The slug
+`pings` is reserved for a later notification room. Reminders stay on the reminder bot.
 
 `[vault_reminders] enabled` defaults to false. The minute tick does nothing until that
 switch is on. `tasks` and `events` default to true and apply only while the switch is on.
