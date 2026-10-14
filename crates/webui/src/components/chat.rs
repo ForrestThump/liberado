@@ -6,7 +6,7 @@ use super::approval_card::ApprovalCards;
 use super::message_row::MessageList;
 #[cfg(target_arch = "wasm32")]
 use crate::components::chat_submission::unanswered_turn_note;
-use crate::components::chat_submission::{profile_switched_note, submission_text};
+use crate::components::chat_submission::{bubble_role, profile_switched_note, submission_text};
 use crate::components::model_browser::ModelBrowser;
 use crate::components::picker::Picker;
 use crate::components::profile_browser::ProfileBrowser;
@@ -91,12 +91,7 @@ impl ChatMsg {
     }
 
     fn from_wire(msg: &ChatMessage) -> Self {
-        let role = match msg.role.as_str() {
-            "assistant" => "assistant",
-            "tool" => "tool",
-            "system" => "system",
-            _ => "user",
-        };
+        let role = bubble_role(&msg.role);
         ChatMsg {
             role,
             content: msg.content.clone(),

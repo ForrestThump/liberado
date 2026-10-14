@@ -22,6 +22,9 @@
 //!   the incoherence this rule guards against; it is simply an unanswered question. See
 //!   [`ChatSessions::persist_user_message`].
 //!
+//!   **A failed turn also writes one short error note.** The note is not an assistant tool tail.
+//!   Its text is a fixed sentence, so a reload can show the failure without the raw provider error.
+//!
 //! We depend on the [`ConversationStore`] *trait*, never a concrete store: the composition root
 //! injects the engine (JSONL today, SQLite/Postgres later) so it stays swappable.
 //!
@@ -87,6 +90,9 @@ mod reasoning_stamp;
 mod surface_mode;
 #[path = "sessions/turn_clock.rs"]
 mod turn_clock;
+#[path = "sessions/turn_failure.rs"]
+mod turn_failure;
+pub use turn_failure::{TURN_ERROR_AUTHOR, public_turn_failure};
 #[path = "sessions_waivers.rs"]
 mod waivers;
 #[path = "sessions/workspace.rs"]
@@ -789,9 +795,10 @@ impl ChatSessions {
                 // Derived from the runtime the executor is about to be handed, never from a list built
                 // beside it — see `Conversation::apply_available_tools`.
                 self.state_tool_surface(&mut convo, session, &settings, turn_runtime.as_ref());
-                let reply = convo
+                let ran = convo
                     .turn(&executor, turn_runtime.as_ref(), &framed_user)
-                    .await?;
+                    .await;
+                let reply = turn_failure::keep_or_record(self, session, ran).await?;
                 // Gap 2: if a `delegate` this turn deferred to the human out-of-band (an interactive
                 // proposal/permission notification already landed on this surface), collapse the face
                 // agent's now-redundant reply to a tiny pointer at that notification.
@@ -815,9 +822,10 @@ impl ChatSessions {
                             &settings,
                             turn_runtime.as_ref(),
                         );
-                        convo
+                        let ran = convo
                             .turn(&executor, turn_runtime.as_ref(), &framed_user)
-                            .await?
+                            .await;
+                        turn_failure::keep_or_record(self, session, ran).await?
                     }
                 }
             };
@@ -910,9 +918,10 @@ impl ChatSessions {
                     settings.profile.as_deref(),
                 );
                 self.state_tool_surface(&mut convo, session, &settings, turn_runtime.as_ref());
-                convo
+                let ran = convo
                     .turn_stream(&executor, turn_runtime.as_ref(), &framed_user, events)
-                    .await?;
+                    .await;
+                turn_failure::keep_or_record(self, session, ran).await?;
             } else {
                 match self.dispatch_turn(user, settings.delegation).await {
                     DispatchOutcome::Answered(reply) => {
@@ -934,9 +943,10 @@ impl ChatSessions {
                             &settings,
                             turn_runtime.as_ref(),
                         );
-                        convo
+                        let ran = convo
                             .turn_stream(&executor, turn_runtime.as_ref(), &framed_user, events)
-                            .await?;
+                            .await;
+                        turn_failure::keep_or_record(self, session, ran).await?
                     }
                 }
             }
@@ -1241,10 +1251,7 @@ impl ChatSessions {
 
             let terminal = match result {
                 Ok(()) => AgentEvent::Done,
-                Err(e) => {
-                    tracing::warn!(error = %e, session = %session, "chat turn failed");
-                    AgentEvent::Error(e.to_string())
-                }
+                Err(e) => turn_failure::failure_event(session, &e),
             };
             entry.publish(terminal);
             // Retired last: while this key is present, `start_or_attach` will attach rather than
@@ -1430,7 +1437,8 @@ impl ChatSessions {
     ///
     /// True when the transcript ends on the human's message and nothing is running for it. The
     /// honest reading of that state is "a turn was started and did not finish" — the daemon was
-    /// restarted mid-inference, the turn was cancelled, or it failed before persisting anything.
+    /// restarted mid-inference, or the turn was cancelled. A failed turn writes an error note,
+    /// so this stays false after a provider error.
     ///
     /// Derived rather than recorded, because the alternative is a durable "turn in flight" flag that
     /// has to be cleared on every exit path including the ones that do not run (a killed process

@@ -115,10 +115,7 @@ pub(crate) fn refreshes_agent_shelf(tool_name: &str, ok: bool) -> bool {
 
 /// Partition the conversation list onto the active shelf. Soft filter only —
 /// the full list stays in memory so switching shelves never drops selection.
-pub(super) fn conversations_on_shelf<'a>(
-    list: &'a [ConvHeader],
-    shelf: Shelf,
-) -> Vec<&'a ConvHeader> {
+pub(super) fn conversations_on_shelf(list: &[ConvHeader], shelf: Shelf) -> Vec<&ConvHeader> {
     let want = shelf.surface_mode();
     list.iter().filter(|c| c.surface_mode == want).collect()
 }

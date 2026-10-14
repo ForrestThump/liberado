@@ -26,10 +26,12 @@ pub fn stream_sse_response(response: reqwest::Response, name_map: ToolNameMap) -
     stream_chunk_stream(Box::pin(chunks), name_map)
 }
 
-fn owned_chunk(item: Result<impl AsRef<[u8]>, impl ToString>) -> Result<Vec<u8>, String> {
+fn owned_chunk(item: Result<impl AsRef<[u8]>, reqwest::Error>) -> Result<Vec<u8>, String> {
     match item {
         Ok(bytes) => Ok(bytes.as_ref().to_vec()),
-        Err(err) => Err(err.to_string()),
+        Err(err) => Err(liberado_common::redact_secrets(
+            &err.without_url().to_string(),
+        )),
     }
 }
 

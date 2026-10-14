@@ -160,7 +160,10 @@ impl DefaultSources {
         if let Some(key) = bearer.filter(|k| !k.is_empty()) {
             req = req.bearer_auth(key);
         }
-        let response = req.send().await.map_err(|e| format!("transport: {e}"))?;
+        let response = req
+            .send()
+            .await
+            .map_err(|e| format!("transport: {}", crate::redact_http::transport(e)))?;
         let status = response.status();
         if !status.is_success() {
             return Err(format!("HTTP {status}"));
@@ -168,7 +171,7 @@ impl DefaultSources {
         response
             .json()
             .await
-            .map_err(|e| format!("body not JSON: {e}"))
+            .map_err(|e| format!("body not JSON: {}", crate::redact_http::transport(e)))
     }
 
     async fn discover_one(

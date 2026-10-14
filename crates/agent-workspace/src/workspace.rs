@@ -331,7 +331,9 @@ fn download_error(err: reqwest::Error) -> WorkspaceError {
         }
         source = std::error::Error::source(inner);
     }
-    WorkspaceError::io(err)
+    WorkspaceError::io(liberado_common::redact_secrets(
+        &err.without_url().to_string(),
+    ))
 }
 
 fn mapped_download_error(err: &(dyn std::error::Error + 'static)) -> Option<WorkspaceError> {

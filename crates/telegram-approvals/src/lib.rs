@@ -204,11 +204,14 @@ impl ApprovalBot {
                 channel = self.channel.name(),
                 "registered slash-command menu"
             ),
-            Err(e) => tracing::warn!(
-                error = %e,
-                channel = self.channel.name(),
-                "register_commands failed"
-            ),
+            Err(e) => {
+                let error = liberado_common::redact_secrets(&e.to_string());
+                tracing::warn!(
+                    %error,
+                    channel = self.channel.name(),
+                    "register_commands failed"
+                );
+            }
         }
     }
 
@@ -309,13 +312,15 @@ impl ApprovalBot {
 
     async fn ack(&self, event_id: &str, text: &str) {
         if let Err(e) = self.channel.acknowledge(event_id, text).await {
-            tracing::warn!(error = %e, "acknowledge failed");
+            let error = liberado_common::redact_secrets(&e.to_string());
+            tracing::warn!(%error, "acknowledge failed");
         }
     }
 
     async fn send_text(&self, text: &str) {
         if let Err(e) = self.channel.send_text(text).await {
-            tracing::warn!(error = %e, channel = self.channel.name(), "send_text failed");
+            let error = liberado_common::redact_secrets(&e.to_string());
+            tracing::warn!(%error, channel = self.channel.name(), "send_text failed");
         }
     }
 
@@ -326,7 +331,8 @@ impl ApprovalBot {
         match message_ref {
             Some(mref) => {
                 if let Err(e) = self.channel.edit_message(mref, body).await {
-                    tracing::warn!(error = %e, "approval-bot: edit_message receipt failed; sending plain text");
+                    let error = liberado_common::redact_secrets(&e.to_string());
+                    tracing::warn!(%error, "approval-bot: edit_message receipt failed; sending plain text");
                     self.send_text(body).await;
                 }
             }
@@ -663,8 +669,9 @@ impl ApprovalBot {
                 }
             }
             Err(e) => {
-                tracing::warn!(error = %e, seq, "chat turn failed");
-                self.send_text(&label(&format!("Sorry — that turn failed: {e}")))
+                let error = liberado_common::redact_secrets(&e);
+                tracing::warn!(%error, seq, "chat turn failed");
+                self.send_text(&label(&format!("Sorry — that turn failed: {error}")))
                     .await;
             }
         }
@@ -775,7 +782,8 @@ impl ApprovalBot {
             )
             .await
         {
-            tracing::warn!(error = %e, "approval-bot: failed to send revised proposal buttons");
+            let error = liberado_common::redact_secrets(&e.to_string());
+            tracing::warn!(%error, "approval-bot: failed to send revised proposal buttons");
         }
     }
 }
@@ -791,8 +799,9 @@ async fn receive_and_dispatch(this: &Arc<ApprovalBot>, cursor: &mut String) {
             }
         }
         Err(e) => {
+            let error = liberado_common::redact_secrets(&e.to_string());
             tracing::warn!(
-                error = %e,
+                %error,
                 channel = this.channel.name(),
                 "messaging receive error"
             );

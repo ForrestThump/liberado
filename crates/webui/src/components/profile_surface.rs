@@ -36,7 +36,7 @@ pub(crate) fn set_surface(mut slot: Signal<Option<SurfaceMode>>, mode: Option<Su
 
 /// First token, so `/profile set coding` is the same command as `/profile`.
 pub(crate) fn is_profile_command(text: &str) -> bool {
-    text.trim().split_whitespace().next() == Some("/profile")
+    text.split_whitespace().next() == Some("/profile")
 }
 
 /// Slash dispatch that refuses `/profile` on an Agent surface before the command layer runs.
