@@ -18,8 +18,8 @@ use tower::ServiceExt;
 
 use super::{list_approvals, resolve_approval};
 use crate::approvals::ApprovalHub;
+use crate::bindings::ChannelBindings;
 use crate::state::AppState;
-use crate::sticky::StickySession;
 
 struct World {
     app: Router,
@@ -64,7 +64,7 @@ async fn world(notes: Vec<Proposal>) -> World {
     let mut state = AppState::for_test(sessions, None, dir.path().to_path_buf());
     state.approval_hub = Some(Arc::new(ApprovalHub::new(
         resolver,
-        StickySession::ephemeral(),
+        ChannelBindings::ephemeral(),
     )));
     let app = Router::new()
         .route(
