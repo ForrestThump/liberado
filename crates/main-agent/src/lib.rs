@@ -35,7 +35,8 @@ pub use face::{
     FaceRuntime,
 };
 pub use sessions::{
-    ChatSessions, PROFILE_AUTHOR, SessionError, SessionResult, default_conversation_title,
+    ChatSessions, PROFILE_AUTHOR, SessionError, SessionResult, TURN_ERROR_AUTHOR,
+    default_conversation_title, is_agent_dm_session, public_turn_failure,
 };
 // Re-exported so a daemon wiring `tuning.toml [chat] agent_profiles` can
 // build an `AgentProfiles` without depending on `liberado-conversation-store`

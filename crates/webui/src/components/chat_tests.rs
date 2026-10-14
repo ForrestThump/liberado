@@ -86,6 +86,7 @@ fn wire_roles_map_to_bubble_roles() {
         ("tool", "tool"),
         ("system", "system"),
         ("user", "user"),
+        ("error", "error"),
         ("something-new", "user"),
     ] {
         let msg = ChatMsg::from_wire(&ChatMessage {
@@ -97,6 +98,7 @@ fn wire_roles_map_to_bubble_roles() {
             reasoning: None,
         });
         assert_eq!(msg.role, expected, "wire role {wire:?}");
+        assert_eq!(msg.content, "x");
     }
 }
 

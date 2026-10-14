@@ -99,6 +99,11 @@ pub fn already_decided_phrase(action: &str) -> String {
     format!("already decided: {}", decided_phrase(action))
 }
 
+/// Receipt stamped on a channel card after a decision: `{emoji} {label} — {rationale}`.
+pub fn permission_receipt(emoji: &str, label: &str, rationale: &str) -> String {
+    format!("{emoji} {label} — {rationale}")
+}
+
 /// Telegram inline keyboard built from [`permission_choices`].
 pub fn permission_action_rows(proposal_id: &str) -> Vec<Vec<ActionButton>> {
     let mut rows = vec![Vec::new(), Vec::new()];

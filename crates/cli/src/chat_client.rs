@@ -138,7 +138,8 @@ async fn turn(
     let mut decoder = SseDecoder::default();
     let mut stream = response.bytes_stream();
     while let Some(chunk) = stream.next().await {
-        let chunk = chunk?;
+        let chunk =
+            chunk.map_err(|e| liberado_common::redact_secrets(&e.without_url().to_string()))?;
         let text = String::from_utf8_lossy(&chunk);
         for event in decoder.push(&text) {
             if dispatch(&event, session) {
