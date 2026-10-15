@@ -124,6 +124,55 @@ fn show_more_label_stays_on_the_chevron_row() {
     assert!(show.contains("Show more ({count})"));
 }
 
+/// Chat, Manage plugins, and the other view links must close the phone drawer.
+/// A project row already does this through `collapsed_after_pick`.
+#[test]
+fn nav_that_opens_a_view_closes_the_phone_drawer() {
+    let sidebar = include_str!("mod.rs");
+    let rail = include_str!("rail.rs");
+    let projects = include_str!("projects.rs");
+    let primary = rail
+        .split("fn PrimaryNavRow")
+        .nth(1)
+        .expect("PrimaryNavRow");
+    let primary = primary.split("fn ChatBubble").next().unwrap_or(primary);
+    assert!(
+        primary.contains("close_phone_drawer"),
+        "Chat, Library, and Automations share PrimaryNavRow: {primary}"
+    );
+    for target in ["Route::Chat", "Route::Library", "Route::Automations"] {
+        assert!(
+            sidebar.contains(&format!("collapsed: collapsed, target: {target}")),
+            "{target} nav must receive the drawer signal"
+        );
+    }
+    let plugins = projects.split("fn PluginList").nth(1).expect("PluginList");
+    assert!(
+        plugins.contains("close_phone_drawer"),
+        "Manage plugins must close the drawer: {plugins}"
+    );
+    for marker in [
+        "\"aria-label\": \"Liberado home\"",
+        "sidebar-section-label\", \"Agents\"",
+        "sidebar-section-label\", \"Projects\"",
+        "sidebar-section-label\", \"Plugins\"",
+    ] {
+        assert!(
+            window_around(sidebar, marker, 500).contains("close_phone_drawer"),
+            "{marker} must close the drawer"
+        );
+    }
+}
+
+fn window_around<'a>(src: &'a str, marker: &str, span: usize) -> &'a str {
+    let start = src
+        .find(marker)
+        .unwrap_or_else(|| panic!("missing {marker}"));
+    let from = start.saturating_sub(span);
+    let to = (start + marker.len() + span).min(src.len());
+    &src[from..to]
+}
+
 fn css_block<'a>(css: &'a str, selector: &str) -> &'a str {
     let needle = format!("{selector} {{");
     let start = css

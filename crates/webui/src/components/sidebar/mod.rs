@@ -15,6 +15,7 @@ use chat_client_contract::{
     ConvHeader, ConversationSearchResponse, ConversationSearchResult, SurfaceMode,
 };
 
+use crate::components::project_data::close_phone_drawer;
 use crate::components::projects_dialog::ProjectsDialog;
 use crate::components::sidebar_agent_creator::CreatorError;
 #[cfg(target_arch = "wasm32")]
@@ -315,7 +316,10 @@ pub fn Sidebar(
                     r#type: "button",
                     title: "Liberado home",
                     "aria-label": "Liberado home",
-                    onclick: move |_| route.set(Route::Chat),
+                    onclick: move |_| {
+                        route.set(Route::Chat);
+                        close_phone_drawer(collapsed);
+                    },
                     BrandLogo {}
                 }
                 div { class: "sidebar-brand-spacer" }
@@ -361,9 +365,9 @@ pub fn Sidebar(
 
             nav {
                 class: "sidebar-nav",
-                PrimaryNavRow { route: route, target: Route::Chat, label: "Chat", icon: rsx! { ChatBubble {} } }
-                PrimaryNavRow { route: route, target: Route::Library, label: "Library", icon: rsx! { LibraryGlyph {} } }
-                PrimaryNavRow { route: route, target: Route::Automations, label: "Automations", icon: rsx! { ClockGlyph {} } }
+                PrimaryNavRow { route: route, collapsed: collapsed, target: Route::Chat, label: "Chat", icon: rsx! { ChatBubble {} } }
+                PrimaryNavRow { route: route, collapsed: collapsed, target: Route::Library, label: "Library", icon: rsx! { LibraryGlyph {} } }
+                PrimaryNavRow { route: route, collapsed: collapsed, target: Route::Automations, label: "Automations", icon: rsx! { ClockGlyph {} } }
             }
 
             div {
@@ -445,7 +449,10 @@ pub fn Sidebar(
                             button {
                                 class: "sidebar-section-toggle",
                                 r#type: "button",
-                                onclick: move |_| route.set(Route::Agents),
+                                onclick: move |_| {
+                                    route.set(Route::Agents);
+                                    close_phone_drawer(collapsed);
+                                },
                                 span { class: "sidebar-section-label", "Agents" }
                             }
                             button {
@@ -595,7 +602,10 @@ pub fn Sidebar(
                             button {
                                 class: "sidebar-section-toggle",
                                 r#type: "button",
-                                onclick: move |_| route.set(Route::Projects),
+                                onclick: move |_| {
+                                    route.set(Route::Projects);
+                                    close_phone_drawer(collapsed);
+                                },
                                 span { class: "sidebar-section-label", "Projects" }
                             }
                             // The + opens the Create Project dialog rather than routing into a
@@ -633,11 +643,13 @@ pub fn Sidebar(
                                     } else {
                                         route.set(Route::Plugins);
                                     }
+                                    close_phone_drawer(collapsed);
                                 },
                                 span { class: "sidebar-section-label", "Plugins" }
                             }
                         }
                         PluginList {
+                            collapsed: collapsed,
                             on_open: move |_| route.set(Route::Plugins),
                         }
                     }

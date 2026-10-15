@@ -8,7 +8,7 @@ use dioxus::prelude::*;
 use super::Route;
 use super::rail::{PluginGlyph, ProjectGlyph};
 use crate::components::project_data::{
-    collapsed_after_pick, fetch_projects, project_dot, selected_project_name,
+    close_phone_drawer, collapsed_after_pick, fetch_projects, project_dot, selected_project_name,
 };
 
 #[component]
@@ -97,7 +97,7 @@ fn SidebarProject(
 }
 
 #[component]
-pub(super) fn PluginList(on_open: EventHandler<()>) -> Element {
+pub(super) fn PluginList(on_open: EventHandler<()>, collapsed: Signal<bool>) -> Element {
     rsx! {
         ul {
             class: "grok-list",
@@ -106,7 +106,10 @@ pub(super) fn PluginList(on_open: EventHandler<()>) -> Element {
                 button {
                     class: "grok-row-btn",
                     r#type: "button",
-                    onclick: move |_| on_open.call(()),
+                    onclick: move |_| {
+                        on_open.call(());
+                        close_phone_drawer(collapsed);
+                    },
                     PluginGlyph {}
                     span { class: "grok-row-title", "Manage plugins" }
                 }

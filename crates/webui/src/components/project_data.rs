@@ -68,6 +68,14 @@ pub(crate) fn collapsed_after_pick(narrow: bool, collapsed: bool) -> bool {
     narrow || collapsed
 }
 
+/// Close the phone drawer after a nav item opens a view. A desk rail is unchanged.
+pub(crate) fn close_phone_drawer(mut collapsed: Signal<bool>) {
+    collapsed.set(collapsed_after_pick(
+        crate::is_narrow_viewport(),
+        collapsed(),
+    ));
+}
+
 pub(crate) fn project_chip_line(name: &str) -> String {
     format!("Project: {name}. Not attached to this chat.")
 }
@@ -123,6 +131,18 @@ mod tests {
         assert!(collapsed_after_pick(true, true));
         assert!(!collapsed_after_pick(false, false));
         assert!(collapsed_after_pick(false, true));
+    }
+
+    #[test]
+    fn close_phone_drawer_uses_the_same_rule_as_a_project_pick() {
+        let src = include_str!("project_data.rs");
+        let body = src
+            .split("fn close_phone_drawer")
+            .nth(1)
+            .expect("close_phone_drawer");
+        let body = body.split("pub(crate) fn").next().unwrap_or(body);
+        assert!(body.contains("collapsed_after_pick"));
+        assert!(body.contains("is_narrow_viewport"));
     }
 
     #[test]

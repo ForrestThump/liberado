@@ -5,6 +5,7 @@
 use dioxus::prelude::*;
 
 use super::Route;
+use crate::components::project_data::close_phone_drawer;
 
 // ── Sub-components ──────────────────────────────────────────────────────────
 
@@ -37,6 +38,7 @@ pub(super) fn PrimaryNavRow(
     target: Route,
     label: &'static str,
     #[props(into)] icon: Element,
+    collapsed: Signal<bool>,
 ) -> Element {
     let active = match target {
         Route::Chat => route().is_chat_view(),
@@ -53,7 +55,10 @@ pub(super) fn PrimaryNavRow(
             r#type: "button",
             title: "{label}",
             "aria-label": "{label}",
-            onclick: move |_| route.set(target),
+            onclick: move |_| {
+                route.set(target);
+                close_phone_drawer(collapsed);
+            },
             {icon}
             span { class: "sidebar-nav-label", "{label}" }
         }
