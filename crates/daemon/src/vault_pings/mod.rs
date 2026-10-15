@@ -19,9 +19,10 @@ pub(crate) use tick::{ReminderTick, reminder_message};
 
 #[cfg(test)]
 pub(crate) use events::{EVENT_HORIZON_DAYS, VaultEvent, event_in_window};
-#[cfg(test)]
-pub(crate) use tasks::parse_task_line;
 
 #[cfg(test)]
-#[path = "../vault_pings_tests.rs"]
-mod vault_pings_tests;
+#[path = "../vault_pings_event_tests.rs"]
+mod vault_pings_event_tests;
+#[cfg(test)]
+#[path = "../vault_pings_task_tests.rs"]
+mod vault_pings_task_tests;

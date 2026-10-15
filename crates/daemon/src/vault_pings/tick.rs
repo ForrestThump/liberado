@@ -13,11 +13,12 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use chrono::{NaiveDate, NaiveDateTime, NaiveTime, Timelike};
+use turbovault_plugin_tasks::TasksConfig;
 
 use super::date::parse_ymd;
 use super::events::events_in_note;
 use super::remind::remind_opt_in;
-use super::tasks::parse_task_line;
+use super::tasks::{load_tasks_config, parse_tasks_for_jobs};
 use super::walk::markdown_notes;
 use liberado_config::VaultRemindersConfig;
 
@@ -67,10 +68,11 @@ pub(crate) fn reminder_message(root: &Path, tick: &ReminderTick) -> Option<Strin
 }
 
 fn collect(root: &Path, tick: &ReminderTick) -> Vec<DueItem> {
+    let tasks_config = load_tasks_config(root);
     let mut items = Vec::new();
     for (rel, text) in markdown_notes(root) {
         if tick.settings.tasks {
-            items.extend(tasks_due(&rel, &text, tick.now));
+            items.extend(tasks_due(&rel, &text, tick.now, &tasks_config));
         }
         if tick.settings.events {
             items.extend(events_due(&rel, &text, tick.now));
@@ -79,18 +81,22 @@ fn collect(root: &Path, tick: &ReminderTick) -> Vec<DueItem> {
     items
 }
 
-fn tasks_due(rel: &str, text: &str, now: NaiveDateTime) -> Vec<DueItem> {
-    let mut items = Vec::new();
-    for (index, line) in text.lines().enumerate() {
-        if let Some(item) = task_due(rel, line, index, now) {
-            items.push(item);
-        }
-    }
-    items
+fn tasks_due(rel: &str, text: &str, now: NaiveDateTime, config: &TasksConfig) -> Vec<DueItem> {
+    let lines = task_source_lines(text);
+    parse_tasks_for_jobs(text)
+        .into_iter()
+        .enumerate()
+        .filter_map(|(index, task)| due_item_for_task(rel, now, config, &lines, index, task))
+        .collect()
 }
 
-fn task_due(rel: &str, line: &str, index: usize, now: NaiveDateTime) -> Option<DueItem> {
-    let task = parse_task_line(line)?;
+fn task_due(
+    rel: &str,
+    content: &str,
+    line: &str,
+    line_number: usize,
+    now: NaiveDateTime,
+) -> Option<DueItem> {
     if !remind_opt_in(line) {
         return None;
     }
@@ -101,9 +107,53 @@ fn task_due(rel: &str, line: &str, index: usize, now: NaiveDateTime) -> Option<D
     }
     let when = format_when(stamp.date, time);
     Some(DueItem {
-        key: fire_key("task", rel, &when, &index.to_string()),
-        line: format!("{} — {} {when} — {rel}", task.text, stamp.label),
+        key: fire_key("task", rel, &when, &line_number.to_string()),
+        line: format!("{} — {} {when} — {rel}", content.trim(), stamp.label),
     })
+}
+
+fn due_item_for_task(
+    rel: &str,
+    now: NaiveDateTime,
+    config: &TasksConfig,
+    lines: &[&str],
+    index: usize,
+    task: turbovault_core::TaskItem,
+) -> Option<DueItem> {
+    if !config.accepts(&task) || !task.status.is_open() {
+        return None;
+    }
+    let line_number = index + 1;
+    let line = lines.get(index).copied().unwrap_or_default();
+    task_due(rel, &task.content, line, line_number, now)
+}
+
+fn task_source_lines(text: &str) -> Vec<&str> {
+    text.lines()
+        .filter(|line| is_task_line(line.trim_start()))
+        .collect()
+}
+
+fn is_task_line(line: &str) -> bool {
+    line.starts_with("- [")
+        || line.starts_with("* [")
+        || line.starts_with("+ [")
+        || starts_with_ordered_task(line)
+}
+
+fn starts_with_ordered_task(line: &str) -> bool {
+    let mut chars = line.chars().peekable();
+    let mut saw_digit = false;
+    while matches!(chars.peek(), Some(ch) if ch.is_ascii_digit()) {
+        saw_digit = true;
+        chars.next();
+    }
+    if !saw_digit {
+        return false;
+    }
+    matches!(chars.next(), Some('.') | Some(')'))
+        && matches!(chars.next(), Some(' '))
+        && matches!(chars.next(), Some('['))
 }
 
 fn anchor_stamp(line: &str) -> Option<Stamp> {

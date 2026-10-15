@@ -903,7 +903,7 @@ version = "3.9.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6dee98b0db6a962de883bf5d20362dee4d7ca0d12fe39a7c6c73c844e1cd7c1f"
 dependencies = [
- "darling 0.23.0",
+ "darling 0.21.3",
  "ident_case",
  "prettyplease",
  "proc-macro2",
@@ -1331,7 +1331,7 @@ checksum = "af491d569909a7e4dee0ad7db7f5341fef5c614d5b8ec8cf765732aba3cff681"
 dependencies = [
  "serde",
  "termcolor",
- "unicode-width 0.2.0",
+ "unicode-width 0.1.14",
 ]
 
 [[package]]
@@ -1361,7 +1361,7 @@ version = "3.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "faf9468729b8cbcea668e36183cb69d317348c2e08e994829fb56ebfdfbaac34"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.48.0",
 ]
 
 [[package]]
@@ -1908,6 +1908,7 @@ dependencies = [
  "ident_case",
  "proc-macro2",
  "quote",
+ "strsim",
  "syn 2.0.118",
 ]
 
@@ -5822,6 +5823,9 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "tracing",
+ "turbovault-core",
+ "turbovault-parser",
+ "turbovault-plugin-tasks",
 ]
 
 [[package]]
@@ -8198,7 +8202,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b570b25f7617e43d59005d0990ccb79e950a423952cea19671b7a876da390adf"
 dependencies = [
  "anyhow",
- "itertools 0.14.0",
+ "itertools 0.13.0",
  "proc-macro2",
  "quote",
  "syn 2.0.118",
@@ -9498,7 +9502,7 @@ version = "3.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32824fab5e16e6c4d86dc1ba84489390419a39f97699852b66480bb87d297ed8"
 dependencies = [
- "dirs 6.0.0",
+ "dirs 5.0.1",
 ]
 
 [[package]]
@@ -11083,7 +11087,7 @@ dependencies = [
 [[package]]
 name = "turbovault"
 version = "1.6.0"
-source = "git+https://github.com/ForrestThump/turbovault?tag=liberado-2026-08-27#bf9f0baf4a91d9e0718f2b8a3112ca0491bf145f"
+source = "git+https://github.com/ForrestThump/turbovault?tag=liberado-2026-10-15#69a217a5b437fa22b6efaefa2458d485e9378f29"
 dependencies = [
  "anyhow",
  "clap",
@@ -11112,7 +11116,7 @@ dependencies = [
 [[package]]
 name = "turbovault-audit"
 version = "1.6.0"
-source = "git+https://github.com/ForrestThump/turbovault?tag=liberado-2026-08-27#bf9f0baf4a91d9e0718f2b8a3112ca0491bf145f"
+source = "git+https://github.com/ForrestThump/turbovault?tag=liberado-2026-10-15#69a217a5b437fa22b6efaefa2458d485e9378f29"
 dependencies = [
  "chrono",
  "log",
@@ -11129,7 +11133,7 @@ dependencies = [
 [[package]]
 name = "turbovault-batch"
 version = "1.6.0"
-source = "git+https://github.com/ForrestThump/turbovault?tag=liberado-2026-08-27#bf9f0baf4a91d9e0718f2b8a3112ca0491bf145f"
+source = "git+https://github.com/ForrestThump/turbovault?tag=liberado-2026-10-15#69a217a5b437fa22b6efaefa2458d485e9378f29"
 dependencies = [
  "chrono",
  "schemars",
@@ -11144,7 +11148,7 @@ dependencies = [
 [[package]]
 name = "turbovault-core"
 version = "1.6.0"
-source = "git+https://github.com/ForrestThump/turbovault?tag=liberado-2026-08-27#bf9f0baf4a91d9e0718f2b8a3112ca0491bf145f"
+source = "git+https://github.com/ForrestThump/turbovault?tag=liberado-2026-10-15#69a217a5b437fa22b6efaefa2458d485e9378f29"
 dependencies = [
  "chrono",
  "log",
@@ -11163,7 +11167,7 @@ dependencies = [
 [[package]]
 name = "turbovault-export"
 version = "1.6.0"
-source = "git+https://github.com/ForrestThump/turbovault?tag=liberado-2026-08-27#bf9f0baf4a91d9e0718f2b8a3112ca0491bf145f"
+source = "git+https://github.com/ForrestThump/turbovault?tag=liberado-2026-10-15#69a217a5b437fa22b6efaefa2458d485e9378f29"
 dependencies = [
  "chrono",
  "serde",
@@ -11174,7 +11178,7 @@ dependencies = [
 [[package]]
 name = "turbovault-git"
 version = "1.6.0"
-source = "git+https://github.com/ForrestThump/turbovault?tag=liberado-2026-08-27#bf9f0baf4a91d9e0718f2b8a3112ca0491bf145f"
+source = "git+https://github.com/ForrestThump/turbovault?tag=liberado-2026-10-15#69a217a5b437fa22b6efaefa2458d485e9378f29"
 dependencies = [
  "fs4",
  "git2",
@@ -11188,7 +11192,7 @@ dependencies = [
 [[package]]
 name = "turbovault-graph"
 version = "1.6.0"
-source = "git+https://github.com/ForrestThump/turbovault?tag=liberado-2026-08-27#bf9f0baf4a91d9e0718f2b8a3112ca0491bf145f"
+source = "git+https://github.com/ForrestThump/turbovault?tag=liberado-2026-10-15#69a217a5b437fa22b6efaefa2458d485e9378f29"
 dependencies = [
  "anyhow",
  "dashmap",
@@ -11203,7 +11207,7 @@ dependencies = [
 [[package]]
 name = "turbovault-parser"
 version = "1.6.0"
-source = "git+https://github.com/ForrestThump/turbovault?tag=liberado-2026-08-27#bf9f0baf4a91d9e0718f2b8a3112ca0491bf145f"
+source = "git+https://github.com/ForrestThump/turbovault?tag=liberado-2026-10-15#69a217a5b437fa22b6efaefa2458d485e9378f29"
 dependencies = [
  "log",
  "pulldown-cmark",
@@ -11215,9 +11219,38 @@ dependencies = [
 ]
 
 [[package]]
+name = "turbovault-plugin-api"
+version = "1.6.0"
+source = "git+https://github.com/ForrestThump/turbovault?tag=liberado-2026-10-15#69a217a5b437fa22b6efaefa2458d485e9378f29"
+dependencies = [
+ "async-trait",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "turbomcp-types",
+]
+
+[[package]]
+name = "turbovault-plugin-tasks"
+version = "1.6.0"
+source = "git+https://github.com/ForrestThump/turbovault?tag=liberado-2026-10-15#69a217a5b437fa22b6efaefa2458d485e9378f29"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "serde",
+ "serde_json",
+ "tokio",
+ "turbomcp-types",
+ "turbovault-core",
+ "turbovault-parser",
+ "turbovault-plugin-api",
+]
+
+[[package]]
 name = "turbovault-tools"
 version = "1.6.0"
-source = "git+https://github.com/ForrestThump/turbovault?tag=liberado-2026-08-27#bf9f0baf4a91d9e0718f2b8a3112ca0491bf145f"
+source = "git+https://github.com/ForrestThump/turbovault?tag=liberado-2026-10-15#69a217a5b437fa22b6efaefa2458d485e9378f29"
 dependencies = [
  "anyhow",
  "chrono",
@@ -11249,7 +11282,7 @@ dependencies = [
 [[package]]
 name = "turbovault-vault"
 version = "1.6.0"
-source = "git+https://github.com/ForrestThump/turbovault?tag=liberado-2026-08-27#bf9f0baf4a91d9e0718f2b8a3112ca0491bf145f"
+source = "git+https://github.com/ForrestThump/turbovault?tag=liberado-2026-10-15#69a217a5b437fa22b6efaefa2458d485e9378f29"
 dependencies = [
  "anyhow",
  "dashmap",
@@ -11278,7 +11311,7 @@ dependencies = [
 [[package]]
 name = "turbovault-vector"
 version = "1.6.0"
-source = "git+https://github.com/ForrestThump/turbovault?tag=liberado-2026-08-27#bf9f0baf4a91d9e0718f2b8a3112ca0491bf145f"
+source = "git+https://github.com/ForrestThump/turbovault?tag=liberado-2026-10-15#69a217a5b437fa22b6efaefa2458d485e9378f29"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -12194,7 +12227,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.48.0",
 ]
 
 [[package]]

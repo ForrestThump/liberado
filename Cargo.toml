@@ -114,14 +114,19 @@ liberado-sysmap-gui = { path = "crates/sysmap-gui" }
 sysmap-core = { path = "crates/sysmap-core" }
 
 # --- co-developed git+tag pins (Decision 7) ---
-# ForrestThump forks at tag `liberado-2026-08-27`. Cargo fetches them; path siblings are
-# not required. Swap to crates.io versions for release builds once the forks publish.
-turbovault-core = { git = "https://github.com/ForrestThump/turbovault", tag = "liberado-2026-08-27" }
-turbovault-vault = { git = "https://github.com/ForrestThump/turbovault", tag = "liberado-2026-08-27" }
-turbovault-audit = { git = "https://github.com/ForrestThump/turbovault", tag = "liberado-2026-08-27" }
-turbovault = { git = "https://github.com/ForrestThump/turbovault", tag = "liberado-2026-08-27" } # umbrella (ObsidianMcpServer) — test-only
+# ForrestThump forks. `turbovault*` is tag `liberado-2026-10-15` (Obsidian Tasks
+# parsing and the global filter). `turbomcp*` stays `liberado-2026-08-27`.
+# Cargo fetches them; path siblings are not required. Swap to crates.io versions
+# for release builds once the forks publish.
+turbovault-core = { git = "https://github.com/ForrestThump/turbovault", tag = "liberado-2026-10-15" }
+turbovault-vault = { git = "https://github.com/ForrestThump/turbovault", tag = "liberado-2026-10-15" }
+turbovault-audit = { git = "https://github.com/ForrestThump/turbovault", tag = "liberado-2026-10-15" }
+turbovault = { git = "https://github.com/ForrestThump/turbovault", tag = "liberado-2026-10-15" } # umbrella (ObsidianMcpServer) — test-only
 # liberado-memory-store's semantic recall.
-turbovault-vector = { git = "https://github.com/ForrestThump/turbovault", tag = "liberado-2026-08-27" }
+turbovault-vector = { git = "https://github.com/ForrestThump/turbovault", tag = "liberado-2026-10-15" }
+# Obsidian Tasks lines and the Tasks plugin global filter. Used by task-ping.
+turbovault-parser = { git = "https://github.com/ForrestThump/turbovault", tag = "liberado-2026-10-15" }
+turbovault-plugin-tasks = { git = "https://github.com/ForrestThump/turbovault", tag = "liberado-2026-10-15" }
 turbomcp = { git = "https://github.com/ForrestThump/turbomcp", tag = "liberado-2026-08-27" }
 turbomcp-client = { git = "https://github.com/ForrestThump/turbomcp", tag = "liberado-2026-08-27" }
 turbomcp-transport = { git = "https://github.com/ForrestThump/turbomcp", tag = "liberado-2026-08-27" } # ChildProcessTransport (stdio connector)
