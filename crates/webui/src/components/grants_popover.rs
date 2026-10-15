@@ -121,7 +121,7 @@ async fn fetch_grants(api_base: &str, conv_id: &str) -> Result<ConversationGrant
 
 enum Fetched {
     NoChat,
-    Ready(ConversationGrantsResponse),
+    Ready(Box<ConversationGrantsResponse>),
 }
 
 #[component]
@@ -207,7 +207,9 @@ pub fn ToolsPopover(
             let Some(id) = id else {
                 return Ok(Fetched::NoChat);
             };
-            fetch_grants(&base, &id).await.map(Fetched::Ready)
+            fetch_grants(&base, &id)
+                .await
+                .map(|grants| Fetched::Ready(Box::new(grants)))
         }
     });
 
