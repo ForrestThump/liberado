@@ -1,7 +1,7 @@
 //! Split from `chat.rs` for module-health boundaries.
 
 use super::super::message_row::{
-    message_offers_copy, next_copy_button_visible, next_open_copy, should_scroll_copy_button,
+    clipboard_needs_exec_command, copy_feedback_label, message_offers_copy,
 };
 use super::stream_url;
 use super::*;
@@ -273,109 +273,18 @@ fn tool_block_header_uses_the_daemon_summary_line() {
     assert_eq!(super::chat_fold::tool_block_label(""), "Tool result");
 }
 
-/// The copy button is hidden until the first tap, shown after it, hidden after the second, and
-/// so on. Pinned so a future refactor that swaps `!` for an accidental `set(false)` or a
-/// stale-closure bug cannot quietly regress to a button that never appears (or never goes away).
+/// Plain `http` (a tailnet) is not a secure context. `navigator.clipboard` rejects there,
+/// which is why a tap used to do nothing. The textarea fallback is the path for that case.
 #[test]
-fn copy_button_visibility_alternates_with_each_tap() {
-    // The function is the *next* state after a tap, so feeding `false` in returns the state
-    // produced by the first tap on a hidden button — visible.
-    assert!(
-        next_copy_button_visible(false),
-        "first tap must show the button"
-    );
-
-    // Five consecutive taps from a fresh render: odd-numbered taps reveal the button, even ones
-    // hide it. 1-based tap count makes the alternation easy to read.
-    let mut visible = false;
-    for tap in 1..=5 {
-        visible = next_copy_button_visible(visible);
-        let expected = tap % 2 == 1;
-        assert_eq!(
-            visible, expected,
-            "tap #{tap} should set visible={expected}"
-        );
-    }
-
-    // A sixth tap re-hides the button — important because a stuck-visible button would consume
-    // space under every assistant message after the first interaction.
-    visible = next_copy_button_visible(visible);
-    assert!(!visible, "sixth tap should re-hide the button");
+fn insecure_context_uses_the_textarea_clipboard_fallback() {
+    assert!(clipboard_needs_exec_command(false));
+    assert!(!clipboard_needs_exec_command(true));
 }
 
-/// One copy button is visible. Tapping a message reveals it and hides whichever other message
-/// was open. A second tap on that same message hides it, and a third shows it again — the
-/// same-message alternation, applied to the single shared index rather than a private flag.
 #[test]
-fn copy_button_tap_state_is_exclusive() {
-    let mut open = None;
-
-    open = next_open_copy(open, 0);
-    assert_eq!(open, Some(0), "first tap shows that message");
-    assert_eq!(
-        open.is_some(),
-        next_copy_button_visible(false),
-        "showing a closed message uses the same-message alternation"
-    );
-
-    open = next_open_copy(open, 1);
-    assert_eq!(
-        open,
-        Some(1),
-        "tapping a second message shows it and hides the first"
-    );
-
-    open = next_open_copy(open, 1);
-    assert_eq!(open, None, "second tap on the same message hides it");
-    assert!(
-        !next_copy_button_visible(true),
-        "hiding an open message uses the same-message alternation"
-    );
-
-    open = next_open_copy(open, 1);
-    assert_eq!(
-        open,
-        Some(1),
-        "third tap on the same message shows it again"
-    );
-
-    open = next_open_copy(Some(0), 2);
-    assert_eq!(
-        open,
-        Some(2),
-        "revealing a third message leaves only that one open"
-    );
-}
-
-/// Scroll only when a tap reveals the button on the last message in the thread list.
-/// Hiding does not scroll. An earlier message does not scroll, including a tap that hides
-/// the last message's button by opening an earlier one. The streaming ellipsis is not a list
-/// entry: counting it would make the last `ChatMsg` look earlier than `last`, and that tap
-/// would no longer scroll.
-#[test]
-fn copy_button_scrolls_only_when_the_last_message_is_revealed() {
-    let last = 2usize;
-    assert!(should_scroll_copy_button(None, last, last));
-    assert!(
-        should_scroll_copy_button(Some(0), last, last),
-        "switching the open button onto the last message reveals it"
-    );
-    assert!(
-        !should_scroll_copy_button(Some(last), last, last),
-        "hiding the last message does not scroll"
-    );
-    assert!(
-        !should_scroll_copy_button(None, 0, last),
-        "an earlier message does not scroll"
-    );
-    assert!(
-        !should_scroll_copy_button(Some(last), 0, last),
-        "moving off the last message does not scroll"
-    );
-    assert!(
-        !should_scroll_copy_button(None, last, last + 1),
-        "the ellipsis is not a list entry, so it must not push the last message off the end"
-    );
+fn copy_button_label_confirms_then_resets() {
+    assert_eq!(copy_feedback_label(false), "Copy");
+    assert_eq!(copy_feedback_label(true), "Copied");
 }
 
 #[test]

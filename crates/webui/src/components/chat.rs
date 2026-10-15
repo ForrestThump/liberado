@@ -646,7 +646,6 @@ pub fn Chat(
 
                 div {
                     class: "messages",
-                    // `MessageList` scrolls `#response-copy-{index}` into this node.
                     id: "chat-messages",
                     TranscriptScroll { follow: transcript_follow, messages, sending }
                     if messages.read().is_empty() && conv_id.is_none() && !sending() && ghost_session.read().is_none() {

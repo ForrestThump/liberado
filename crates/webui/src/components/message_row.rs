@@ -2,11 +2,9 @@
 //! affordance).
 //!
 //! Split out of `chat.rs` so the message-rendering side of the surface lives in one place
-//! independent of the chat's input, stream, and history logic. The mobile copy button is a
-//! chrome gesture over a user or assistant row, so the control belongs with the row. Which
-//! single row is showing it is owned by [`MessageList`] — the same shape as the sidebar's
-//! `menu_open` — because two buttons are never up at once. That list also scrolls the
-//! revealed button into `#chat-messages` when the tap was on the last row.
+//! independent of the chat's input, stream, and history logic. User and assistant rows carry
+//! a Copy button. A tap on the message text copies it too, except when the tap is a link, a
+//! control, or a text selection.
 
 use dioxus::prelude::*;
 
@@ -15,105 +13,56 @@ use super::chat::{ChatMsg, ThinkingStep};
 use crate::components::markdown::MarkdownText;
 use crate::icons::{IconCheck, IconChevronDown, IconChevronRight, IconCopy, IconSpinner, IconX};
 
-/// The transcript rows and the one Copy button they share.
-///
-/// The open index and the scroll request live here, not on `Chat`: hooks have to run inside a
-/// component, and the button is a property of the list (one visible at a time). `Chat` renders
-/// the streaming ellipsis after this list, so the ellipsis is not a message index and a tap on
-/// the last real row still counts as last while a turn is in flight.
+/// The transcript rows. Each user or assistant row owns its own Copy button.
 #[component]
 pub(super) fn MessageList(messages: Signal<Vec<ChatMsg>>) -> Element {
-    // `None` hides every button. A second tap on the open row returns to `None`.
-    let mut copy_open = use_signal(|| None::<usize>);
-    // `(generation, index)` of a scroll request. Generation 0 is the initial "do not scroll".
-    // Only a tap that reveals the button on the last message bumps it. The effect reads this
-    // pair and not `copy_open`, so hiding, or revealing an earlier row, does not scroll.
-    let mut copy_scroll = use_signal(|| (0u32, 0usize));
-    use_effect(move || {
-        let (nonce, index) = copy_scroll();
-        if nonce == 0 {
-            return;
-        }
-        schedule_scroll_messages_to_copy_button(index);
-    });
-
-    let toggle_copy = use_callback(move |index: usize| {
-        let before = copy_open();
-        let msgs = messages.read();
-        let Some(last) = msgs.len().checked_sub(1) else {
-            return;
-        };
-        if index > last || !message_offers_copy(msgs[index].role) {
-            return;
-        }
-        drop(msgs);
-        copy_open.set(next_open_copy(before, index));
-        if should_scroll_copy_button(before, index, last) {
-            let (nonce, _) = copy_scroll();
-            // `max(1)` keeps a wrapping generation from landing back on 0, which the effect
-            // treats as "no request".
-            copy_scroll.set((nonce.wrapping_add(1).max(1), index));
-        }
-    });
-
     rsx! {
         for (i, msg) in messages.read().iter().enumerate() {
             MessageRow {
                 key: "{i}",
                 msg: msg.clone(),
-                index: i,
-                copy_visible: message_offers_copy(msg.role) && copy_open() == Some(i),
-                on_toggle_copy: move |index| toggle_copy.call(index),
             }
         }
     }
 }
 
-/// The one rendered bubble. User and assistant rows get a Copy button below the bubble.
-/// The list decides which single index is open: the first tap on a closed row shows it and
-/// hides any other, and a second tap on that same row hides it. Tool, system, and error rows
-/// have no copy control. The clipboard receives the row's raw markdown (`msg.content`).
+/// The one rendered bubble. User and assistant rows show a Copy button. Tool, system, and
+/// error rows have none. The clipboard receives the row's raw markdown (`msg.content`).
 ///
 /// The button stays inside `.bubble-wrap`. A user row is `justify-content: flex-end`, so the
-/// wrap — bubble and button together — sits on the right.
+/// wrap — bubble and button together — sits on the right. On a narrow or touch viewport the
+/// button stays visible. On a desktop with a hover pointer it appears on hover or focus.
 #[component]
-pub(super) fn MessageRow(
-    msg: ChatMsg,
-    index: usize,
-    copy_visible: bool,
-    on_toggle_copy: EventHandler<usize>,
-) -> Element {
+pub(super) fn MessageRow(msg: ChatMsg) -> Element {
     let has_steps = !msg.thinking_steps.is_empty();
     let has_reasoning = msg.reasoning.is_some();
     // A think-only turn keeps the disclosure and skips the blank answer bubble.
     let show = show_answer(msg.content.is_empty(), has_steps, has_reasoning);
     let reasoning = msg.reasoning.clone().unwrap_or_default();
-    // User and assistant rows only. The source handed to the clipboard is the raw markdown —
-    // pasted into a markdown surface it renders, pasted into plain text it is the source, same
-    // as the conversation log.
     let offers_copy = message_offers_copy(msg.role);
-    let show_copy = offers_copy && copy_visible;
     let copy_text = msg.content.clone();
+    let mut copied = use_signal(|| false);
+    let mut copy_nonce = use_signal(|| 0u32);
 
+    let text_for_button = copy_text.clone();
+    let on_copy_click = move |evt: dioxus::prelude::MouseEvent| {
+        evt.stop_propagation();
+        mark_copied(&text_for_button, &mut copied, &mut copy_nonce);
+    };
+    let text_for_tap = copy_text.clone();
     let on_bubble_click = move |evt: dioxus::prelude::MouseEvent| {
-        if !offers_copy {
+        if !offers_copy || click_target_skips_copy(&evt) || !selection_is_collapsed() {
             return;
         }
-        if click_target_was_link(&evt) {
-            return;
-        }
-        on_toggle_copy.call(index);
+        mark_copied(&text_for_tap, &mut copied, &mut copy_nonce);
     };
 
+    let label = copy_feedback_label(copied());
     rsx! {
         div {
             class: "bubble-row {msg.role}",
             div {
                 class: "bubble-wrap",
-                // Always attached, with the role check inside: a missing handler would mean the
-                // browser's text-selection long-press has nothing to suppress the default
-                // click-during-drag for, and a tool/system/error row still gets *some* taps. A
-                // no-op closure is the smaller change.
                 onclick: on_bubble_click,
                 if has_reasoning {
                     ReasoningBlock { text: reasoning }
@@ -136,24 +85,16 @@ pub(super) fn MessageRow(
                         },
                     }
                 }
-                if show_copy {
+                if offers_copy {
                     div {
-                        // The list scrolls this exact node into `.messages` when the tap that
-                        // revealed it was on the last message. One button is visible, so one id.
-                        id: "response-copy-{index}",
                         class: "response-copy-row",
                         button {
                             class: "response-copy-btn",
                             r#type: "button",
-                            // The button click lands on the bubble-wrap too; the row's toggle would
-                            // flip the visibility on the same tap that the user used to copy.
-                            // Stopping propagation here keeps the two gestures independent.
-                            onclick: move |evt| {
-                                evt.stop_propagation();
-                                copy_to_clipboard(&copy_text);
-                            },
+                            aria_label: "{label}",
+                            onclick: on_copy_click,
                             IconCopy {}
-                            span { class: "response-copy-label", "Copy" }
+                            span { class: "response-copy-label", aria_live: "polite", "{label}" }
                         }
                     }
                 }
@@ -162,52 +103,38 @@ pub(super) fn MessageRow(
     }
 }
 
-/// Whether the copy button on the tapped message should be visible after this tap.
-///
-/// First tap on a hidden button shows it, the second hides it, the third shows it again.
-/// This is the same-message half of the rule. The thread keeps one shared open index
-/// ([`next_open_copy`]), so showing this message hides every other button.
-pub(super) fn next_copy_button_visible(currently_visible: bool) -> bool {
-    !currently_visible
-}
-
 /// User-sent messages and assistant responses carry the copy control. Tool results, system
 /// notes, and errors do not — there is nothing there the reader would paste as markdown.
 pub(super) fn message_offers_copy(role: &str) -> bool {
     matches!(role, "user" | "assistant")
 }
 
-/// Which message's copy button is visible after `tapped` is tapped.
-///
-/// `open` is the index that was visible before the tap, or `None` when every button was
-/// hidden. Revealing `tapped` replaces that index. Tapping the message that is already open
-/// hides it, so repeated taps on one message alternate show, hide, show, hide.
-pub(super) fn next_open_copy(open: Option<usize>, tapped: usize) -> Option<usize> {
-    if next_copy_button_visible(open == Some(tapped)) {
-        Some(tapped)
-    } else {
-        None
+/// The button label. `true` is the short confirmation after a successful copy.
+pub(super) fn copy_feedback_label(copied: bool) -> &'static str {
+    if copied { "Copied" } else { "Copy" }
+}
+
+/// `navigator.clipboard.writeText` rejects when the page is not a secure context. The WebUI
+/// is often served as plain `http` on a tailnet, so that call fails and the tap looks dead.
+/// Those pages use a textarea plus `document.execCommand("copy")` instead.
+pub(super) fn clipboard_needs_exec_command(secure_context: bool) -> bool {
+    !secure_context
+}
+
+fn mark_copied(text: &str, copied: &mut Signal<bool>, nonce: &mut Signal<u32>) {
+    if !copy_to_clipboard(text) {
+        return;
     }
+    let next = nonce().wrapping_add(1).max(1);
+    nonce.set(next);
+    copied.set(true);
+    schedule_clear_copied(*copied, *nonce, next);
 }
 
-/// Whether this tap should scroll the thread so the revealed Copy button is on screen.
-///
-/// Scroll only when the tap reveals the button on the last message in the thread list.
-/// Hiding that button does not scroll. A tap on any earlier message does not scroll, including
-/// one that hides the last message's button by opening an earlier one. `last_index` is the
-/// last `ChatMsg`. The streaming ellipsis is not a list entry, so it is never `last_index`.
-pub(super) fn should_scroll_copy_button(
-    open_before: Option<usize>,
-    tapped: usize,
-    last_index: usize,
-) -> bool {
-    tapped == last_index && next_open_copy(open_before, tapped) == Some(tapped)
-}
-
-/// True when the click target was a link inside the message — used to skip the toggle so the
-/// browser's link navigation is not preempted by a response-chrome gesture.
+/// True when the click is a link or a control inside the row. Those keep their own action.
+/// A text selection is handled separately so a drag-select does not also copy.
 #[cfg(target_arch = "wasm32")]
-pub(super) fn click_target_was_link(evt: &dioxus::prelude::MouseEvent) -> bool {
+fn click_target_skips_copy(evt: &dioxus::prelude::MouseEvent) -> bool {
     use dioxus::web::WebEventExt;
     use wasm_bindgen::JsCast;
 
@@ -215,130 +142,146 @@ pub(super) fn click_target_was_link(evt: &dioxus::prelude::MouseEvent) -> bool {
     let Some(web_evt): Option<web_sys::MouseEvent> = data.try_as_web_event() else {
         return false;
     };
-    let target: Option<web_sys::EventTarget> = web_evt.target();
-    let Some(target) = target else {
+    let Some(target) = web_evt.target() else {
         return false;
     };
-    let target: web_sys::Element = match target.dyn_into::<web_sys::Element>() {
-        Ok(el) => el,
-        Err(_) => return false,
+    let Ok(target) = target.dyn_into::<web_sys::Element>() else {
+        return false;
     };
-    // `closest("a")` walks up to the nearest anchor; a tap on a link or any inline run inside one
-    // resolves to that anchor. `<button>` for the copy button itself sits *outside* the bubble and
-    // so is never the click target here.
-    target.closest("a").ok().flatten().is_some()
+    target
+        .closest("a, button, input, textarea, select, summary")
+        .ok()
+        .flatten()
+        .is_some()
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-pub(super) fn click_target_was_link(_evt: &dioxus::prelude::MouseEvent) -> bool {
+fn click_target_skips_copy(_evt: &dioxus::prelude::MouseEvent) -> bool {
     false
 }
 
-/// Push `text` to the system clipboard. Browser-only — the host build never has a clipboard to
-/// write to. The `navigator.clipboard` API is gated on a secure context, which the PWA shell
-/// already provides, so a missing call there is a real failure rather than a missing feature.
+/// A drag that selected text must not also copy the whole message.
 #[cfg(target_arch = "wasm32")]
-pub(super) fn copy_to_clipboard(text: &str) {
+fn selection_is_collapsed() -> bool {
     let Some(window) = web_sys::window() else {
-        return;
+        return true;
     };
-    let clipboard = window.navigator().clipboard();
-    // Best-effort: rejections are silently dropped. Surfacing them as a toast would be more
-    // helpful, but no error path here is recoverable — and the user's next tap dismisses the
-    // button, so a stuck "failed to copy" message would just have to be dismissed first.
-    let _ = clipboard.write_text(text);
+    window
+        .get_selection()
+        .ok()
+        .flatten()
+        .is_none_or(|sel| sel.is_collapsed())
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-pub(super) fn copy_to_clipboard(_text: &str) {}
+fn selection_is_collapsed() -> bool {
+    true
+}
 
-/// Bring `#response-copy-{index}` inside `#chat-messages`.
+/// Push `text` to the system clipboard. Returns whether the browser accepted the write.
 ///
-/// Called from the effect that follows a reveal of the last message's Copy button, so the
-/// row is already in the committed tree. Measurement uses viewport coordinates: the delta
-/// between the button and the container is exactly the `scrollTop` adjustment, and no
-/// ancestor moves. Desktop widths hide the control with the same `max-width: 768px` query
-/// as `.response-copy-row`, and a `display: none` box must not be scrolled to.
+/// `navigator.clipboard` exists on insecure `http` and then rejects the promise, which is why
+/// a tap used to do nothing. The textarea fallback runs in that case, inside the same gesture.
 #[cfg(target_arch = "wasm32")]
-fn schedule_scroll_messages_to_copy_button(index: usize) {
-    if !scroll_messages_to_copy_button(index) {
-        // The row can commit a turn after the effect. One more frame, then stop — a second
-        // miss means the button was hidden again, and hiding must not scroll.
-        scroll_copy_button_on_next_frame(index);
+pub(super) fn copy_to_clipboard(text: &str) -> bool {
+    let Some(window) = web_sys::window() else {
+        return false;
+    };
+    if clipboard_needs_exec_command(window.is_secure_context()) {
+        return copy_via_textarea(&window, text);
     }
+    let clipboard = window.navigator().clipboard();
+    // The promise resolves later. A rejection here is a permission denial, not the
+    // missing-API case the textarea path covers. The gesture has already been accepted.
+    let _ = clipboard.write_text(text);
+    true
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn schedule_scroll_messages_to_copy_button(_index: usize) {}
+pub(super) fn copy_to_clipboard(_text: &str) -> bool {
+    false
+}
 
 #[cfg(target_arch = "wasm32")]
-fn scroll_copy_button_on_next_frame(index: usize) {
+fn copy_via_textarea(window: &web_sys::Window, text: &str) -> bool {
+    use wasm_bindgen::JsCast;
+
+    let Some(document) = window.document() else {
+        return false;
+    };
+    let Ok(element) = document.create_element("textarea") else {
+        return false;
+    };
+    let Ok(textarea) = element.dyn_into::<web_sys::HtmlTextAreaElement>() else {
+        return false;
+    };
+    textarea.set_value(text);
+    textarea.set_read_only(true);
+    let style = textarea.style();
+    let _ = style.set_property("position", "fixed");
+    let _ = style.set_property("top", "0");
+    let _ = style.set_property("left", "0");
+    let _ = style.set_property("opacity", "0");
+    let Some(body) = document.body() else {
+        return false;
+    };
+    if body.append_child(&textarea).is_err() {
+        return false;
+    }
+    textarea.focus().ok();
+    textarea.select();
+    let end = u32::try_from(text.len()).unwrap_or(u32::MAX);
+    let _ = textarea.set_selection_range(0, end);
+    let copied = exec_copy(&document);
+    let _ = body.remove_child(&textarea);
+    copied
+}
+
+/// `Document.execCommand` left `web-sys`. Call it on the document object directly.
+#[cfg(target_arch = "wasm32")]
+fn exec_copy(document: &web_sys::Document) -> bool {
+    use wasm_bindgen::JsCast;
+
+    let Ok(value) = js_sys::Reflect::get(document, &wasm_bindgen::JsValue::from_str("execCommand"))
+    else {
+        return false;
+    };
+    let Ok(function) = value.dyn_into::<js_sys::Function>() else {
+        return false;
+    };
+    function
+        .call1(document, &wasm_bindgen::JsValue::from_str("copy"))
+        .ok()
+        .and_then(|value| value.as_bool())
+        .unwrap_or(false)
+}
+
+#[cfg(target_arch = "wasm32")]
+fn schedule_clear_copied(mut copied: Signal<bool>, nonce: Signal<u32>, expected: u32) {
     use wasm_bindgen::JsCast;
     use wasm_bindgen::closure::Closure;
 
     let Some(window) = web_sys::window() else {
         return;
     };
-    let callback = Closure::once(move |_timestamp: f64| {
-        let _ = scroll_messages_to_copy_button(index);
+    let callback = Closure::once(move || {
+        if nonce() == expected {
+            copied.set(false);
+        }
     });
     if window
-        .request_animation_frame(callback.as_ref().unchecked_ref())
+        .set_timeout_with_callback_and_timeout_and_arguments_0(
+            callback.as_ref().unchecked_ref(),
+            1_600,
+        )
         .is_ok()
     {
         callback.forget();
     }
 }
 
-/// Scroll `#chat-messages` until the copy button for `index` is fully inside it.
-///
-/// Returns `false` when that button is not in the document yet, so the caller can retry
-/// once. Returns `true` when there is nothing to do — desktop breakpoint, or the button is
-/// already visible — so a retry does not fire.
-#[cfg(target_arch = "wasm32")]
-fn scroll_messages_to_copy_button(index: usize) -> bool {
-    let Some(window) = web_sys::window() else {
-        return true;
-    };
-    let on_phone = window
-        .match_media("(max-width: 768px)")
-        .ok()
-        .flatten()
-        .is_some_and(|list| list.matches());
-    if !on_phone {
-        return true;
-    }
-    let Some(document) = window.document() else {
-        return true;
-    };
-    let Some(container) = document.get_element_by_id("chat-messages") else {
-        return false;
-    };
-    let Some(button) = document.get_element_by_id(&format!("response-copy-{index}")) else {
-        return false;
-    };
-    let container_box = container.get_bounding_client_rect();
-    let button_box = button.get_bounding_client_rect();
-    // `display: none` (the desktop rule, if the query and the layout disagree) has no box.
-    if button_box.width() == 0.0 && button_box.height() == 0.0 {
-        return false;
-    }
-    let delta = if button_box.bottom() > container_box.bottom() {
-        button_box.bottom() - container_box.bottom()
-    } else if button_box.top() < container_box.top() {
-        button_box.top() - container_box.top()
-    } else {
-        0.0
-    };
-    if delta.abs() < 0.5 {
-        return true;
-    }
-    let next = (container.scroll_top() as f64 + delta).round();
-    if next.is_finite() {
-        container.set_scroll_top(next as i32);
-    }
-    true
-}
+#[cfg(not(target_arch = "wasm32"))]
+fn schedule_clear_copied(_copied: Signal<bool>, _nonce: Signal<u32>, _expected: u32) {}
 
 // ── Collapsible tool result ─────────────────────────────────────────────────
 

@@ -937,50 +937,62 @@ body {
 
 }
 
-/* ── Response copy button (mobile only) ──────────────────────────────────── */
+/* ── Response copy button ────────────────────────────────────────────────── */
 
-/* The button is desktop-hidden by default. A desktop user has the broader toolbar; on a phone the
-   only way to grab a response is the markdown selection, which breaks links and strips code-block
-   structure, so a single tap target is worth the screen real estate it costs. */
+/* Always in the row for user and assistant messages. A phone or a touch screen keeps it
+   visible. A desktop hover pointer fades it until the row is hovered or focused, so the
+   transcript stays quiet until the reader wants the control. */
 .response-copy-row {
-    display: none;
+    display: flex;
+    justify-content: flex-start;
+    margin-top: 0.25rem;
 }
 
-@media (max-width: 768px) {
+.bubble-row.user .response-copy-row {
+    justify-content: flex-end;
+}
+
+.response-copy-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+    padding: 0.25rem 0.6rem;
+    border: 1px solid var(--lib-border);
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--lib-surface) 60%, transparent);
+    color: var(--lib-sidebar-text);
+    font-family: inherit;
+    font-size: 0.6875rem;
+    cursor: pointer;
+    transition: background 0.12s, color 0.12s, border-color 0.12s, opacity 0.12s;
+}
+
+.response-copy-btn:hover,
+.response-copy-btn:active,
+.response-copy-btn:focus-visible {
+    background: color-mix(in srgb, var(--lib-surface) 90%, transparent);
+    color: var(--lib-chat-assistant-text);
+    border-color: var(--lib-sidebar-border-unfocused);
+}
+
+.response-copy-btn:focus-visible {
+    outline: 2px solid var(--lib-accent);
+    outline-offset: 2px;
+}
+
+.response-copy-btn .icon {
+    width: 0.75rem;
+    height: 0.75rem;
+}
+
+@media (hover: hover) and (min-width: 769px) {
     .response-copy-row {
-        /* Sits below the bubble, inside the same .bubble-wrap so it stays left-aligned with the
-           bubble's leading edge — a row outside the wrap would float to the screen edge on narrow
-           viewports and look like it belonged to the next message. */
-        display: flex;
-        justify-content: flex-start;
-        margin-top: 0.25rem;
+        opacity: 0;
     }
 
-    .response-copy-btn {
-        display: inline-flex;
-        align-items: center;
-        gap: 0.3rem;
-        padding: 0.25rem 0.6rem;
-        border: 1px solid var(--lib-border);
-        border-radius: 999px;
-        background: color-mix(in srgb, var(--lib-surface) 60%, transparent);
-        color: var(--lib-sidebar-text);
-        font-family: inherit;
-        font-size: 0.6875rem;
-        cursor: pointer;
-        transition: background 0.12s, color 0.12s, border-color 0.12s;
-    }
-
-    .response-copy-btn:hover,
-    .response-copy-btn:active {
-        background: color-mix(in srgb, var(--lib-surface) 90%, transparent);
-        color: var(--lib-chat-assistant-text);
-        border-color: var(--lib-sidebar-border-unfocused);
-    }
-
-    .response-copy-btn .icon {
-        width: 0.75rem;
-        height: 0.75rem;
+    .bubble-row:hover .response-copy-row,
+    .bubble-row:focus-within .response-copy-row {
+        opacity: 1;
     }
 }
 
