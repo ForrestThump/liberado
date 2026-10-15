@@ -3,7 +3,9 @@
 //! Split from `sidebar.rs` for module-health boundaries.
 
 use super::agents::{pinned, row_dot_color, truncate_title};
-use super::{delete_accepted, relative_time};
+use super::{
+    delete_accepted, deleted_the_open_conversation, relative_time, rename_accepted, rename_body,
+};
 
 fn ago(dur: chrono::Duration) -> String {
     (chrono::Utc::now() - dur).to_rfc3339()
@@ -68,6 +70,65 @@ fn exactly_thirty_days_shows_the_date() {
 fn sub_second_ages_from_zero() {
     let raw = (chrono::Utc::now() - chrono::Duration::milliseconds(500)).to_rfc3339();
     assert_eq!(relative_time(&raw), "0s ago");
+}
+
+#[test]
+fn rename_accepts_only_2xx() {
+    for ok in [200, 204, 299] {
+        assert!(rename_accepted(ok), "{ok} should rename cleanly");
+    }
+    for no in [404, 400, 500] {
+        assert!(
+            !rename_accepted(no),
+            "{no} should surface as a rename failure"
+        );
+    }
+}
+
+#[test]
+fn rename_body_sends_only_the_title() {
+    let body = rename_body("  Notes");
+    assert_eq!(body["title"], "  Notes");
+    assert_eq!(body.as_object().map(|map| map.len()), Some(1));
+}
+
+#[test]
+fn deleting_the_open_conversation_starts_a_fresh_chat() {
+    assert!(deleted_the_open_conversation(Some("open"), "open"));
+    assert!(!deleted_the_open_conversation(Some("open"), "other"));
+    assert!(!deleted_the_open_conversation(None, "open"));
+    let sidebar = include_str!("mod.rs");
+    let success = window_around(sidebar, "if deleted_the_open_conversation", 450);
+    assert!(success.contains("Route::Chat"));
+    assert!(success.contains("new_chat_nonce += 1"));
+    assert!(success.contains("close_phone_drawer"));
+}
+
+/// The options control is a real button on every chat row, including on a phone.
+#[test]
+fn chat_rows_expose_a_tappable_options_button() {
+    let row = include_str!("agents.rs");
+    let chat = row
+        .split("fn SidebarRowChat")
+        .nth(1)
+        .expect("SidebarRowChat");
+    let chat = chat.split("fn PinnedList").next().unwrap_or(chat);
+    assert!(chat.contains("RowOptions"));
+    assert!(chat.contains("noun: \"chat\""));
+    let css = include_str!("../../styles/main.css");
+    let rule = css_block(css, ".grok-row-options");
+    assert!(rule.contains("display: inline-flex"), "{rule}");
+    assert!(!rule.contains("display: none"), "{rule}");
+    assert!(!rule.contains("opacity: 0"), "{rule}");
+    let phone = css
+        .split("/* phone-sidebar-drawer-end */")
+        .next()
+        .expect("phone drawer styles");
+    assert!(
+        phone.contains(".grok-row-options"),
+        "the phone tap target must include the options button"
+    );
+    assert!(phone.contains("min-height: 2.5rem"));
 }
 
 #[test]

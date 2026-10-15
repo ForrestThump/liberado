@@ -26,6 +26,7 @@ use crate::icons::IconSearch;
 mod agents;
 mod projects;
 mod rail;
+mod row_menu;
 
 use self::agents::{
     AgentTailList, CategoryList, ChatList, PinnedList, SearchResultList, ShowMoreRow, group_agents,
@@ -103,6 +104,20 @@ fn delete_accepted(status: u16) -> bool {
     (200..300).contains(&status) || status == 404
 }
 
+fn rename_accepted(status: u16) -> bool {
+    (200..300).contains(&status)
+}
+
+/// Body of `PATCH /api/conversations/{id}`.
+pub(super) fn rename_body(title: &str) -> serde_json::Value {
+    serde_json::json!({ "title": title })
+}
+
+/// The open conversation was the one removed, so the canvas must become a fresh chat.
+pub(super) fn deleted_the_open_conversation(open_id: Option<&str>, deleted_id: &str) -> bool {
+    open_id == Some(deleted_id)
+}
+
 async fn delete_conversation(api_base: &str, id: &str) -> Result<(), String> {
     let url = format!("{api_base}/api/conversations/{id}");
     let resp = reqwest::Client::new()
@@ -114,6 +129,22 @@ async fn delete_conversation(api_base: &str, id: &str) -> Result<(), String> {
         Ok(())
     } else {
         Err(format!("Delete failed: HTTP {}", resp.status().as_u16()))
+    }
+}
+
+/// `PATCH /api/conversations/{id}` — update only the conversation's display title.
+async fn rename_conversation(api_base: &str, id: &str, title: &str) -> Result<(), String> {
+    let url = format!("{api_base}/api/conversations/{id}");
+    let resp = reqwest::Client::new()
+        .patch(&url)
+        .json(&rename_body(title))
+        .send()
+        .await
+        .map_err(|e| format!("Failed to reach daemon: {e}"))?;
+    if rename_accepted(resp.status().as_u16()) {
+        Ok(())
+    } else {
+        Err(format!("Rename failed: HTTP {}", resp.status().as_u16()))
     }
 }
 
@@ -160,6 +191,10 @@ pub fn Sidebar(
     let expand_all = use_signal(bool::default);
     #[cfg_attr(not(target_arch = "wasm32"), allow(unused_mut))]
     let mut action_error = use_signal(|| None::<String>);
+    // One open action sheet. Opening a row closes the sheet on any other row.
+    // `.set` from the delete and rename callbacks is wasm-only.
+    #[cfg_attr(not(target_arch = "wasm32"), allow(unused_mut))]
+    let mut menu_for = use_signal(|| None::<String>);
     #[cfg_attr(not(target_arch = "wasm32"), allow(unused_mut))]
     let mut search_results = use_resource({
         let base = api_base.clone();
@@ -189,9 +224,14 @@ pub fn Sidebar(
             wasm_bindgen_futures::spawn_local(async move {
                 match delete_conversation(&base, &id).await {
                     Ok(()) => {
+                        menu_for.set(None);
                         action_error.set(None);
-                        if active_conv_id.read().as_deref() == Some(id.as_str()) {
+                        if deleted_the_open_conversation(active_conv_id.read().as_deref(), &id) {
                             active_conv_id.set(None);
+                            active_surface.set(Some(SurfaceMode::Chat));
+                            route.set(Route::Chat);
+                            new_chat_nonce += 1;
+                            close_phone_drawer(collapsed);
                         }
                         conversations.restart();
                         search_results.restart();
@@ -202,6 +242,29 @@ pub fn Sidebar(
             #[cfg(not(target_arch = "wasm32"))]
             {
                 let _ = (base, id);
+            }
+        })
+    };
+
+    let rename_conv = {
+        let base = api_base.clone();
+        use_callback(move |(id, title): (String, String)| {
+            let base = base.clone();
+            #[cfg(target_arch = "wasm32")]
+            wasm_bindgen_futures::spawn_local(async move {
+                match rename_conversation(&base, &id, &title).await {
+                    Ok(()) => {
+                        menu_for.set(None);
+                        action_error.set(None);
+                        conversations.restart();
+                        search_results.restart();
+                    }
+                    Err(e) => action_error.set(Some(e)),
+                }
+            });
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                let _ = (base, id, title);
             }
         })
     };
@@ -402,6 +465,10 @@ pub fn Sidebar(
                                     .into_iter()
                                     .cloned()
                                     .collect(),
+                                menu_for,
+                                action_error,
+                                on_delete: move |id: String| delete_conv.call(id),
+                                on_rename: move |pair: (String, String)| rename_conv.call(pair),
                                 on_pick: move |id: String| {
                                     let mode = conversations
                                         .read()
@@ -578,6 +645,7 @@ pub fn Sidebar(
                         ChatList {
                             items: chat_rows.iter().map(|c| (*c).clone()).collect(),
                             active: active_conv_id,
+                            menu_for,
                             on_pick: move |id: String| {
                                 active_conv_id.set(Some(id));
                                 active_surface.set(Some(SurfaceMode::Chat));
@@ -587,6 +655,7 @@ pub fn Sidebar(
                                 }
                             },
                             on_delete: move |id: String| delete_conv.call(id),
+                            on_rename: move |pair: (String, String)| rename_conv.call(pair),
                             action_error,
                         }
                         if chat_rows.is_empty() {

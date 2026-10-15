@@ -8,6 +8,8 @@ use chat_client_contract::{ConvHeader, ConversationSearchResult};
 
 use crate::icons::{IconChevronDown, IconChevronRight};
 
+use super::row_menu::{RowOptions, conversation_row_dom_id};
+
 // ── Agent categorization ──────────────────────────────────────────────────
 
 const PINNED_PREFIXES: &[&str] = &["Grok Bot", "Liberado-Budget"];
@@ -141,7 +143,11 @@ fn SidebarRowCompact(
 fn SidebarRowChat(
     conv: ConvHeader,
     active: Signal<Option<String>>,
+    menu_for: Signal<Option<String>>,
+    action_error: Signal<Option<String>>,
     on_pick: EventHandler<String>,
+    on_delete: EventHandler<String>,
+    on_rename: EventHandler<(String, String)>,
 ) -> Element {
     let id = conv.id.clone();
     let is_active = active().as_deref() == Some(id.as_str());
@@ -151,10 +157,13 @@ fn SidebarRowChat(
         "grok-row"
     };
     let display = conv_display_title(&conv);
+    let seed = conv.title.clone().unwrap_or_default();
     let time = relative_time(&conv.created_at);
     let id_for_pick = id.clone();
+    let row_dom_id = conversation_row_dom_id(&id);
     rsx! {
         li {
+            id: "{row_dom_id}",
             class: "{cls}",
             button {
                 class: "grok-row-btn",
@@ -165,6 +174,17 @@ fn SidebarRowChat(
                 if !time.is_empty() {
                     span { class: "grok-row-time", "{time}" }
                 }
+            }
+            RowOptions {
+                id: id.clone(),
+                seed,
+                display: display.clone(),
+                noun: "chat",
+                menu_for,
+                action_error,
+                delete_block: None,
+                on_delete,
+                on_rename,
             }
         }
     }
@@ -273,8 +293,10 @@ pub(super) fn AgentTailList(
 pub(super) fn ChatList(
     items: Vec<ConvHeader>,
     active: Signal<Option<String>>,
+    menu_for: Signal<Option<String>>,
     on_pick: EventHandler<String>,
     on_delete: EventHandler<String>,
+    on_rename: EventHandler<(String, String)>,
     action_error: Signal<Option<String>>,
 ) -> Element {
     rsx! {
@@ -284,7 +306,11 @@ pub(super) fn ChatList(
                 SidebarRowChat {
                     conv: conv.clone(),
                     active: active,
+                    menu_for: menu_for,
+                    action_error: action_error,
                     on_pick: on_pick,
+                    on_delete: on_delete,
+                    on_rename: on_rename,
                 }
             }
         }
@@ -294,7 +320,11 @@ pub(super) fn ChatList(
 #[component]
 pub(super) fn SearchResultList(
     results: Vec<ConversationSearchResult>,
+    menu_for: Signal<Option<String>>,
+    action_error: Signal<Option<String>>,
     on_pick: EventHandler<String>,
+    on_delete: EventHandler<String>,
+    on_rename: EventHandler<(String, String)>,
 ) -> Element {
     if results.is_empty() {
         return rsx! {
@@ -308,14 +338,28 @@ pub(super) fn SearchResultList(
                 {
                     let id = r.conversation_id.clone();
                     let title = r.title.clone().unwrap_or_else(|| "(untitled)".into());
+                    let seed = r.title.clone().unwrap_or_default();
+                    let row_dom_id = conversation_row_dom_id(&id);
                     rsx! {
                         li {
+                            id: "{row_dom_id}",
                             class: "grok-row",
                             button {
                                 class: "grok-row-btn",
                                 r#type: "button",
                                 onclick: move |_| on_pick.call(id.clone()),
                                 span { class: "grok-row-title", "{title}" }
+                            }
+                            RowOptions {
+                                id: id.clone(),
+                                seed,
+                                display: title.clone(),
+                                noun: "conversation",
+                                menu_for,
+                                action_error,
+                                delete_block: None,
+                                on_delete,
+                                on_rename,
                             }
                         }
                     }
