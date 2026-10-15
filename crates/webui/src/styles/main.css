@@ -3340,13 +3340,68 @@ body {
 }
 
 .project-list,
-.plugin-list {
+.plugin-list,
+.automation-list {
     list-style: none;
     margin: 0;
     padding: 0;
     display: flex;
     flex-direction: column;
     gap: 0.5rem;
+}
+
+.automation-row {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+    padding: 0.75rem 0.9rem;
+    border: 1px solid var(--grok-rail-border);
+    border-radius: 0.75rem;
+}
+
+.automation-row-main {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+}
+
+.automation-name {
+    font-weight: 500;
+}
+
+.automation-badge {
+    font-size: 0.75rem;
+    padding: 0.15rem 0.5rem;
+    border-radius: 999px;
+    border: 1px solid var(--grok-rail-border);
+}
+
+.automation-badge.on {
+    color: var(--lib-accent);
+    border-color: var(--lib-accent);
+}
+
+.automation-badge.off {
+    color: var(--grok-subtitle);
+}
+
+.automation-expr code {
+    font-size: 0.8125rem;
+    color: var(--grok-subtitle);
+}
+
+.automation-snippet,
+.automation-meta {
+    margin: 0;
+    color: var(--grok-subtitle);
+    font-size: 0.8125rem;
+}
+
+.automation-snippet {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 .project-select {

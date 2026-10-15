@@ -18,7 +18,7 @@ pub fn Imagine() -> Element {
                 h1 { class: "grok-page-title", "Picture what you want" }
                 p {
                     class: "grok-page-subtitle",
-                    "Generate images from a prompt. The surface is wired but no model is bound yet — when one is, this page becomes the canvas."
+                    "Generate images from a prompt. No image-generation model is bound in topology — when one is, this page becomes the canvas."
                 }
             }
         }
