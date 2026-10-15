@@ -131,9 +131,7 @@ fn date_with_optional_clock<'a>(parts: &'a [&str], index: usize) -> Option<(&'a 
     {
         return Some((date, index + 1));
     }
-    if parse_ymd(date_token).is_none() {
-        return None;
-    }
+    parse_ymd(date_token)?;
     if let Some(clock) = parts.get(index + 1)
         && parse_clock(clock).is_some()
     {
