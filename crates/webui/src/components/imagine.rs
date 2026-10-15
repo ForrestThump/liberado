@@ -5,7 +5,7 @@
 use dioxus::prelude::*;
 
 #[component]
-pub fn Imagine(api_base: String) -> Element {
+pub fn Imagine() -> Element {
     rsx! {
         div {
             class: "grok-page imagine-page",
@@ -19,10 +19,6 @@ pub fn Imagine(api_base: String) -> Element {
                 p {
                     class: "grok-page-subtitle",
                     "Generate images from a prompt. The surface is wired but no model is bound yet — when one is, this page becomes the canvas."
-                }
-                div {
-                    class: "grok-page-meta",
-                    "API: {api_base}"
                 }
             }
         }

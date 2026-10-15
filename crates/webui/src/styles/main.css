@@ -3223,13 +3223,6 @@ body {
     line-height: 1.5;
 }
 
-.grok-page-meta {
-    margin-top: 1rem;
-    font-size: 0.6875rem;
-    color: var(--grok-rail-text-muted);
-    font-family: ui-monospace, monospace;
-}
-
 .grok-page-header {
     padding: 2rem 2rem 1rem;
     border-bottom: 1px solid var(--grok-rail-border);

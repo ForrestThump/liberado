@@ -4,7 +4,7 @@
 use dioxus::prelude::*;
 
 #[component]
-pub fn Projects(api_base: String) -> Element {
+pub fn Projects() -> Element {
     rsx! {
         div {
             class: "grok-page projects-page",
@@ -18,10 +18,6 @@ pub fn Projects(api_base: String) -> Element {
                 p {
                     class: "grok-page-subtitle",
                     "Each project groups a chat, a vault mount, and a few seeded memories. The Life System, Self Help, and Homelab projects are visible in the sidebar — open one to switch context."
-                }
-                div {
-                    class: "grok-page-meta",
-                    "API: {api_base}"
                 }
             }
         }

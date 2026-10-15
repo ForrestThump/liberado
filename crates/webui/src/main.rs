@@ -418,12 +418,12 @@ fn App() -> Element {
                                 list_epoch,
                             }
                         },
-                        Route::Imagine => rsx! { crate::components::imagine::Imagine { api_base: base.clone() } },
-                        Route::Library => rsx! { crate::components::library::Library { api_base: base.clone() } },
-                        Route::Automations => rsx! { crate::components::automations::Automations { api_base: base.clone() } },
-                        Route::Projects => rsx! { crate::components::projects::Projects { api_base: base.clone() } },
+                        Route::Imagine => rsx! { crate::components::imagine::Imagine {} },
+                        Route::Library => rsx! { crate::components::library::Library {} },
+                        Route::Automations => rsx! { crate::components::automations::Automations {} },
+                        Route::Projects => rsx! { crate::components::projects::Projects {} },
                         Route::Plugins => rsx! { crate::components::plugins::Plugins { api_base: base.clone() } },
-                        Route::Agents => rsx! { crate::components::imagine::Imagine { api_base: base.clone() } },
+                        Route::Agents => rsx! { crate::components::imagine::Imagine {} },
                     }
                 }
             }

@@ -4,7 +4,7 @@
 use dioxus::prelude::*;
 
 #[component]
-pub fn Library(api_base: String) -> Element {
+pub fn Library() -> Element {
     rsx! {
         div {
             class: "grok-page library-page",
@@ -18,10 +18,6 @@ pub fn Library(api_base: String) -> Element {
                 p {
                     class: "grok-page-subtitle",
                     "Generated images, files the agent has saved, and any other artifacts produced across your conversations. Right now there are none."
-                }
-                div {
-                    class: "grok-page-meta",
-                    "API: {api_base}"
                 }
             }
         }
