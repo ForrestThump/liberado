@@ -104,6 +104,39 @@ fn pinned_match_is_case_insensitive_prefix() {
     assert!(!pinned("Other Agent"));
 }
 
+/// The chevron glyph is `display: block`. Without a row flex on the button, the
+/// "Show more (N)" label drops onto the next line.
+#[test]
+fn show_more_label_stays_on_the_chevron_row() {
+    let css = include_str!("../../styles/main.css");
+    let rule = css_block(css, ".sidebar-show-more");
+    assert!(rule.contains("display: flex"), "{rule}");
+    assert!(rule.contains("align-items: center"), "{rule}");
+    assert!(rule.contains("white-space: nowrap"), "{rule}");
+    assert!(
+        !rule.contains("flex-direction: column"),
+        "a column would put the label under the chevron: {rule}"
+    );
+    let row = include_str!("agents.rs");
+    let show = row.split("fn ShowMoreRow").nth(1).expect("ShowMoreRow");
+    let show = show.split("fn AgentTailList").next().unwrap_or(show);
+    assert!(show.contains("IconChevronRight"));
+    assert!(show.contains("Show more ({count})"));
+}
+
+fn css_block<'a>(css: &'a str, selector: &str) -> &'a str {
+    let needle = format!("{selector} {{");
+    let start = css
+        .find(&needle)
+        .unwrap_or_else(|| panic!("missing CSS rule {selector}"))
+        + needle.len();
+    let rest = &css[start..];
+    let end = rest
+        .find('}')
+        .unwrap_or_else(|| panic!("unterminated CSS rule {selector}"));
+    &rest[..end]
+}
+
 #[test]
 fn dot_palette_covers_prototype_categories() {
     for name in [

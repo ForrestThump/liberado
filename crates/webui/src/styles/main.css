@@ -2853,6 +2853,10 @@ body {
 /* -- Show more row (Agents catch-all) --------------------------------------- */
 
 .sidebar-show-more {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    width: 100%;
     background: transparent;
     border: none;
     color: var(--grok-rail-text-muted);
@@ -2861,6 +2865,7 @@ body {
     cursor: pointer;
     padding: 0.25rem 0.75rem;
     text-align: left;
+    white-space: nowrap;
 }
 
 .sidebar-show-more:hover {
