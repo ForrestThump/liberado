@@ -102,7 +102,7 @@ impl SpiderClient {
                         timeout_secs.saturating_add(TIMEOUT_SLACK_SECS)
                     )
                 } else {
-                    format!("scrape transport: {e}")
+                    format!("scrape transport: {}", crate::redact_http::transport(e))
                 }
             })?;
 
@@ -112,11 +112,13 @@ impl SpiderClient {
         }
 
         let bytes = read_capped(response, "scrape", cap).await?;
-        let body: serde_json::Value =
-            serde_json::from_slice(&bytes).map_err(|e| format!("scrape body not JSON: {e}"))?;
+        let body: serde_json::Value = serde_json::from_slice(&bytes)
+            .map_err(|e| crate::redact_http::text(format!("scrape body not JSON: {e}")))?;
         if body["success"].as_bool() != Some(true) {
             let message = body["error"]["message"].as_str().unwrap_or("(no message)");
-            return Err(format!("scrape failed: {message}"));
+            return Err(crate::redact_http::text(format!(
+                "scrape failed: {message}"
+            )));
         }
         match body["data"]["markdown"].as_str() {
             Some(md) if !md.trim().is_empty() => Ok(md.to_string()),

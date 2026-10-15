@@ -20,7 +20,7 @@ pub use goals::{
     goals_cancel, goals_diff, goals_domains, goals_get, goals_list, goals_message, goals_park,
     goals_rewind, goals_start, goals_stream, list_projects,
 };
-pub use grants::get_header_grant;
+pub use grants::{conversation_grants, get_header_grant};
 pub use search::search_conversations;
 pub use sessions::{session_fork, sessions_list};
 pub use status::{catalog, models, reactions, reload_mcp_peers, select_model, status, vault};

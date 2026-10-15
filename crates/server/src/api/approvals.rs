@@ -123,3 +123,7 @@ fn reply(
 #[cfg(test)]
 #[path = "approvals_http_tests.rs"]
 mod http_tests;
+
+#[cfg(test)]
+#[path = "approvals_resolve_http_tests.rs"]
+mod resolve_http_tests;

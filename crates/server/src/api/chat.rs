@@ -519,8 +519,15 @@ pub async fn chat(
         })
         .into_response(),
         Err(e) => {
-            tracing::warn!(error = %e, "chat turn failed");
-            chat_error(e)
+            let error = liberado_common::redact_secrets(&e.to_string());
+            tracing::warn!(%error, "chat turn failed");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiError {
+                    error: chat_wire::client_turn_error(&e),
+                }),
+            )
+                .into_response()
         }
     }
 }
@@ -923,14 +930,12 @@ fn wire_surface(
         .unwrap_or_default()
 }
 
+#[path = "chat_wire.rs"]
+mod chat_wire;
+
 fn chat_message_from_node(n: liberado_conversation_store::MessageNode) -> ChatMessage {
+    let role = chat_wire::role_for(&n);
     let m = n.message;
-    let role = match m.role {
-        liberado_provider::Role::System => "system",
-        liberado_provider::Role::User => "user",
-        liberado_provider::Role::Assistant => "assistant",
-        liberado_provider::Role::Tool => "tool",
-    };
     let (content, reasoning) = liberado_provider::transcript_parts(role, m.content, n.reasoning);
     ChatMessage {
         role: role.to_string(),
@@ -951,3 +956,7 @@ mod tests;
 #[cfg(test)]
 #[path = "chat_endpoint_tests.rs"]
 mod endpoint_tests;
+
+#[cfg(test)]
+#[path = "chat_history_http_tests.rs"]
+mod history_http_tests;

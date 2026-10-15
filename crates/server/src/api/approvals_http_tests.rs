@@ -20,8 +20,8 @@ use tower::ServiceExt;
 
 use super::{list_approvals, list_pending_approvals, resolve_approval};
 use crate::approvals::ApprovalHub;
+use crate::bindings::ChannelBindings;
 use crate::state::AppState;
-use crate::sticky::StickySession;
 
 struct Quiet;
 
@@ -105,7 +105,9 @@ async fn post_resolves_and_telegram_then_http_share_the_resolver() {
         .await
         .unwrap();
     let mut shared = permission("perm-shared", Some("sess-web"));
-    shared.origin = Some(liberado_common::ApprovalOrigin::Telegram);
+    shared.origin = Some(liberado_common::ApprovalOrigin::Channel(
+        liberado_common::ChannelKind::Telegram,
+    ));
     let signed = signer.sign(shared);
     vault
         .write(
@@ -138,7 +140,7 @@ async fn post_resolves_and_telegram_then_http_share_the_resolver() {
     let mut state = AppState::for_test(sessions, None, dir.path().to_path_buf());
     state.approval_hub = Some(Arc::new(ApprovalHub::new(
         Arc::clone(&resolver),
-        StickySession::ephemeral(),
+        ChannelBindings::ephemeral(),
     )));
     let app = Router::new()
         .route(
@@ -180,7 +182,10 @@ async fn post_resolves_and_telegram_then_http_share_the_resolver() {
         note.approved_scope,
         Some(liberado_common::GrantScope::Session)
     );
-    assert_eq!(note.decided_via, Some(DecisionVia::Telegram));
+    assert_eq!(
+        note.decided_via,
+        Some(DecisionVia::Channel(liberado_common::ChannelKind::Telegram))
+    );
 
     let listed = app
         .oneshot(
@@ -206,7 +211,11 @@ async fn post_resolves_and_telegram_then_http_share_the_resolver() {
     }
 
     let direct = resolver
-        .resolve("perm-http", "deny", DecisionVia::Telegram)
+        .resolve(
+            "perm-http",
+            "deny",
+            DecisionVia::Channel(liberado_common::ChannelKind::Telegram),
+        )
         .await;
     assert_eq!(
         direct,
@@ -278,7 +287,7 @@ async fn get_pending_lists_open_permission_requests_only() {
     let mut state = AppState::for_test(sessions, None, dir.path().to_path_buf());
     state.approval_hub = Some(Arc::new(ApprovalHub::new(
         resolver,
-        StickySession::ephemeral(),
+        ChannelBindings::ephemeral(),
     )));
     let app = Router::new()
         .route(
