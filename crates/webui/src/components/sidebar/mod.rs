@@ -130,6 +130,8 @@ pub fn Sidebar(
     /// Bumped by `App` whenever the user picks a different theme, so this component can keep
     /// the rail's palette swatch in sync with the active paint.
     theme_epoch: Signal<u64>,
+    /// Coding project selected for this window. Rows come from `GET /api/projects`.
+    active_project: Signal<Option<String>>,
 ) -> Element {
     #[cfg_attr(not(target_arch = "wasm32"), allow(unused_mut))]
     let mut conversations = use_resource({
@@ -222,6 +224,8 @@ pub fn Sidebar(
     // Projects modal. Lives in App-level state would be tidier, but the dialog has no other
     // call sites and shortcutting the state is cheaper than threading through another prop.
     let mut projects_dialog_open = use_signal(bool::default);
+    // Cloned before the move closures below, which take `api_base` for their own requests.
+    let projects_api = api_base.clone();
 
     if collapsed() {
         // Icon rail — vertical column of buttons that bring the rail back / navigate without
@@ -608,7 +612,12 @@ pub fn Sidebar(
                                 "+"
                             }
                         }
-                        ProjectList { route: route }
+                        ProjectList {
+                            api_base: projects_api,
+                            route,
+                            active_project,
+                            collapsed,
+                        }
                     }
 
                     section {

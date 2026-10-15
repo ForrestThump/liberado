@@ -346,6 +346,7 @@ body {
 /* Read-only Tools list. It scrolls inside the popover, not in the transcript. */
 .tools-popover-wrap {
     position: relative;
+    z-index: 40;
 }
 
 .tools-btn {
@@ -3145,6 +3146,21 @@ body {
     color: var(--grok-rail-text-muted);
 }
 
+.toolbar-mode-label {
+    max-width: 7.5rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.composer-project {
+    margin: 0;
+    padding: 0 0.25rem 0.35rem;
+    font-size: 0.75rem;
+    line-height: 1.35;
+    color: var(--grok-subtitle);
+}
+
 .toolbar-spacer {
     flex: 1;
 }
@@ -3235,6 +3251,114 @@ body {
     padding: 1rem 2rem;
     flex: 1;
     overflow: auto;
+}
+
+.project-list,
+.plugin-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+.project-select {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.75rem 0.9rem;
+    border: 1px solid var(--grok-rail-border);
+    border-radius: 0.75rem;
+    background: transparent;
+    color: var(--grok-prompt);
+    font-family: inherit;
+    text-align: left;
+    cursor: pointer;
+}
+
+.project-select.active {
+    border-color: var(--lib-accent);
+}
+
+.project-select-text {
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+}
+
+.project-select-name {
+    font-weight: 500;
+}
+
+.project-root,
+.project-status,
+.plugin-status,
+.plugin-meta,
+.plugin-tools {
+    color: var(--grok-subtitle);
+    font-size: 0.8125rem;
+}
+
+.project-root,
+.plugin-tools {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.plugin-row {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    padding: 0.75rem 0;
+    border-bottom: 1px solid var(--grok-rail-border);
+}
+
+.plugin-row-main {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+}
+
+.plugin-name {
+    font-weight: 500;
+    color: var(--grok-prompt);
+}
+
+.plugin-switch {
+    width: 2.5rem;
+    height: 1.4rem;
+    border-radius: 999px;
+    border: 1px solid var(--grok-rail-border);
+    background: transparent;
+    position: relative;
+    flex-shrink: 0;
+    opacity: 0.7;
+    cursor: not-allowed;
+}
+
+.plugin-switch::after {
+    content: "";
+    position: absolute;
+    top: 0.15rem;
+    left: 0.15rem;
+    width: 1rem;
+    height: 1rem;
+    border-radius: 999px;
+    background: var(--grok-subtitle);
+}
+
+.plugin-switch.on {
+    background: color-mix(in srgb, var(--lib-accent) 35%, transparent);
+}
+
+.plugin-switch.on::after {
+    left: 1.2rem;
+    background: var(--lib-accent);
 }
 
 /* ── Collapsed icon rail ──────────────────────────────────────────────────

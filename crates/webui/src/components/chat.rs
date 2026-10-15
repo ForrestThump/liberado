@@ -8,11 +8,13 @@ use super::message_row::MessageList;
 use crate::components::chat_submission::unanswered_turn_note;
 use crate::components::chat_submission::{bubble_role, profile_switched_note, submission_text};
 use crate::components::model_browser::ModelBrowser;
+use crate::components::model_chip::ModelChip;
 use crate::components::picker::Picker;
 use crate::components::profile_browser::ProfileBrowser;
 #[cfg(target_arch = "wasm32")]
 use crate::components::profile_surface::{handle_slash_for_surface, maybe_open_profile_browser};
 use crate::components::profile_surface::{profile_for_new_chat, set_surface, show_profile_browser};
+use crate::components::project_data::ProjectContextChip;
 use crate::components::slash_palette::SlashPalette;
 use crate::icons::{IconGlasses, IconStop};
 
@@ -197,6 +199,8 @@ pub fn Chat(
     active_surface: Signal<Option<chat_client_contract::SurfaceMode>>,
     /// Bumped when `create_agent` succeeds so the Agents shelf refetches.
     list_epoch: Signal<u64>,
+    /// Coding project remembered for this window. The chip says it is not sent on a chat message.
+    active_project: Signal<Option<String>>,
 ) -> Element {
     // The SSE listener that writes this is wasm-only. Native still has the prop.
     #[cfg(not(target_arch = "wasm32"))]
@@ -716,12 +720,10 @@ pub fn Chat(
                         // creates the conversation.
                         conversation: session(),
                         on_switched: move |model: String| {
-                            // Held for the next message when there is no conversation yet. Dropping it
-                            // here is what sent the pick to the daemon-wide default instead, which
-                            // retuned every other chat.
-                            if session().is_none() {
-                                pending_model.set(Some(model.clone()));
-                            }
+                            // Held for the next message. Dropping it here is what sent the pick to the
+                            // daemon-wide default instead, which retuned every other chat. An existing
+                            // chat keeps it too, so the chip matches the pick before the log is stamped.
+                            pending_model.set(Some(model.clone()));
                             messages.write().push(ChatMsg {
                                 role: "system",
                                 content: format!(
@@ -736,6 +738,7 @@ pub fn Chat(
 
                 div {
                     class: "composer-dock",
+                    ProjectContextChip { active_project }
                     if palette_open() {
                     SlashPalette {
                         input: input(),
@@ -863,17 +866,13 @@ pub fn Chat(
                             "aria-label": "Attach files",
                             crate::icons::IconAttach {}
                         }
-                        button {
-                            class: "toolbar-mode-btn",
-                            r#type: "button",
-                            title: "Choose model",
-                            "aria-label": "Choose model",
-                            onclick: move |evt: MouseEvent| {
-                                evt.prevent_default();
-                                model_browser_open.set(true);
-                            },
-                            "Auto "
-                            span { class: "toolbar-mode-caret", "▾" }
+                        ModelChip {
+                            api_base: base_for_models.clone(),
+                            pending: pending_model,
+                            profile: active_profile,
+                            session,
+                            sending,
+                            on_open: move |_| model_browser_open.set(true),
                         }
                         div { class: "toolbar-spacer" }
                         button {

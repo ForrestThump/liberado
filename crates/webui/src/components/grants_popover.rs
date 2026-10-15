@@ -72,6 +72,99 @@ pub(crate) fn section_class(in_effect: bool) -> &'static str {
     }
 }
 
+pub(crate) fn expanded_attr(open: bool) -> &'static str {
+    if open { "true" } else { "false" }
+}
+
+/// Escape closes the list unless a layer under the pointer already took the key.
+pub(crate) fn dismiss_on_escape(open: bool, already_handled: bool) -> bool {
+    open && !already_handled
+}
+
+/// A pointer outside the Tools control closes the list. A press on the control itself
+/// stays a toggle (`open.set(!open())`), so this returns false for that target.
+pub(crate) fn dismiss_on_pointer(open: bool, inside_wrap: bool) -> bool {
+    open && !inside_wrap
+}
+
+fn install_tools_dismiss(open: Signal<bool>) {
+    #[cfg(target_arch = "wasm32")]
+    install_tools_dismiss_wasm(open);
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let _ = open;
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn install_tools_dismiss_wasm(open: Signal<bool>) {
+    use std::cell::Cell;
+
+    use wasm_bindgen::JsCast;
+    use wasm_bindgen::closure::Closure;
+
+    thread_local! {
+        static INSTALLED: Cell<bool> = const { Cell::new(false) };
+    }
+    if INSTALLED.with(|flag| flag.replace(true)) {
+        return;
+    }
+    let Some(window) = web_sys::window() else {
+        return;
+    };
+    let mut escape_open = open;
+    let escape =
+        Closure::<dyn FnMut(web_sys::KeyboardEvent)>::new(move |event: web_sys::KeyboardEvent| {
+            if event.key() == "Escape"
+                && dismiss_on_escape(escape_open(), event.default_prevented())
+            {
+                event.prevent_default();
+                escape_open.set(false);
+            }
+        });
+    let mut pointer_open = open;
+    let pointer = Closure::<dyn FnMut(web_sys::Event)>::new(move |event: web_sys::Event| {
+        if dismiss_on_pointer(pointer_open(), pointer_inside_tools(&event)) {
+            event.prevent_default();
+            event.stop_propagation();
+            pointer_open.set(false);
+        }
+    });
+    let _ = window.add_event_listener_with_callback("keydown", escape.as_ref().unchecked_ref());
+    // Capture so the outside press dismisses the list before it also activates whatever is under it.
+    let _ = window.add_event_listener_with_callback_and_bool(
+        "click",
+        pointer.as_ref().unchecked_ref(),
+        true,
+    );
+    escape.forget();
+    pointer.forget();
+}
+
+#[cfg(target_arch = "wasm32")]
+fn pointer_inside_tools(event: &web_sys::Event) -> bool {
+    use wasm_bindgen::JsCast;
+
+    let Some(target) = event.target() else {
+        return false;
+    };
+    let element = if let Ok(el) = target.clone().dyn_into::<web_sys::Element>() {
+        el
+    } else if let Ok(node) = target.dyn_into::<web_sys::Node>() {
+        let Some(parent) = node.parent_element() else {
+            return false;
+        };
+        parent
+    } else {
+        return false;
+    };
+    element
+        .closest(".tools-popover-wrap")
+        .ok()
+        .flatten()
+        .is_some()
+}
+
 /// Why the session section looks the way it does. `None` when the grant lines are enough.
 /// Lines under the session heading. An unnamed session inherits the agent grant,
 /// so the blurb is the whole section — "Nothing granted." would contradict it.
@@ -218,6 +311,8 @@ pub fn ToolsPopover(
     } else {
         "tools-btn"
     };
+    let expanded = expanded_attr(open());
+    use_effect(move || install_tools_dismiss(open));
 
     rsx! {
         div {
@@ -226,6 +321,7 @@ pub fn ToolsPopover(
                 class: "{class}",
                 r#type: "button",
                 title: "Tools this conversation may use",
+                "aria-expanded": "{expanded}",
                 onclick: move |_| open.set(!open()),
                 "Tools"
             }
@@ -320,6 +416,31 @@ mod tests {
         assert_eq!(session_heading(None, false), "Session");
         assert_eq!(section_class(true), "tools-section in-effect");
         assert_eq!(section_class(false), "tools-section");
+        assert_eq!(expanded_attr(true), "true");
+        assert_eq!(expanded_attr(false), "false");
+    }
+
+    #[test]
+    fn escape_and_an_outside_pointer_close_the_tools_list() {
+        assert!(dismiss_on_escape(true, false));
+        assert!(
+            !dismiss_on_escape(true, true),
+            "an inner layer already took Escape"
+        );
+        assert!(!dismiss_on_escape(false, false));
+        assert!(dismiss_on_pointer(true, false));
+        assert!(
+            !dismiss_on_pointer(true, true),
+            "a press on the Tools control stays a toggle"
+        );
+        assert!(!dismiss_on_pointer(false, false));
+        let src = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/src/components/grants_popover.rs"
+        ))
+        .unwrap();
+        assert!(src.contains("open.set(!open())"));
+        assert!(src.contains("install_tools_dismiss"));
     }
 
     #[test]

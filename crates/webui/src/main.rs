@@ -116,6 +116,8 @@ fn App() -> Element {
     // Read-only Tools popover. Owned here so Back closes it with the other layers.
     let tools_open = use_signal(|| false);
     let active_profile = use_signal(|| None::<String>);
+    // Coding project for this window. Chat cannot send it; the projects page says why.
+    let active_project = use_signal(|| None::<String>);
     let active_surface = use_signal(|| None::<chat_client_contract::SurfaceMode>);
     let palette_visible = use_signal(|| false);
     let palette_dismissed = use_signal(|| false);
@@ -251,6 +253,7 @@ fn App() -> Element {
                     active_surface,
                     list_epoch,
                     theme_epoch,
+                    active_project,
                 }
                 main {
                     class: "main-content grok-main",
@@ -270,12 +273,20 @@ fn App() -> Element {
                                 active_profile,
                                 active_surface,
                                 list_epoch,
+                                active_project,
                             }
                         },
                         Route::Imagine => rsx! { crate::components::imagine::Imagine {} },
                         Route::Library => rsx! { crate::components::library::Library {} },
                         Route::Automations => rsx! { crate::components::automations::Automations {} },
-                        Route::Projects => rsx! { crate::components::projects::Projects {} },
+                        Route::Projects => rsx! {
+                            crate::components::projects::Projects {
+                                api_base: base.clone(),
+                                active_project,
+                                route,
+                                collapsed: sidebar_collapsed,
+                            }
+                        },
                         Route::Plugins => rsx! { crate::components::plugins::Plugins { api_base: base.clone() } },
                         Route::Agents => rsx! { crate::components::imagine::Imagine {} },
                     }
