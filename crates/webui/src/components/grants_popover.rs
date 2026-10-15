@@ -351,10 +351,15 @@ mod tests {
     #[test]
     fn the_popover_lives_in_the_header_and_not_in_the_transcript() {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let header = std::fs::read_to_string(root.join("src/shell.rs")).unwrap();
         let app = std::fs::read_to_string(root.join("src/main.rs")).unwrap();
         let chat = std::fs::read_to_string(root.join("src/components/chat.rs")).unwrap();
         let css = std::fs::read_to_string(root.join("src/styles/main.css")).unwrap();
-        assert!(app.contains("ToolsPopover"), "{app}");
+        assert!(header.contains("ToolsPopover"), "{header}");
+        assert!(
+            app.contains("HeaderRightSide"),
+            "the header cluster is mounted by App: {app}"
+        );
         assert!(
             !chat.contains("ToolsPopover") && !chat.contains("tools-popover"),
             "the tools list must stay out of the transcript"
