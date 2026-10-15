@@ -8,9 +8,11 @@ use std::path::Path;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use chat_client_contract::{ApprovalCard, ApprovalOption};
-use chrono::Utc;
-use liberado_common::{ApprovalLedger, ChannelKind, Proposal, recorded_action};
+use chat_client_contract::{ApprovalCard, ApprovalOption, PendingApproval};
+use chrono::{DateTime, Utc};
+use liberado_common::{
+    ApprovalLedger, Capability, ChannelKind, Proposal, ProposedAction, recorded_action,
+};
 use liberado_executor::PermissionSink;
 use liberado_main_agent::ChatSessions;
 use liberado_messaging::{decided_phrase, permission_card_options};
@@ -52,6 +54,52 @@ pub async fn conversation_cards(hub: &Option<Arc<ApprovalHub>>, id: &str) -> Vec
     match hub {
         Some(hub) => hub.cards(id).await,
         None => Vec::new(),
+    }
+}
+
+/// Open permission requests across chats. An unwired hub is an empty list.
+pub async fn pending_approval_rows(hub: &Option<Arc<ApprovalHub>>) -> Vec<PendingApproval> {
+    let Some(hub) = hub else {
+        return Vec::new();
+    };
+    let now = Utc::now();
+    hub.resolver
+        .list_pending_permission_requests()
+        .await
+        .iter()
+        .filter_map(|proposal| pending_approval_row(proposal, now))
+        .collect()
+}
+
+/// One pending permission row. `None` for an ordinary proposal or a decided note.
+pub fn pending_approval_row(proposal: &Proposal, now: DateTime<Utc>) -> Option<PendingApproval> {
+    if !is_open_permission(proposal, now) {
+        return None;
+    }
+    Some(PendingApproval {
+        id: proposal.id.clone(),
+        conversation: proposal.session_id.clone(),
+        tool: permission_tool(proposal),
+        zone: permission_zone(proposal),
+        created_at: proposal.created.to_rfc3339(),
+    })
+}
+
+fn is_open_permission(proposal: &Proposal, now: DateTime<Utc>) -> bool {
+    proposal.requested_grant.is_some() && recorded_action(proposal, now) == "pending"
+}
+
+fn permission_tool(proposal: &Proposal) -> Option<String> {
+    match &proposal.proposed_action {
+        ProposedAction::ToolCalls(calls) => calls.first().map(|call| call.tool.clone()),
+        _ => None,
+    }
+}
+
+fn permission_zone(proposal: &Proposal) -> Option<String> {
+    match proposal.requested_grant.as_ref() {
+        Some(Capability::Write(zone)) => Some(zone.name().to_string()),
+        _ => None,
     }
 }
 
@@ -138,3 +186,7 @@ impl PermissionSink for ChannelPermissionSink {
 #[cfg(test)]
 #[path = "approvals_wire_tests.rs"]
 mod wire_tests;
+
+#[cfg(test)]
+#[path = "approvals_pending_tests.rs"]
+mod pending_tests;

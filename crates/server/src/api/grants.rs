@@ -1,9 +1,14 @@
-//! `GET /api/conversations/{id}/grants` — read-only tool, MCP, and zone grants.
+//! Read-only grant views for one conversation.
 //!
-//! The next turn's authority is the same rule `ChatSessions::turn_settings` already
-//! uses: a named profile is the session grant, even when that grant is empty. No
-//! profile means the process-wide `main-agent` grant. This handler only reads that
-//! result. It does not resolve a profile again, and it does not revoke anything.
+//! `GET /api/conversations/{id}/grant` returns the grant stored on the session
+//! header. It does not re-resolve policy and it does not write.
+//!
+//! `GET /api/conversations/{id}/grants` returns the next turn's tool, MCP, and
+//! zone grants. The next turn's authority is the same rule
+//! `ChatSessions::turn_settings` already uses: a named profile is the session
+//! grant, even when that grant is empty. No profile means the process-wide
+//! `main-agent` grant. This handler only reads that result. It does not
+//! resolve a profile again, and it does not revoke anything.
 
 use std::sync::Arc;
 
@@ -14,13 +19,55 @@ use axum::{
     response::IntoResponse,
 };
 use chat_client_contract::{
-    ApiError, AuthorityGrants, ConversationGrantsResponse, GrantSource, ZoneGrant,
+    ApiError, AuthorityGrants, ConversationGrantsResponse, GrantSource, HeaderGrantResponse,
+    SurfaceMode, ZoneGrant,
 };
 use liberado_common::{Capability, CapabilitySet, WriteClass};
 use liberado_conversation_store::Ulid;
+use liberado_session::SessionGrant;
+use liberado_session_store::{AgentProfiles, SessionHeader};
 
 use super::chat::CHAT_DISABLED_HINT;
 use crate::state::AppState;
+
+/// `GET /api/conversations/{id}/grant` — current header grant. Read-only.
+pub async fn get_header_grant(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<Ulid>,
+) -> impl IntoResponse {
+    match state.sessions.session(id).await {
+        Some(header) => {
+            Json(grant_body(id, &header, state.sessions.agent_profiles())).into_response()
+        }
+        None => (
+            StatusCode::NOT_FOUND,
+            Json(ApiError {
+                error: "conversation not found".into(),
+            }),
+        )
+            .into_response(),
+    }
+}
+
+fn grant_body(id: Ulid, header: &SessionHeader, profiles: &AgentProfiles) -> HeaderGrantResponse {
+    let projected = header.to_conversation_header_with(profiles);
+    HeaderGrantResponse {
+        id: id.to_string(),
+        surface_mode: wire_surface(projected.surface_mode),
+        grant: grant_json(&projected.grant),
+    }
+}
+
+fn grant_json(grant: &SessionGrant) -> serde_json::Value {
+    serde_json::to_value(grant).unwrap_or_else(|_| serde_json::json!({}))
+}
+
+fn wire_surface(mode: liberado_conversation_store::SurfaceMode) -> SurfaceMode {
+    match mode {
+        liberado_conversation_store::SurfaceMode::Agent => SurfaceMode::Agent,
+        liberado_conversation_store::SurfaceMode::Chat => SurfaceMode::Chat,
+    }
+}
 
 /// `GET /api/conversations/{id}/grants`.
 pub async fn conversation_grants(
@@ -153,6 +200,10 @@ fn write_class_label(class: WriteClass) -> String {
     }
     .to_string()
 }
+
+#[cfg(test)]
+#[path = "grants_http_tests.rs"]
+mod http_tests;
 
 #[cfg(test)]
 #[path = "grants_tests.rs"]

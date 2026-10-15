@@ -475,6 +475,37 @@ pub struct ApprovalListResponse {
     pub approvals: Vec<ApprovalCard>,
 }
 
+/// One open permission request from `GET /api/approvals/pending`.
+///
+/// Pending only. A decided card stays on `GET /api/conversations/{id}/approvals`.
+/// `conversation` is null when the request has no session (a background run).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PendingApproval {
+    pub id: String,
+    pub conversation: Option<String>,
+    pub tool: Option<String>,
+    pub zone: Option<String>,
+    /// RFC3339 timestamp from the proposal note.
+    pub created_at: String,
+}
+
+/// Reply from `GET /api/approvals/pending`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PendingApprovalListResponse {
+    pub approvals: Vec<PendingApproval>,
+}
+
+/// Reply from `GET /api/conversations/{id}/grant`.
+///
+/// `grant` is the session header's grant as stored. This route does not
+/// re-resolve `policy.toml` and does not apply the process-wide default.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct HeaderGrantResponse {
+    pub id: String,
+    pub surface_mode: SurfaceMode,
+    pub grant: serde_json::Value,
+}
+
 // ──────────────────────────────────────────────────────────────
 // Vault / catalog
 // ──────────────────────────────────────────────────────────────

@@ -10,8 +10,10 @@ share everything.
               │  /api/status   /api/models (+ POST select)   /api/catalog   │
               │  /api/reactions   /api/vault   /api/chat (+ stream)         │
               │  /api/conversations   /api/conversations/{id} (GET/PATCH)   │
-              │  /api/conversations/{id}/grants (read-only)                 │
-              │  /api/conversations/{id}/approvals   POST .../resolve       │
+              │  GET /api/conversations/{id}/grant                           │
+              │  GET /api/conversations/{id}/grants (read-only)              │
+              │  GET /api/approvals/pending                                  │
+              │  /api/conversations/{id}/approvals   POST .../resolve        │
               │  /api/goals  /api/goals/{id}/stream  (goal sessions)        │
               └───────────────┬───────────────────────────┬────────────────┘
                               │                            │
@@ -306,6 +308,11 @@ about reachability. Two rules follow:
    an agent tool or on the operator dogfood MCP. `GET /api/conversations/{id}/approvals` only lists
    the cards, the same disclosure class as reading a transcript. Opening a conversation
    (`GET /api/conversations/{id}`) includes the same list on `approvals`.
+   `GET /api/approvals/pending` lists open permission requests (`id`, `conversation`, `tool`,
+   `zone`, `created_at`) and does not decide one. `GET /api/conversations/{id}/grant` returns the
+   grant stored on the current session header. The operator dogfood MCP reads both. It still has
+   no approve tool and no resolve tool. See
+   [`operator-dogfood-mcp.md`](operator-dogfood-mcp.md).
 2. **A real fix has to distinguish surface traffic from agent traffic** — a shared secret the MCPs are
    not given, a separate bind address for mutating routes, or an egress filter that refuses
    loopback/private targets in the fetching MCPs themselves. The last is the most general: it fixes

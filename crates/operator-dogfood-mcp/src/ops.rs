@@ -153,6 +153,19 @@ pub async fn workspace_smoke(client: &DaemonClient) -> Result<Value, DogfoodErro
     Ok(workspace_report(&names))
 }
 
+/// `GET /api/approvals/pending`. Open permission requests only.
+pub async fn list_pending_approvals(client: &DaemonClient) -> Result<Value, DogfoodError> {
+    client.get_json("/api/approvals/pending").await
+}
+
+/// `GET /api/conversations/{id}/grant`. The grant on the current session header.
+pub async fn get_agent_grants(client: &DaemonClient, session: &str) -> Result<Value, DogfoodError> {
+    let session = session_id(session)?;
+    client
+        .get_json(&format!("/api/conversations/{session}/grant"))
+        .await
+}
+
 async fn require_agent_profile(client: &DaemonClient, profile: &str) -> Result<(), DogfoodError> {
     let body = client.get_json("/api/profiles").await?;
     if profile_eligibility(&body, profile)? {

@@ -1,7 +1,7 @@
 [package]
 name = "liberado-operator-dogfood-mcp"
 version = "0.1.0"
-description = "Stdio MCP for an external operator agent to dogfood Liberado through the existing HTTP API: find or create an Agents-shelf session, open a chat, post an explicit human turn, continue that session, and read history."
+description = "Stdio MCP for an external operator agent to dogfood Liberado through the existing HTTP API: find or create an Agents-shelf session, open a chat, post an explicit human turn, continue that session, read history, list pending permission requests, and read the current header grant for a conversation or agent. No approve or resolve tool."
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true

@@ -94,6 +94,7 @@ Authority model: [doc-authority.md](spec/reference/doc-authority.md).
 | [docs/spec/reference/cargo-targets.md](spec/reference/cargo-targets.md) | reference | active | normative | coding-harness | cargo-targets |
 | [docs/spec/reference/doc-authority.md](spec/reference/doc-authority.md) | policy | active | normative | docs | document-authority |
 | [docs/spec/reference/local-readiness.md](spec/reference/local-readiness.md) | reference | active | normative | ci | local-readiness |
+| [docs/spec/reference/operator-dogfood-mcp.md](spec/reference/operator-dogfood-mcp.md) | reference | active | normative | product | operator-dogfood-mcp |
 | [docs/spec/reference/slim-build.md](spec/reference/slim-build.md) | reference | active | normative | build | slim-build |
 | [docs/validation/README.md](validation/README.md) | validation | active | evidence | correctness | — |
 | [docs/validation/coverage-gaps-coding-features-2026-08-06.md](validation/coverage-gaps-coding-features-2026-08-06.md) | validation | historical | evidence | correctness | — |
