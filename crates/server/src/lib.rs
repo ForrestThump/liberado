@@ -422,6 +422,8 @@ fn build_app_router(state: &Arc<AppState>) -> Router {
             "/api/hooks/{name}",
             axum::routing::post(hooks::trigger_hook),
         )
+        .route("/api/hooks", axum::routing::get(api::list_hooks))
+        .route("/api/schedules", axum::routing::get(api::list_schedules))
         // The one unified list (S5′): chats and goal sessions, same rows.
         .route("/api/sessions", axum::routing::get(api::sessions_list))
         // Branch a conversation, keeping the original (copy semantics — a snapshot, not a pointer).
