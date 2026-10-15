@@ -51,6 +51,7 @@ fn app_with_topology(schedules: Vec<CronSchedule>, hooks: Vec<HookConfig>) -> Ro
         live_mcp: liberado_bootstrap::LiveMcpController::empty(),
         drain: crate::shutdown::DrainGate::default(),
         approval_hub: None,
+        surfaces: crate::surfaces::LiveSurfaces::inert(),
     });
     Router::new()
         .route("/api/schedules", axum::routing::get(list_schedules))

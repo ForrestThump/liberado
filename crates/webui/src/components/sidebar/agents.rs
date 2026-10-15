@@ -10,7 +10,7 @@ use chat_client_contract::{ConvHeader, ConversationSearchResult};
 
 use crate::icons::{IconChevronDown, IconChevronRight};
 
-use super::row_menu::{RowOptions, conversation_row_dom_id};
+use super::row_menu::{RowOptions, conversation_row_dom_id, delete_block_for};
 
 fn profile_seed(profiles: &HashMap<String, String>, id: &str) -> String {
     profiles.get(id).cloned().unwrap_or_default()
@@ -120,6 +120,7 @@ fn SidebarRowCompact(
     active: Signal<Option<String>>,
     menu_for: Signal<Option<String>>,
     action_error: Signal<Option<String>>,
+    delete_block: Option<&'static str>,
     on_pick: EventHandler<String>,
     on_delete: EventHandler<String>,
     on_rename: EventHandler<(String, String)>,
@@ -159,6 +160,7 @@ fn SidebarRowCompact(
                 noun: "agent",
                 menu_for,
                 action_error,
+                delete_block,
                 on_delete,
                 on_rename,
             }
@@ -209,6 +211,7 @@ fn SidebarRowChat(
                 noun: "chat",
                 menu_for,
                 action_error,
+                delete_block: None,
                 on_delete,
                 on_rename,
             }
@@ -222,6 +225,7 @@ pub(super) fn PinnedList(
     profiles: HashMap<String, String>,
     active: Signal<Option<String>>,
     menu_for: Signal<Option<String>>,
+    protected_ids: Vec<String>,
     on_pick: EventHandler<String>,
     on_delete: EventHandler<String>,
     on_rename: EventHandler<(String, String)>,
@@ -244,6 +248,7 @@ pub(super) fn PinnedList(
                     active: active,
                     menu_for: menu_for,
                     action_error: action_error,
+                    delete_block: delete_block_for(&conv.id, &protected_ids),
                     on_pick: on_pick,
                     on_delete: on_delete,
                     on_rename: on_rename,
@@ -260,6 +265,7 @@ pub(super) fn CategoryList(
     profiles: HashMap<String, String>,
     active: Signal<Option<String>>,
     menu_for: Signal<Option<String>>,
+    protected_ids: Vec<String>,
     on_pick: EventHandler<String>,
     on_delete: EventHandler<String>,
     on_rename: EventHandler<(String, String)>,
@@ -282,6 +288,7 @@ pub(super) fn CategoryList(
                     active: active,
                     menu_for: menu_for,
                     action_error: action_error,
+                    delete_block: delete_block_for(&conv.id, &protected_ids),
                     on_pick: on_pick,
                     on_delete: on_delete,
                     on_rename: on_rename,
@@ -312,6 +319,7 @@ pub(super) fn AgentTailList(
     profiles: HashMap<String, String>,
     active: Signal<Option<String>>,
     menu_for: Signal<Option<String>>,
+    protected_ids: Vec<String>,
     on_pick: EventHandler<String>,
     on_delete: EventHandler<String>,
     on_rename: EventHandler<(String, String)>,
@@ -327,6 +335,7 @@ pub(super) fn AgentTailList(
                     active: active,
                     menu_for: menu_for,
                     action_error: action_error,
+                    delete_block: delete_block_for(&conv.id, &protected_ids),
                     on_pick: on_pick,
                     on_delete: on_delete,
                     on_rename: on_rename,
@@ -397,6 +406,7 @@ pub(super) fn SearchResultList(
     on_rename: EventHandler<(String, String)>,
     on_delete_profile: EventHandler<String>,
     on_rename_profile: EventHandler<(String, String)>,
+    protected_ids: Vec<String>,
 ) -> Element {
     if results.is_empty() {
         return rsx! {
@@ -423,6 +433,7 @@ pub(super) fn SearchResultList(
                     let title = r.title.clone().unwrap_or_else(|| "(untitled)".into());
                     let seed = search_seed(agents_shelf, &profiles, &id, &r.title);
                     let row_dom_id = conversation_row_dom_id(&id);
+                    let delete_block = delete_block_for(&id, &protected_ids);
                     rsx! {
                         li {
                             id: "{row_dom_id}",
@@ -440,6 +451,7 @@ pub(super) fn SearchResultList(
                                 noun,
                                 menu_for,
                                 action_error,
+                                delete_block,
                                 on_delete: delete,
                                 on_rename: rename,
                             }

@@ -543,6 +543,7 @@ pub fn Sidebar(
                                 action_error,
                                 agents_shelf: shelf() == Shelf::Agents,
                                 profiles: page.profiles.clone(),
+                                protected_ids: creator_ids.clone(),
                                 on_delete: move |id: String| delete_conv.call(id),
                                 on_rename: move |pair: (String, String)| rename_conv.call(pair),
                                 on_delete_profile: move |id: String| delete_profile.call(id),
@@ -643,6 +644,7 @@ pub fn Sidebar(
                             active: active_conv_id,
                             menu_for,
                             profiles: page.profiles.clone(),
+                            protected_ids: creator_ids.clone(),
                             on_rename: move |pair: (String, String)| rename_profile.call(pair),
                             on_pick: move |id: String| {
                                 active_project.set(project_for_open(conversations.read().as_ref(), &id));
@@ -664,6 +666,7 @@ pub fn Sidebar(
                                 active: active_conv_id,
                                 menu_for,
                                 profiles: page.profiles.clone(),
+                                protected_ids: creator_ids.clone(),
                                 on_rename: move |pair: (String, String)| rename_profile.call(pair),
                                 on_pick: move |id: String| {
                                     active_project.set(project_for_open(conversations.read().as_ref(), &id));
@@ -690,6 +693,7 @@ pub fn Sidebar(
                                     active: active_conv_id,
                                     menu_for,
                                     profiles: page.profiles.clone(),
+                                    protected_ids: creator_ids.clone(),
                                     on_rename: move |pair: (String, String)| rename_profile.call(pair),
                                     on_pick: move |id: String| {
                                         active_project.set(project_for_open(conversations.read().as_ref(), &id));

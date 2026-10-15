@@ -26,6 +26,27 @@ pub(super) fn normalized_title(raw: &str) -> Result<String, &'static str> {
     Ok(title.to_string())
 }
 
+/// `Some` when this row must not be deleted. The button stays visible and says why.
+pub(super) fn blocked_delete(reason: Option<&'static str>) -> Option<&'static str> {
+    reason.filter(|text| !text.is_empty())
+}
+
+/// Shown on the built-in Agent Creator. Ordinary agent sessions can be deleted.
+pub(super) const BUILTIN_AGENT_DELETE_REASON: &str =
+    "The built-in Agent Creator cannot be deleted.";
+
+pub(super) fn agent_delete_block(agent_creator: bool) -> Option<&'static str> {
+    if agent_creator {
+        Some(BUILTIN_AGENT_DELETE_REASON)
+    } else {
+        None
+    }
+}
+
+pub(super) fn delete_block_for(id: &str, creator_ids: &[String]) -> Option<&'static str> {
+    agent_delete_block(creator_ids.iter().any(|row| row == id))
+}
+
 /// Profile names match the daemon: trimmed, non-empty, at most 64 characters,
 /// ASCII letters, digits, `.`, `_`, and `-`.
 pub(super) fn normalized_profile_name(raw: &str) -> Result<String, &'static str> {
@@ -129,6 +150,8 @@ pub(super) fn RowOptions(
     noun: &'static str,
     menu_for: Signal<Option<String>>,
     action_error: Signal<Option<String>>,
+    /// When set, Delete is visible but does not run. The text is the reason.
+    delete_block: Option<&'static str>,
     on_delete: EventHandler<String>,
     on_rename: EventHandler<(String, String)>,
 ) -> Element {
@@ -138,6 +161,7 @@ pub(super) fn RowOptions(
     let mut menu_position_style = use_signal(String::new);
     let menu_open = menu_for().as_deref() == Some(id.as_str());
     let row_dom_id = conversation_row_dom_id(&id);
+    let block = blocked_delete(delete_block);
     let limit = name_limit(noun);
     let confirm_title = delete_confirm_title(noun);
     let confirm_note = delete_confirm_note(noun);
@@ -208,14 +232,25 @@ pub(super) fn RowOptions(
                                     },
                                     "Rename"
                                 }
-                                button {
-                                    class: "conv-menu-btn danger",
-                                    r#type: "button",
-                                    onclick: move |_| {
-                                        validation_error.set(None);
-                                        action_view.set(ActionView::ConfirmDelete);
-                                    },
-                                    "Delete"
+                                if let Some(reason) = block {
+                                    button {
+                                        class: "conv-menu-btn danger",
+                                        r#type: "button",
+                                        disabled: true,
+                                        title: "{reason}",
+                                        "Delete"
+                                    }
+                                    p { class: "conv-menu-note", "{reason}" }
+                                } else {
+                                    button {
+                                        class: "conv-menu-btn danger",
+                                        r#type: "button",
+                                        onclick: move |_| {
+                                            validation_error.set(None);
+                                            action_view.set(ActionView::ConfirmDelete);
+                                        },
+                                        "Delete"
+                                    }
                                 }
                                 button {
                                     class: "conv-menu-btn",
@@ -310,7 +345,7 @@ pub(super) fn RowOptions(
 #[cfg(test)]
 mod tests {
     use super::{
-        DESKTOP_MENU_GUTTER, clamped_desktop_menu_top, conversation_row_dom_id,
+        DESKTOP_MENU_GUTTER, blocked_delete, clamped_desktop_menu_top, conversation_row_dom_id,
         delete_confirm_note, delete_confirm_title, name_limit, normalized_profile_name,
         normalized_title,
     };
@@ -326,6 +361,16 @@ mod tests {
         assert_eq!(
             normalized_title(&too_long),
             Err("Keep the title under 120 characters.")
+        );
+    }
+
+    #[test]
+    fn a_delete_block_keeps_the_reason() {
+        assert_eq!(blocked_delete(None), None);
+        assert_eq!(blocked_delete(Some("")), None);
+        assert_eq!(
+            blocked_delete(Some("The built-in Agent Creator cannot be deleted.")),
+            Some("The built-in Agent Creator cannot be deleted.")
         );
     }
 
@@ -374,8 +419,8 @@ mod tests {
             "the first Delete only opens confirmation"
         );
         assert!(
-            !actions.contains("disabled:"),
-            "delete is confirmed, then the daemon accepts or refuses it"
+            actions.contains("disabled: true"),
+            "blocked deletes stay visible but disabled"
         );
     }
 

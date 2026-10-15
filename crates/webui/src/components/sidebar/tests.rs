@@ -134,7 +134,7 @@ fn agent_rows_call_the_profile_routes() {
     let compact = compact.split("fn SidebarRowChat").next().unwrap_or(compact);
     assert!(compact.contains("noun: \"agent\""));
     assert!(compact.contains("profile_name"));
-    assert!(!compact.contains("delete_block"));
+    assert!(compact.contains("delete_block"));
     let sidebar = include_str!("mod.rs");
     assert!(sidebar.contains("/api/conversations/{id}"));
     let profile_api = include_str!("profile_api.rs");
