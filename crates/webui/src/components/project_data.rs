@@ -7,6 +7,10 @@
 use dioxus::prelude::*;
 use serde::Deserialize;
 
+/// Shown on the projects page. Projects are config, not a create form.
+pub(crate) const PROJECT_SOURCE: &str =
+    "Projects are declared in topology.toml. This list reads them. It does not create one.";
+
 /// Shown on the projects page. A phone has no hover, so the gap is not only a tooltip.
 pub(crate) const PROJECT_BIND_GAP: &str = "Choosing a project remembers it for this window and opens the chat. \
      A chat message cannot carry a project. The daemon accepts one only as payload.project on POST /api/goals.";
@@ -147,6 +151,8 @@ mod tests {
 
     #[test]
     fn the_gap_names_the_goal_endpoint_and_not_a_chat_field() {
+        assert!(PROJECT_SOURCE.contains("topology.toml"));
+        assert!(PROJECT_SOURCE.contains("does not create"));
         assert!(PROJECT_BIND_GAP.contains("POST /api/goals"));
         assert!(PROJECT_BIND_GAP.contains("payload.project"));
         assert!(!PROJECT_BIND_GAP.contains("/api/chat"));

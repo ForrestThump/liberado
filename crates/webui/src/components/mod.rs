@@ -20,7 +20,6 @@ pub mod profile_surface;
 pub mod profiles_panel;
 mod project_data;
 pub mod projects;
-mod projects_dialog;
 pub mod reactions;
 pub mod sidebar;
 mod sidebar_agent_creator;

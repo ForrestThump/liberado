@@ -208,6 +208,17 @@ fn short_titles_pass_through() {
     assert_eq!(truncate_title("Disk Saver", 30), "Disk Saver");
 }
 
+/// The projects `+` used to open a Create dialog that only closed. Projects are
+/// declared in topology.toml, so the sidebar must not offer that action.
+#[test]
+fn the_projects_section_does_not_offer_create() {
+    let sidebar = include_str!("mod.rs");
+    assert!(!sidebar.contains("Create project"));
+    assert!(!sidebar.contains("ProjectsDialog"));
+    assert!(!sidebar.contains("on_create"));
+    assert!(sidebar.contains("sidebar-section-label\", \"Projects\""));
+}
+
 #[test]
 fn pinned_match_is_case_insensitive_prefix() {
     assert!(pinned("Grok Bot"));
