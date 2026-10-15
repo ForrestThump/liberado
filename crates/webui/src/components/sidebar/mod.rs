@@ -69,16 +69,57 @@ impl Route {
 
 // ── Sidebar fetchers ────────────────────────────────────────────────────────
 
-async fn fetch_conversations(api_base: String) -> Result<Vec<ConvHeader>, String> {
+/// Headers from `GET /api/conversations`, plus the built-in creator ids.
+///
+/// `agent_creator` is on the wire and is not a field of [`ConvHeader`]. The
+/// sidebar needs it so Delete can stay off for that one row.
+#[derive(Clone, Debug, Default)]
+pub(super) struct ConversationPage {
+    pub(super) headers: Vec<ConvHeader>,
+    pub(super) creator_ids: Vec<String>,
+}
+
+pub(super) fn page_from_list(value: &serde_json::Value) -> Result<ConversationPage, String> {
+    let items = value
+        .as_array()
+        .ok_or_else(|| "Bad response: expected a list".to_string())?;
+    let mut headers = Vec::with_capacity(items.len());
+    let mut creator_ids = Vec::new();
+    for item in items {
+        let header: ConvHeader =
+            serde_json::from_value(item.clone()).map_err(|e| format!("Bad response: {e}"))?;
+        if item
+            .get("agent_creator")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false)
+        {
+            creator_ids.push(header.id.clone());
+        }
+        headers.push(header);
+    }
+    Ok(ConversationPage {
+        headers,
+        creator_ids,
+    })
+}
+
+fn loaded_page(loaded: Option<&Result<ConversationPage, String>>) -> ConversationPage {
+    loaded
+        .and_then(|result| result.as_ref().ok())
+        .cloned()
+        .unwrap_or_default()
+}
+
+async fn fetch_conversations(api_base: String) -> Result<ConversationPage, String> {
     let url = format!("{api_base}/api/conversations");
     let resp = reqwest::get(&url)
         .await
         .map_err(|e| format!("Failed to reach daemon: {e}"))?;
-    let headers: Vec<ConvHeader> = resp
+    let body: serde_json::Value = resp
         .json()
         .await
         .map_err(|e| format!("Bad response: {e}"))?;
-    Ok(headers)
+    page_from_list(&body)
 }
 
 async fn fetch_search_results(
@@ -269,12 +310,9 @@ pub fn Sidebar(
         })
     };
 
-    let headers: Vec<ConvHeader> = conversations
-        .read()
-        .as_ref()
-        .and_then(|r: &Result<Vec<ConvHeader>, String>| r.as_ref().ok())
-        .cloned()
-        .unwrap_or_default();
+    let page = loaded_page(conversations.read().as_ref());
+    let headers = page.headers;
+    let creator_ids = page.creator_ids;
     let chat_rows: Vec<&ConvHeader> = headers
         .iter()
         .filter(|c| c.surface_mode == SurfaceMode::Chat)
@@ -469,12 +507,13 @@ pub fn Sidebar(
                                 action_error,
                                 on_delete: move |id: String| delete_conv.call(id),
                                 on_rename: move |pair: (String, String)| rename_conv.call(pair),
+                                protected_ids: creator_ids.clone(),
                                 on_pick: move |id: String| {
                                     let mode = conversations
                                         .read()
                                         .as_ref()
                                         .and_then(|r| r.as_ref().ok())
-                                        .and_then(|list| surface_for_id(list, &id));
+                                        .and_then(|page| surface_for_id(&page.headers, &id));
                                     active_conv_id.set(Some(id));
                                     match mode {
                                         Some(SurfaceMode::Agent) => {
@@ -560,6 +599,9 @@ pub fn Sidebar(
                         PinnedList {
                             items: grouped.pinned.iter().map(|c| (*c).clone()).collect(),
                             active: active_conv_id,
+                            menu_for,
+                            protected_ids: creator_ids.clone(),
+                            on_rename: move |pair: (String, String)| rename_conv.call(pair),
                             on_pick: move |id: String| {
                                 active_conv_id.set(Some(id));
                                 active_surface.set(Some(SurfaceMode::Agent));
@@ -577,6 +619,9 @@ pub fn Sidebar(
                                 label: cat,
                                 members: members.iter().map(|c| (*c).clone()).collect(),
                                 active: active_conv_id,
+                                menu_for,
+                                protected_ids: creator_ids.clone(),
+                                on_rename: move |pair: (String, String)| rename_conv.call(pair),
                                 on_pick: move |id: String| {
                                     active_conv_id.set(Some(id));
                                     active_surface.set(Some(SurfaceMode::Agent));
@@ -599,6 +644,9 @@ pub fn Sidebar(
                                 AgentTailList {
                                     items: grouped.others.iter().map(|c| (*c).clone()).collect(),
                                     active: active_conv_id,
+                                    menu_for,
+                                    protected_ids: creator_ids.clone(),
+                                    on_rename: move |pair: (String, String)| rename_conv.call(pair),
                                     on_pick: move |id: String| {
                                         active_conv_id.set(Some(id));
                                         active_surface.set(Some(SurfaceMode::Agent));

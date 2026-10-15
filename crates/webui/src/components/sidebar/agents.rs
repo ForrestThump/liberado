@@ -8,7 +8,7 @@ use chat_client_contract::{ConvHeader, ConversationSearchResult};
 
 use crate::icons::{IconChevronDown, IconChevronRight};
 
-use super::row_menu::{RowOptions, conversation_row_dom_id};
+use super::row_menu::{RowOptions, conversation_row_dom_id, delete_block_for};
 
 // ── Agent categorization ──────────────────────────────────────────────────
 
@@ -107,8 +107,12 @@ fn conv_display_title(conv: &ConvHeader) -> String {
 fn SidebarRowCompact(
     conv: ConvHeader,
     active: Signal<Option<String>>,
+    menu_for: Signal<Option<String>>,
+    action_error: Signal<Option<String>>,
+    delete_block: Option<&'static str>,
     on_pick: EventHandler<String>,
     on_delete: EventHandler<String>,
+    on_rename: EventHandler<(String, String)>,
 ) -> Element {
     let id = conv.id.clone();
     let is_active = active().as_deref() == Some(id.as_str());
@@ -118,10 +122,13 @@ fn SidebarRowCompact(
         "grok-row"
     };
     let display = conv_display_title(&conv);
+    let seed = conv.title.clone().unwrap_or_default();
     let dot = row_dot_color(display.as_str());
     let id_for_pick = id.clone();
+    let row_dom_id = conversation_row_dom_id(&id);
     rsx! {
         li {
+            id: "{row_dom_id}",
             class: "{cls}",
             button {
                 class: "grok-row-btn",
@@ -134,6 +141,17 @@ fn SidebarRowCompact(
                     "aria-hidden": "true"
                 }
                 span { class: "grok-row-title", "{display}" }
+            }
+            RowOptions {
+                id: id.clone(),
+                seed,
+                display: display.clone(),
+                noun: "agent",
+                menu_for,
+                action_error,
+                delete_block,
+                on_delete,
+                on_rename,
             }
         }
     }
@@ -194,8 +212,11 @@ fn SidebarRowChat(
 pub(super) fn PinnedList(
     items: Vec<ConvHeader>,
     active: Signal<Option<String>>,
+    menu_for: Signal<Option<String>>,
+    protected_ids: Vec<String>,
     on_pick: EventHandler<String>,
     on_delete: EventHandler<String>,
+    on_rename: EventHandler<(String, String)>,
     action_error: Signal<Option<String>>,
 ) -> Element {
     if items.is_empty() {
@@ -212,8 +233,12 @@ pub(super) fn PinnedList(
                 SidebarRowCompact {
                     conv: conv.clone(),
                     active: active,
+                    menu_for: menu_for,
+                    action_error: action_error,
+                    delete_block: delete_block_for(&conv.id, &protected_ids),
                     on_pick: on_pick,
                     on_delete: on_delete,
+                    on_rename: on_rename,
                 }
             }
         }
@@ -225,8 +250,11 @@ pub(super) fn CategoryList(
     label: &'static str,
     members: Vec<ConvHeader>,
     active: Signal<Option<String>>,
+    menu_for: Signal<Option<String>>,
+    protected_ids: Vec<String>,
     on_pick: EventHandler<String>,
     on_delete: EventHandler<String>,
+    on_rename: EventHandler<(String, String)>,
     action_error: Signal<Option<String>>,
 ) -> Element {
     if members.is_empty() {
@@ -243,8 +271,12 @@ pub(super) fn CategoryList(
                 SidebarRowCompact {
                     conv: conv.clone(),
                     active: active,
+                    menu_for: menu_for,
+                    action_error: action_error,
+                    delete_block: delete_block_for(&conv.id, &protected_ids),
                     on_pick: on_pick,
                     on_delete: on_delete,
+                    on_rename: on_rename,
                 }
             }
         }
@@ -270,8 +302,11 @@ pub(super) fn ShowMoreRow(count: usize, expanded: Signal<bool>) -> Element {
 pub(super) fn AgentTailList(
     items: Vec<ConvHeader>,
     active: Signal<Option<String>>,
+    menu_for: Signal<Option<String>>,
+    protected_ids: Vec<String>,
     on_pick: EventHandler<String>,
     on_delete: EventHandler<String>,
+    on_rename: EventHandler<(String, String)>,
     action_error: Signal<Option<String>>,
 ) -> Element {
     rsx! {
@@ -281,8 +316,12 @@ pub(super) fn AgentTailList(
                 SidebarRowCompact {
                     conv: conv.clone(),
                     active: active,
+                    menu_for: menu_for,
+                    action_error: action_error,
+                    delete_block: delete_block_for(&conv.id, &protected_ids),
                     on_pick: on_pick,
                     on_delete: on_delete,
+                    on_rename: on_rename,
                 }
             }
         }
@@ -325,6 +364,7 @@ pub(super) fn SearchResultList(
     on_pick: EventHandler<String>,
     on_delete: EventHandler<String>,
     on_rename: EventHandler<(String, String)>,
+    protected_ids: Vec<String>,
 ) -> Element {
     if results.is_empty() {
         return rsx! {
@@ -340,6 +380,7 @@ pub(super) fn SearchResultList(
                     let title = r.title.clone().unwrap_or_else(|| "(untitled)".into());
                     let seed = r.title.clone().unwrap_or_default();
                     let row_dom_id = conversation_row_dom_id(&id);
+                    let delete_block = delete_block_for(&id, &protected_ids);
                     rsx! {
                         li {
                             id: "{row_dom_id}",
@@ -357,7 +398,7 @@ pub(super) fn SearchResultList(
                                 noun: "conversation",
                                 menu_for,
                                 action_error,
-                                delete_block: None,
+                                delete_block,
                                 on_delete,
                                 on_rename,
                             }

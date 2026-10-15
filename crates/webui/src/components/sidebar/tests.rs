@@ -3,8 +3,12 @@
 //! Split from `sidebar.rs` for module-health boundaries.
 
 use super::agents::{pinned, row_dot_color, truncate_title};
+use super::row_menu::{
+    BUILTIN_AGENT_DELETE_REASON, PROFILE_MUTATION_GAP, agent_delete_block, delete_block_for,
+};
 use super::{
-    delete_accepted, deleted_the_open_conversation, relative_time, rename_accepted, rename_body,
+    delete_accepted, deleted_the_open_conversation, page_from_list, relative_time, rename_accepted,
+    rename_body,
 };
 
 fn ago(dur: chrono::Duration) -> String {
@@ -102,6 +106,53 @@ fn deleting_the_open_conversation_starts_a_fresh_chat() {
     assert!(success.contains("Route::Chat"));
     assert!(success.contains("new_chat_nonce += 1"));
     assert!(success.contains("close_phone_drawer"));
+}
+
+#[test]
+fn the_list_keeps_the_built_in_creator_id() {
+    let raw = r#"[
+        {"id":"01","title":"Agent Creator","created_at":"2026-01-01T00:00:00Z","agent_creator":true,"surface_mode":"agent","grant":{"profile":"operator"}},
+        {"id":"02","title":"Disk Saver","created_at":"2026-01-01T00:00:00Z","surface_mode":"agent"}
+    ]"#;
+    let page = page_from_list(&serde_json::from_str(raw).unwrap()).unwrap();
+    assert_eq!(page.creator_ids, vec!["01".to_string()]);
+    assert_eq!(page.headers.len(), 2);
+    assert_eq!(page.headers[1].title.as_deref(), Some("Disk Saver"));
+    assert!(page_from_list(&serde_json::json!({"profiles": []})).is_err());
+}
+
+#[test]
+fn only_the_built_in_creator_blocks_delete() {
+    assert_eq!(agent_delete_block(true), Some(BUILTIN_AGENT_DELETE_REASON));
+    assert_eq!(agent_delete_block(false), None);
+    let ids = vec!["01".to_string()];
+    assert_eq!(
+        delete_block_for("01", &ids),
+        Some(BUILTIN_AGENT_DELETE_REASON)
+    );
+    assert_eq!(delete_block_for("02", &ids), None);
+}
+
+/// Agent rows are conversations. Profile definitions have no write route.
+#[test]
+fn agent_rows_rename_sessions_and_do_not_invent_profile_writes() {
+    let agents = include_str!("agents.rs");
+    let compact = agents
+        .split("fn SidebarRowCompact")
+        .nth(1)
+        .expect("SidebarRowCompact");
+    let compact = compact.split("fn SidebarRowChat").next().unwrap_or(compact);
+    assert!(compact.contains("noun: \"agent\""));
+    assert!(compact.contains("RowOptions"));
+    assert!(compact.contains("delete_block"));
+    let sidebar = include_str!("mod.rs");
+    assert!(sidebar.contains("/api/conversations/{id}"));
+    assert!(
+        !sidebar.contains("/api/profiles/"),
+        "profile rename and delete are not daemon routes"
+    );
+    assert!(PROFILE_MUTATION_GAP.contains("no endpoint"));
+    assert!(PROFILE_MUTATION_GAP.contains("topology.toml"));
 }
 
 /// The options control is a real button on every chat row, including on a phone.

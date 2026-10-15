@@ -31,6 +31,26 @@ pub(super) fn blocked_delete(reason: Option<&'static str>) -> Option<&'static st
     reason.filter(|text| !text.is_empty())
 }
 
+/// Shown on the built-in Agent Creator. Ordinary agent sessions can be deleted.
+pub(super) const BUILTIN_AGENT_DELETE_REASON: &str =
+    "The built-in Agent Creator cannot be deleted.";
+
+/// `GET /api/profiles` is the only profile route. A profile definition cannot
+/// be renamed or deleted from the sidebar.
+pub(super) const PROFILE_MUTATION_GAP: &str = "Session profiles are set in topology.toml. The daemon has no endpoint to rename or delete one.";
+
+pub(super) fn agent_delete_block(agent_creator: bool) -> Option<&'static str> {
+    if agent_creator {
+        Some(BUILTIN_AGENT_DELETE_REASON)
+    } else {
+        None
+    }
+}
+
+pub(super) fn delete_block_for(id: &str, creator_ids: &[String]) -> Option<&'static str> {
+    agent_delete_block(creator_ids.iter().any(|row| row == id))
+}
+
 /// Keep the desktop popover on screen. The sheet is shorter than this reserve.
 const DESKTOP_MENU_MAX_HEIGHT: f64 = 240.0;
 const DESKTOP_MENU_GUTTER: f64 = 8.0;
