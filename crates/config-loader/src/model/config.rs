@@ -786,7 +786,9 @@ impl Config {
                 }
             }
         }
-        Ok(())
+        // Returned directly so this file stays at its cyclomatic ceiling.
+        // The check itself lives in `config_profile_provider`.
+        self.validate_profile_providers()
     }
 
     /// Schedules that name a profile must match an *enabled* session profile — same fail-fast

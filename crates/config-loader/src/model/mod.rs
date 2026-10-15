@@ -8,6 +8,7 @@
 
 mod builder;
 mod config;
+mod config_profile_provider;
 mod config_turn_budgets;
 mod policy;
 mod shepherd;
