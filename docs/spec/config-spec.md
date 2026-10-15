@@ -234,10 +234,11 @@ in-progress `- [/]` lines. It skips done (`- [x]`) and cancelled (`- [-]`). It r
 dates on the line: 📅 due, ⏳ scheduled, 🛫 start, and 🔁 recurrence. A due or
 scheduled value with a clock (`YYYY-MM-DD HH:MM` or `YYYY-MM-DDTHH:MM`) is shown
 as `at HH:MM`. Seconds are ignored. A start date after today hides the line. The list is ranked by Tasks priority (🔺, then ⏫, then 🔼, then
-unmarked, then 🔽) and then by due date. The same open task copied into another note is listed
-once, before that rank and limit. The digest keeps the note the copies point at with `*(path)*`
-or `[[path]]`, otherwise a note under `Life/` or `Tasks/`, and it drops `Briefs/` and `Journal/`
-copies. `task_limit` caps the list (default 10).
+unmarked, then 🔽) and then by due date. Task parsing and status come from TurboVault's
+`parse_tasks`. Global task filtering follows Obsidian Tasks settings loaded from
+`.obsidian/plugins/obsidian-tasks-plugin/data.json` (`globalFilter` and `removeGlobalFilter`).
+When that file is missing or unreadable, no global filter is applied. A tag filter is a token
+match (`#task` does not match `#taskforce`). `task_limit` caps the list (default 10).
 
 `event-ping` reads calendar notes from the same vault. A note counts when its YAML
 frontmatter has `date: YYYY-MM-DD` and one of these is true:
@@ -281,6 +282,8 @@ the body. A task fires when local time matches the first anchor that is present:
 does not fire in the tick. The morning digest lists those. An event fires when it has
 `startTime` (a recurring note uses the same weekday expansion as `event-ping`) and
 local time matches that clock on the occurrence date. All-day notes do not fire here.
+Task parsing and filtering use the same TurboVault `parse_tasks` + Obsidian Tasks global filter
+path as `task-ping`, so a remind-marked line without the required global-filter tag does not fire.
 
 The schedule is one UTC minute, for example `0 * * * * *`, with `deliver = false`.
 The daemon records fired minutes in `vault-reminder-fires.json` under the data dir,
