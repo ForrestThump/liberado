@@ -9,6 +9,7 @@
 use dioxus::prelude::*;
 
 use super::chat::chat_fold::{ReasoningBlock, show_answer};
+use super::chat::chat_reasoning::fold_thinking;
 use super::chat::{ChatMsg, ThinkingStep};
 use crate::components::markdown::MarkdownText;
 use crate::icons::{IconCheck, IconChevronDown, IconChevronRight, IconCopy, IconSpinner, IconX};
@@ -27,7 +28,8 @@ pub(super) fn MessageList(messages: Signal<Vec<ChatMsg>>) -> Element {
 }
 
 /// The one rendered bubble. User and assistant rows show a Copy button. Tool, system, and
-/// error rows have none. The clipboard receives the row's raw markdown (`msg.content`).
+/// error rows have none. The clipboard receives the visible reply. Assistant thinking
+/// stays in the disclosure, so a copy does not include it.
 ///
 /// The button stays inside `.bubble-wrap`. A user row is `justify-content: flex-end`, so the
 /// wrap — bubble and button together — sits on the right. On a narrow or touch viewport the
@@ -35,12 +37,23 @@ pub(super) fn MessageList(messages: Signal<Vec<ChatMsg>>) -> Element {
 #[component]
 pub(super) fn MessageRow(msg: ChatMsg) -> Element {
     let has_steps = !msg.thinking_steps.is_empty();
-    let has_reasoning = msg.reasoning.is_some();
-    // A think-only turn keeps the disclosure and skips the blank answer bubble.
-    let show = show_answer(msg.content.is_empty(), has_steps, has_reasoning);
-    let reasoning = msg.reasoning.clone().unwrap_or_default();
+    // Streaming keeps `<think>` in assistant `content` until the close tag, and history
+    // can store the same words on `reasoning`. Fold before render so the disclosure and
+    // the reply do not show that text twice. User text is copied as typed.
+    let (content, reasoning_text) = if msg.role == "assistant" {
+        fold_thinking(&msg.content, msg.reasoning.as_deref())
+    } else {
+        (msg.content.clone(), None)
+    };
+    let has_reasoning = reasoning_text.is_some();
+    let show = show_answer(content.is_empty(), has_steps, has_reasoning);
+    let reasoning = reasoning_text.unwrap_or_default();
     let offers_copy = message_offers_copy(msg.role);
-    let copy_text = msg.content.clone();
+    let copy_text = if content.is_empty() {
+        reasoning.clone()
+    } else {
+        content.clone()
+    };
     let mut copied = use_signal(|| false);
     let mut copy_nonce = use_signal(|| 0u32);
 
@@ -74,7 +87,7 @@ pub(super) fn MessageRow(msg: ChatMsg) -> Element {
                     match msg.role {
                         "assistant" | "user" => rsx! {
                             div { class: "bubble {msg.role}",
-                                MarkdownText { content: msg.content.clone() }
+                                MarkdownText { content: content.clone() }
                             }
                         },
                         "tool" => rsx! { ToolBlock { content: msg.content.clone() } },

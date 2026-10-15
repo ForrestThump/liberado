@@ -162,6 +162,36 @@ fn a_reloaded_think_only_turn_keeps_a_collapsed_thinking_step() {
     assert!(super::chat_fold::show_answer(false, false, true));
 }
 
+/// Streaming appends every token onto `content`, including a `<think>` block, and
+/// history then stores that same block as `reasoning`. The disclosure must not
+/// repeat the reply, and a thought that was joined to itself must show once.
+#[test]
+fn thinking_disclosure_does_not_repeat_the_visible_reply() {
+    let (content, reasoning) = super::chat_reasoning::fold_thinking(
+        "<think>\nsecret step\n</think>\n\nHello",
+        Some("secret step\n\nHello"),
+    );
+    assert_eq!(content, "Hello");
+    assert_eq!(reasoning.as_deref(), Some("secret step"));
+    assert!(!content.contains("secret"), "{content}");
+
+    let (same, hidden) = super::chat_reasoning::fold_thinking("Hello", Some("Hello"));
+    assert_eq!(same, "Hello");
+    assert!(hidden.is_none(), "the reply is already on screen");
+
+    let (answer, once) =
+        super::chat_reasoning::fold_thinking("Hello", Some("secret step\nsecret step"));
+    assert_eq!(answer, "Hello");
+    assert_eq!(once.as_deref(), Some("secret step"));
+
+    let mut msg = ChatMsg::new_assistant(String::new());
+    super::chat_reasoning::append_token(&mut msg, "<thi");
+    super::chat_reasoning::append_token(&mut msg, "nk>\nsecret step\n</think>\n\nHello");
+    assert_eq!(msg.content, "Hello");
+    assert_eq!(msg.reasoning.as_deref(), Some("secret step"));
+    assert!(!msg.content.contains("<think"), "{}", msg.content);
+}
+
 /// The history effect must not wipe a first turn just because it has no conversation id yet.
 /// That is the Silent Send bug: stream fail → `sending` false → `active_conv_id` still None →
 /// the optimistic user bubble vanished. A ghost (incognito) also keeps its transcript.

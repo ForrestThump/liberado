@@ -29,7 +29,7 @@ mod chat_tool_events;
 pub(super) mod chat_fold;
 
 #[path = "chat_reasoning.rs"]
-mod chat_reasoning;
+pub(super) mod chat_reasoning;
 
 #[path = "chat_scroll.rs"]
 mod chat_scroll;
@@ -97,11 +97,13 @@ impl ChatMsg {
 
     fn from_wire(msg: &ChatMessage) -> Self {
         let role = bubble_role(&msg.role);
+        let (content, reasoning) =
+            chat_reasoning::fold_thinking(&msg.content, msg.reasoning.as_deref());
         ChatMsg {
             role,
-            content: msg.content.clone(),
+            content,
             thinking_steps: Vec::new(),
-            reasoning: chat_reasoning::kept(msg.reasoning.as_deref()),
+            reasoning,
         }
     }
 }
@@ -1077,8 +1079,14 @@ fn connect_stream(
         let on_token = Closure::<dyn FnMut(MessageEvent)>::new(move |e: MessageEvent| {
             if let Some(data) = e.data().as_string() {
                 messages.with_mut(|m| match m.last_mut() {
-                    Some(last) if last.role == "assistant" => last.content.push_str(&data),
-                    _ => m.push(ChatMsg::new_assistant(data)),
+                    Some(last) if last.role == "assistant" => {
+                        chat_reasoning::append_token(last, &data);
+                    }
+                    _ => {
+                        let mut created = ChatMsg::new_assistant(String::new());
+                        chat_reasoning::append_token(&mut created, &data);
+                        m.push(created);
+                    }
                 });
             }
         });
