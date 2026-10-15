@@ -592,6 +592,7 @@ pub fn Chat(
             // Unlike the profile, this is honoured with or without a session id — a model is a
             // property of a turn. Taken (not read) so it applies once and then lives on the log.
             pending_model.take(),
+            active_project.read().clone(),
         );
         #[cfg(not(target_arch = "wasm32"))]
         {
@@ -738,7 +739,12 @@ pub fn Chat(
 
                 div {
                     class: "composer-dock",
-                    ProjectContextChip { active_project }
+                    ProjectContextChip {
+                        api_base: base_for_models.clone(),
+                        active_project,
+                        session,
+                        list_epoch,
+                    }
                     if palette_open() {
                     SlashPalette {
                         input: input(),
@@ -967,6 +973,7 @@ fn open_stream(
     // A model chosen for this turn. Unlike the profile, applies whether or not the conversation
     // already exists — see `ChatRequest::model`.
     pending_model: Option<String>,
+    pending_project: Option<String>,
 ) {
     let encoded = urlencoding::encode(message);
     let url = stream_url(
@@ -989,6 +996,7 @@ fn open_stream(
         api_base_for_title,
         opened_incognito,
         None,
+        pending_project,
     );
 }
 
@@ -1007,6 +1015,7 @@ fn attach_stream(api_base: &str, conv_id: &str, targets: StreamTargets, api_base
         api_base_for_title,
         false,
         Some(conv_id.to_string()),
+        None,
     );
 }
 
@@ -1022,6 +1031,7 @@ fn connect_stream(
     // Conversation to re-read from the store if this stream ends badly. Set for an *attach*, where
     // the answer may already be on disk and the stream failing says nothing about the turn.
     reconcile: Option<String>,
+    pending_project: Option<String>,
 ) {
     let StreamTargets {
         mut messages,
@@ -1172,12 +1182,16 @@ fn connect_stream(
                 let conv_id_opt = session.read().clone();
                 if let (Some(title), Some(conv_id)) = (title_opt, conv_id_opt) {
                     let base = title_base.clone();
+                    let project_for_title = pending_project.clone();
                     web_sys::console::log_1(
                         &format!("[title] setting title for {}: {}", conv_id, title).into(),
                     );
                     wasm_bindgen_futures::spawn_local(async move {
                         let url = format!("{base}/api/conversations/{conv_id}");
-                        let body = serde_json::json!({ "title": title });
+                        let body = crate::components::project_data::title_patch_body(
+                            &title,
+                            project_for_title.as_deref(),
+                        );
                         let client = reqwest::Client::new();
                         match client.patch(&url).json(&body).send().await {
                             Ok(resp) => {

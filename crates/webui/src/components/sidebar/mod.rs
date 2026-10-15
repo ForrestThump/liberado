@@ -31,7 +31,7 @@ mod row_menu;
 use self::agents::{
     AgentTailList, CategoryList, ChatList, PinnedList, SearchResultList, ShowMoreRow, group_agents,
 };
-use self::projects::{PluginList, ProjectList};
+use self::projects::{PluginList, ProjectList, project_for_open};
 use self::rail::{
     AgentGlyph, BrandLogo, ChatBubble, ClockGlyph, CollapseGlyph, ExpandGlyph, LibraryGlyph,
     PluginGlyph, PrimaryNavRow, ThemeSwatch,
@@ -203,8 +203,8 @@ pub fn Sidebar(
     /// Bumped by `App` whenever the user picks a different theme, so this component can keep
     /// the rail's palette swatch in sync with the active paint.
     theme_epoch: Signal<u64>,
-    /// Coding project selected for this window. Rows come from `GET /api/projects`.
-    active_project: Signal<Option<String>>,
+    /// Coding project selected for this window, or the project stored on the open chat.
+    mut active_project: Signal<Option<String>>,
 ) -> Element {
     #[cfg_attr(not(target_arch = "wasm32"), allow(unused_mut))]
     let mut conversations = use_resource({
@@ -312,6 +312,7 @@ pub fn Sidebar(
 
     let page = loaded_page(conversations.read().as_ref());
     let headers = page.headers;
+    let project_chats = headers.clone();
     let creator_ids = page.creator_ids;
     let chat_rows: Vec<&ConvHeader> = headers
         .iter()
@@ -509,6 +510,7 @@ pub fn Sidebar(
                                 on_rename: move |pair: (String, String)| rename_conv.call(pair),
                                 protected_ids: creator_ids.clone(),
                                 on_pick: move |id: String| {
+                                    active_project.set(project_for_open(conversations.read().as_ref(), &id));
                                     let mode = conversations
                                         .read()
                                         .as_ref()
@@ -603,6 +605,7 @@ pub fn Sidebar(
                             protected_ids: creator_ids.clone(),
                             on_rename: move |pair: (String, String)| rename_conv.call(pair),
                             on_pick: move |id: String| {
+                                active_project.set(project_for_open(conversations.read().as_ref(), &id));
                                 active_conv_id.set(Some(id));
                                 active_surface.set(Some(SurfaceMode::Agent));
                                 route.set(Route::AgentSession);
@@ -623,6 +626,7 @@ pub fn Sidebar(
                                 protected_ids: creator_ids.clone(),
                                 on_rename: move |pair: (String, String)| rename_conv.call(pair),
                                 on_pick: move |id: String| {
+                                    active_project.set(project_for_open(conversations.read().as_ref(), &id));
                                     active_conv_id.set(Some(id));
                                     active_surface.set(Some(SurfaceMode::Agent));
                                     route.set(Route::AgentSession);
@@ -648,6 +652,7 @@ pub fn Sidebar(
                                     protected_ids: creator_ids.clone(),
                                     on_rename: move |pair: (String, String)| rename_conv.call(pair),
                                     on_pick: move |id: String| {
+                                        active_project.set(project_for_open(conversations.read().as_ref(), &id));
                                         active_conv_id.set(Some(id));
                                         active_surface.set(Some(SurfaceMode::Agent));
                                         route.set(Route::AgentSession);
@@ -678,6 +683,7 @@ pub fn Sidebar(
                                 "aria-label": "New chat",
                                 onclick: move |_| {
                                     new_chat_nonce += 1;
+                                    active_project.set(None);
                                     if active_conv_id.read().is_some() {
                                         active_conv_id.set(None);
                                     }
@@ -695,6 +701,7 @@ pub fn Sidebar(
                             active: active_conv_id,
                             menu_for,
                             on_pick: move |id: String| {
+                                active_project.set(project_for_open(conversations.read().as_ref(), &id));
                                 active_conv_id.set(Some(id));
                                 active_surface.set(Some(SurfaceMode::Chat));
                                 route.set(Route::ChatSession);
@@ -741,8 +748,11 @@ pub fn Sidebar(
                         }
                         ProjectList {
                             api_base: projects_api,
+                            chats: project_chats,
                             route,
                             active_project,
+                            active_conv_id,
+                            list_epoch,
                             collapsed,
                         }
                     }

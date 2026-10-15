@@ -6,7 +6,8 @@
 use dioxus::prelude::*;
 
 use super::project_data::{
-    PROJECT_BIND_GAP, collapsed_after_pick, fetch_projects, project_dot, selected_project_name,
+    PROJECT_BIND_GAP, collapsed_after_pick, fetch_projects, project_dot, queue_project_patch,
+    selected_project_name,
 };
 use super::sidebar::Route;
 
@@ -14,6 +15,8 @@ use super::sidebar::Route;
 pub fn Projects(
     api_base: String,
     active_project: Signal<Option<String>>,
+    active_conv_id: Signal<Option<String>>,
+    list_epoch: Signal<u64>,
     mut route: Signal<Route>,
     mut collapsed: Signal<bool>,
 ) -> Element {
@@ -51,7 +54,10 @@ pub fn Projects(
                                     root: project.root.clone(),
                                     dot: project_dot(index),
                                     active: active_project().as_deref() == Some(project.name.as_str()),
+                                    api_base: api_base.clone(),
                                     active_project,
+                                    active_conv_id,
+                                    list_epoch,
                                     route,
                                     collapsed,
                                 }
@@ -70,7 +76,10 @@ fn ProjectPick(
     root: String,
     dot: &'static str,
     active: bool,
+    api_base: String,
     mut active_project: Signal<Option<String>>,
+    active_conv_id: Signal<Option<String>>,
+    list_epoch: Signal<u64>,
     mut route: Signal<Route>,
     mut collapsed: Signal<bool>,
 ) -> Element {
@@ -85,7 +94,17 @@ fn ProjectPick(
             button {
                 class: "{class}",
                 r#type: "button",
-                onclick: move |_| pick_project(pick_name.clone(), active_project, route, collapsed),
+                onclick: move |_| {
+                    pick_project(
+                        pick_name.clone(),
+                        api_base.clone(),
+                        active_project,
+                        active_conv_id,
+                        list_epoch,
+                        route,
+                        collapsed,
+                    );
+                },
                 span {
                     class: "grok-row-dot",
                     style: "background: {dot};",
@@ -102,17 +121,32 @@ fn ProjectPick(
 
 fn pick_project(
     name: String,
+    api_base: String,
     mut active_project: Signal<Option<String>>,
+    active_conv_id: Signal<Option<String>>,
+    list_epoch: Signal<u64>,
     mut route: Signal<Route>,
     mut collapsed: Signal<bool>,
 ) {
     let Some(name) = selected_project_name(&name) else {
         return;
     };
-    active_project.set(Some(name));
+    let previous = active_project();
+    active_project.set(Some(name.clone()));
     route.set(Route::Chat);
     collapsed.set(collapsed_after_pick(
         crate::is_narrow_viewport(),
         collapsed(),
     ));
+    let Some(id) = active_conv_id() else {
+        return;
+    };
+    queue_project_patch(
+        api_base,
+        id,
+        Some(name),
+        list_epoch,
+        active_project,
+        previous,
+    );
 }

@@ -215,6 +215,9 @@ fn App() -> Element {
                         IconMenu {}
                     }
                     span { class: "brand grok-header-brand", "Liberado" }
+                    if let Some(name) = active_project() {
+                        span { class: "grok-header-project", "{name}" }
+                    }
                     HeaderProfileChip {
                         active_profile,
                         active_surface,
@@ -283,6 +286,8 @@ fn App() -> Element {
                             crate::components::projects::Projects {
                                 api_base: base.clone(),
                                 active_project,
+                                active_conv_id,
+                                list_epoch,
                                 route,
                                 collapsed: sidebar_collapsed,
                             }

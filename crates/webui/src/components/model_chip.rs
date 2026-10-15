@@ -214,6 +214,7 @@ struct LoadedChip {
     profiles_loaded: bool,
     profiles: Vec<(String, Option<String>)>,
     history: OwnedHistory,
+    pending_model: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -303,26 +304,29 @@ async fn load_profiles(api_base: &str) -> (bool, Vec<(String, Option<String>)>) 
     }
 }
 
-async fn load_history(api_base: &str, session: &str) -> OwnedHistory {
+async fn load_history(api_base: &str, session: &str) -> (OwnedHistory, Option<String>) {
     let url = format!("{api_base}/api/conversations/{session}");
     let Ok(resp) = reqwest::get(&url).await else {
-        return OwnedHistory::Failed;
+        return (OwnedHistory::Failed, None);
     };
     if !resp.status().is_success() {
-        return OwnedHistory::Failed;
+        return (OwnedHistory::Failed, None);
     }
     match resp.json::<ConversationHistoryResponse>().await {
-        Ok(body) => OwnedHistory::Ready(latest_stamp(&body.messages)),
-        Err(_) => OwnedHistory::Failed,
+        Ok(body) => (
+            OwnedHistory::Ready(latest_stamp(&body.messages)),
+            body.pending_model.filter(|model| !model.trim().is_empty()),
+        ),
+        Err(_) => (OwnedHistory::Failed, None),
     }
 }
 
 async fn load_chip(api_base: String, session: Option<String>) -> LoadedChip {
     let daemon = load_daemon(&api_base).await;
     let (profiles_loaded, profiles) = load_profiles(&api_base).await;
-    let history = match session.as_deref() {
+    let (history, pending_model) = match session.as_deref() {
         Some(id) => load_history(&api_base, id).await,
-        None => OwnedHistory::NoConversation,
+        None => (OwnedHistory::NoConversation, None),
     };
     LoadedChip {
         for_session: session,
@@ -330,7 +334,13 @@ async fn load_chip(api_base: String, session: Option<String>) -> LoadedChip {
         profiles_loaded,
         profiles,
         history,
+        pending_model,
     }
+}
+
+/// Local pick wins. Otherwise show the pending model stored on the conversation.
+pub(crate) fn shown_pick<'a>(local: Option<&'a str>, stored: Option<&'a str>) -> Option<&'a str> {
+    nonempty(local).or_else(|| nonempty(stored))
 }
 
 fn text_for<'a>(
@@ -399,7 +409,13 @@ pub fn ModelChip(
     let session_now = session();
     let pending_now = pending();
     let held_now = held();
-    let picked = display_pick(pending_now.as_deref(), &held_now, session_now.as_deref());
+    let stored_model = loaded
+        .read()
+        .as_ref()
+        .and_then(|row| row.pending_model.clone());
+    let local =
+        display_pick(pending_now.as_deref(), &held_now, session_now.as_deref()).map(str::to_string);
+    let picked = shown_pick(local.as_deref(), stored_model.as_deref());
     let text = text_for(
         picked,
         profile().as_deref(),
@@ -501,6 +517,19 @@ mod tests {
 
         input.profile_name = None;
         assert_eq!(chip_text(&input).label(), "stamped-model");
+    }
+
+    #[test]
+    fn a_stored_pending_model_shows_until_a_local_pick_replaces_it() {
+        assert_eq!(shown_pick(None, Some("vendor/exact")), Some("vendor/exact"));
+        assert_eq!(
+            shown_pick(Some("request-model"), Some("vendor/exact")),
+            Some("request-model")
+        );
+        assert_eq!(
+            shown_pick(Some("   "), Some("vendor/exact")),
+            Some("vendor/exact")
+        );
     }
 
     #[test]

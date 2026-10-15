@@ -2523,6 +2523,19 @@ body {
     margin-left: 0.5rem;
 }
 
+.grok-header-project {
+    font-size: 0.75rem;
+    line-height: 1.2;
+    color: var(--grok-subtitle);
+    border: 1px solid var(--grok-rail-border);
+    border-radius: 999px;
+    padding: 0.1rem 0.55rem;
+    max-width: 10rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
 /* Shown only inside the phone query. On a desk the icon rail is the sidebar control. */
 .sidebar-menu-btn {
     display: none;
@@ -3219,6 +3232,21 @@ body {
     font-size: 0.75rem;
     line-height: 1.35;
     color: var(--grok-subtitle);
+}
+
+.composer-project-detach {
+    margin-left: 0.5rem;
+    border: none;
+    background: transparent;
+    color: var(--grok-subtitle);
+    font: inherit;
+    text-decoration: underline;
+    cursor: pointer;
+}
+
+.project-chats {
+    margin: 0 0 0.25rem 1.25rem;
+    padding: 0;
 }
 
 .toolbar-spacer {

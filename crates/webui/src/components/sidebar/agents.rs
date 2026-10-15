@@ -100,7 +100,11 @@ pub(super) fn truncate_title(title: &str, max: usize) -> String {
 
 fn conv_display_title(conv: &ConvHeader) -> String {
     let raw = conv.title.as_deref().unwrap_or("(untitled)");
-    truncate_title(raw, 30)
+    let title = truncate_title(raw, 30);
+    match conv.project.as_deref().filter(|name| !name.is_empty()) {
+        Some(project) => format!("{title} · {project}"),
+        None => title,
+    }
 }
 
 #[component]

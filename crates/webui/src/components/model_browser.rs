@@ -4,9 +4,9 @@
 //! [`crate::components::picker::Picker`], shared with the theme browser.
 //!
 //! Reads `GET /api/models`. A pick applies to **this conversation only** — via
-//! `POST /api/models/select` with its id, or, when the chat has not started yet, by riding the
-//! request that creates it (`model` on `/api/chat/stream`). This picker never changes the daemon-wide
-//! default; that is deliberately not something a chat surface should be able to do by accident.
+//! `PATCH /api/conversations/{id}` with `pending_model`, or, when the chat has not started yet,
+//! by riding the request that creates it (`model` on `/api/chat/stream`). This picker never
+//! changes the daemon-wide default.
 //!
 //! The catalog is a provider-wide list (hundreds of ids from OpenRouter), so filtering is not a
 //! nicety — it is the only way to reach anything.
@@ -38,27 +38,21 @@ async fn fetch_models(api_base: String) -> Result<ModelsResponse, String> {
 /// *for* and ignored every other conversation on the daemon: the fallback silently retuned all of
 /// them. Worse, it was not an edge case — new chat, pick a model, type is the ordinary way anyone
 /// chooses one, so the common path was the broken one.
-async fn select_model(
-    api_base: String,
-    model: String,
-    conversation: String,
-) -> Result<ModelsResponse, String> {
-    let url = format!("{api_base}/api/models/select");
-    let body = serde_json::json!({ "model": model, "conversation": conversation });
+async fn select_model(api_base: String, model: String, conversation: String) -> Result<(), String> {
+    let url = format!("{api_base}/api/conversations/{conversation}");
+    let body = serde_json::json!({ "pending_model": model });
     let resp = reqwest::Client::new()
-        .post(&url)
+        .patch(&url)
         .json(&body)
         .send()
         .await
         .map_err(|e| format!("Failed to reach daemon: {e}"))?;
-    let body: ModelsResponse = resp
-        .json()
-        .await
-        .map_err(|e| format!("Bad response: {e}"))?;
-    // The daemon reports a refusal in the body's `error`, not only by status code.
-    match body.error {
-        Some(err) => Err(err),
-        None => Ok(body),
+    if resp.status().is_success() {
+        Ok(())
+    } else {
+        let status = resp.status();
+        let text = resp.text().await.unwrap_or_default();
+        Err(format!("Model was not saved ({status}): {text}"))
     }
 }
 
@@ -115,7 +109,7 @@ pub fn ModelBrowser(
             #[cfg(target_arch = "wasm32")]
             wasm_bindgen_futures::spawn_local(async move {
                 match select_model(base, model.clone(), scope).await {
-                    Ok(_) => {
+                    Ok(()) => {
                         busy.set(false);
                         on_switched.call(model);
                         open.set(false);
