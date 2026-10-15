@@ -26,29 +26,52 @@ pub(super) fn normalized_title(raw: &str) -> Result<String, &'static str> {
     Ok(title.to_string())
 }
 
-/// `Some` when this row must not be deleted. The button stays visible and says why.
-pub(super) fn blocked_delete(reason: Option<&'static str>) -> Option<&'static str> {
-    reason.filter(|text| !text.is_empty())
-}
-
-/// Shown on the built-in Agent Creator. Ordinary agent sessions can be deleted.
-pub(super) const BUILTIN_AGENT_DELETE_REASON: &str =
-    "The built-in Agent Creator cannot be deleted.";
-
-/// `GET /api/profiles` is the only profile route. A profile definition cannot
-/// be renamed or deleted from the sidebar.
-pub(super) const PROFILE_MUTATION_GAP: &str = "Session profiles are set in topology.toml. The daemon has no endpoint to rename or delete one.";
-
-pub(super) fn agent_delete_block(agent_creator: bool) -> Option<&'static str> {
-    if agent_creator {
-        Some(BUILTIN_AGENT_DELETE_REASON)
+/// Profile names match the daemon: trimmed, non-empty, at most 64 characters,
+/// ASCII letters, digits, `.`, `_`, and `-`.
+pub(super) fn normalized_profile_name(raw: &str) -> Result<String, &'static str> {
+    let name = raw.trim();
+    if name.is_empty() {
+        return Err("Enter a profile name.");
+    }
+    if name.chars().count() > 64 {
+        return Err("Keep the profile name under 64 characters.");
+    }
+    let ok = name
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.');
+    if ok {
+        Ok(name.to_string())
     } else {
-        None
+        Err("Use letters, digits, and . _ - in the profile name.")
     }
 }
 
-pub(super) fn delete_block_for(id: &str, creator_ids: &[String]) -> Option<&'static str> {
-    agent_delete_block(creator_ids.iter().any(|row| row == id))
+pub(super) fn normalized_row_name(noun: &str, raw: &str) -> Result<String, &'static str> {
+    if noun == "agent" {
+        normalized_profile_name(raw)
+    } else {
+        normalized_title(raw)
+    }
+}
+
+pub(super) fn name_limit(noun: &str) -> usize {
+    if noun == "agent" { 64 } else { MAX_TITLE_CHARS }
+}
+
+pub(super) fn delete_confirm_title(noun: &str) -> &'static str {
+    if noun == "agent" {
+        "Delete this profile?"
+    } else {
+        "Delete permanently?"
+    }
+}
+
+pub(super) fn delete_confirm_note(noun: &str) -> &'static str {
+    if noun == "agent" {
+        "Conversations stay and use the default grant."
+    } else {
+        "Removes it from disk. There is no undo."
+    }
 }
 
 /// Keep the desktop popover on screen. The sheet is shorter than this reserve.
@@ -106,8 +129,6 @@ pub(super) fn RowOptions(
     noun: &'static str,
     menu_for: Signal<Option<String>>,
     action_error: Signal<Option<String>>,
-    /// When set, Delete is visible but does not run. The text is the reason.
-    delete_block: Option<&'static str>,
     on_delete: EventHandler<String>,
     on_rename: EventHandler<(String, String)>,
 ) -> Element {
@@ -117,7 +138,9 @@ pub(super) fn RowOptions(
     let mut menu_position_style = use_signal(String::new);
     let menu_open = menu_for().as_deref() == Some(id.as_str());
     let row_dom_id = conversation_row_dom_id(&id);
-    let block = blocked_delete(delete_block);
+    let limit = name_limit(noun);
+    let confirm_title = delete_confirm_title(noun);
+    let confirm_note = delete_confirm_note(noun);
 
     let open_menu = {
         let id = id.clone();
@@ -185,25 +208,14 @@ pub(super) fn RowOptions(
                                     },
                                     "Rename"
                                 }
-                                if let Some(reason) = block {
-                                    button {
-                                        class: "conv-menu-btn danger",
-                                        r#type: "button",
-                                        disabled: true,
-                                        title: "{reason}",
-                                        "Delete"
-                                    }
-                                    p { class: "conv-menu-note", "{reason}" }
-                                } else {
-                                    button {
-                                        class: "conv-menu-btn danger",
-                                        r#type: "button",
-                                        onclick: move |_| {
-                                            validation_error.set(None);
-                                            action_view.set(ActionView::ConfirmDelete);
-                                        },
-                                        "Delete"
-                                    }
+                                button {
+                                    class: "conv-menu-btn danger",
+                                    r#type: "button",
+                                    onclick: move |_| {
+                                        validation_error.set(None);
+                                        action_view.set(ActionView::ConfirmDelete);
+                                    },
+                                    "Delete"
                                 }
                                 button {
                                     class: "conv-menu-btn",
@@ -222,7 +234,7 @@ pub(super) fn RowOptions(
                                     let id = id.clone();
                                     move |evt| {
                                         evt.prevent_default();
-                                        match normalized_title(draft_title.read().as_str()) {
+                                        match normalized_row_name(noun, draft_title.read().as_str()) {
                                             Ok(new_title) => {
                                                 validation_error.set(None);
                                                 on_rename.call((id.clone(), new_title));
@@ -235,7 +247,7 @@ pub(super) fn RowOptions(
                                 input {
                                     class: "conv-menu-input",
                                     r#type: "text",
-                                    maxlength: "{MAX_TITLE_CHARS}",
+                                    maxlength: "{limit}",
                                     value: "{draft_title}",
                                     autofocus: true,
                                     "aria-label": "New name",
@@ -267,8 +279,8 @@ pub(super) fn RowOptions(
                             }
                         },
                         ActionView::ConfirmDelete => rsx! {
-                            p { class: "conv-menu-label", "Delete permanently?" }
-                            p { class: "conv-menu-note", "Removes it from disk. There is no undo." }
+                            p { class: "conv-menu-label", "{confirm_title}" }
+                            p { class: "conv-menu-note", "{confirm_note}" }
                             div {
                                 class: "conv-menu-actions",
                                 button {
@@ -298,7 +310,8 @@ pub(super) fn RowOptions(
 #[cfg(test)]
 mod tests {
     use super::{
-        DESKTOP_MENU_GUTTER, blocked_delete, clamped_desktop_menu_top, conversation_row_dom_id,
+        DESKTOP_MENU_GUTTER, clamped_desktop_menu_top, conversation_row_dom_id,
+        delete_confirm_note, delete_confirm_title, name_limit, normalized_profile_name,
         normalized_title,
     };
 
@@ -317,13 +330,18 @@ mod tests {
     }
 
     #[test]
-    fn a_delete_block_keeps_the_reason() {
-        assert_eq!(blocked_delete(None), None);
-        assert_eq!(blocked_delete(Some("")), None);
+    fn agent_names_use_the_profile_rules_and_delete_keeps_conversations() {
+        assert_eq!(normalized_profile_name("  builder "), Ok("builder".into()));
         assert_eq!(
-            blocked_delete(Some("The built-in Agent Creator cannot be deleted.")),
-            Some("The built-in Agent Creator cannot be deleted.")
+            normalized_profile_name("has space"),
+            Err("Use letters, digits, and . _ - in the profile name.")
         );
+        assert_eq!(name_limit("agent"), 64);
+        assert_eq!(name_limit("chat"), 120);
+        assert_eq!(delete_confirm_title("agent"), "Delete this profile?");
+        assert_eq!(delete_confirm_title("chat"), "Delete permanently?");
+        assert!(delete_confirm_note("agent").contains("default grant"));
+        assert!(delete_confirm_note("chat").contains("no undo"));
     }
 
     #[test]
@@ -344,7 +362,7 @@ mod tests {
             .split("ActionView::ConfirmDelete =>")
             .nth(1)
             .expect("confirm view");
-        assert!(confirm.contains("Delete permanently?"));
+        assert!(confirm.contains("confirm_title"));
         assert!(confirm.contains("on_delete.call"));
         let actions = src.split("ActionView::Actions =>").nth(1).expect("actions");
         let actions = actions
@@ -355,7 +373,10 @@ mod tests {
             !actions.contains("on_delete.call"),
             "the first Delete only opens confirmation"
         );
-        assert!(actions.contains("disabled: true"));
+        assert!(
+            !actions.contains("disabled:"),
+            "delete is confirmed, then the daemon accepts or refuses it"
+        );
     }
 
     #[test]

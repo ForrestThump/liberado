@@ -2,13 +2,19 @@
 //!
 //! Split from `sidebar.rs` so that file stays inside the module-health boundaries.
 
+use std::collections::HashMap;
+
 use dioxus::prelude::*;
 
 use chat_client_contract::{ConvHeader, ConversationSearchResult};
 
 use crate::icons::{IconChevronDown, IconChevronRight};
 
-use super::row_menu::{RowOptions, conversation_row_dom_id, delete_block_for};
+use super::row_menu::{RowOptions, conversation_row_dom_id};
+
+fn profile_seed(profiles: &HashMap<String, String>, id: &str) -> String {
+    profiles.get(id).cloned().unwrap_or_default()
+}
 
 // ── Agent categorization ──────────────────────────────────────────────────
 
@@ -106,10 +112,10 @@ fn conv_display_title(conv: &ConvHeader) -> String {
 #[component]
 fn SidebarRowCompact(
     conv: ConvHeader,
+    profile_name: String,
     active: Signal<Option<String>>,
     menu_for: Signal<Option<String>>,
     action_error: Signal<Option<String>>,
-    delete_block: Option<&'static str>,
     on_pick: EventHandler<String>,
     on_delete: EventHandler<String>,
     on_rename: EventHandler<(String, String)>,
@@ -122,7 +128,7 @@ fn SidebarRowCompact(
         "grok-row"
     };
     let display = conv_display_title(&conv);
-    let seed = conv.title.clone().unwrap_or_default();
+    let seed = profile_name;
     let dot = row_dot_color(display.as_str());
     let id_for_pick = id.clone();
     let row_dom_id = conversation_row_dom_id(&id);
@@ -149,7 +155,6 @@ fn SidebarRowCompact(
                 noun: "agent",
                 menu_for,
                 action_error,
-                delete_block,
                 on_delete,
                 on_rename,
             }
@@ -200,7 +205,6 @@ fn SidebarRowChat(
                 noun: "chat",
                 menu_for,
                 action_error,
-                delete_block: None,
                 on_delete,
                 on_rename,
             }
@@ -211,9 +215,9 @@ fn SidebarRowChat(
 #[component]
 pub(super) fn PinnedList(
     items: Vec<ConvHeader>,
+    profiles: HashMap<String, String>,
     active: Signal<Option<String>>,
     menu_for: Signal<Option<String>>,
-    protected_ids: Vec<String>,
     on_pick: EventHandler<String>,
     on_delete: EventHandler<String>,
     on_rename: EventHandler<(String, String)>,
@@ -232,10 +236,10 @@ pub(super) fn PinnedList(
             for conv in items.iter() {
                 SidebarRowCompact {
                     conv: conv.clone(),
+                    profile_name: profile_seed(&profiles, &conv.id),
                     active: active,
                     menu_for: menu_for,
                     action_error: action_error,
-                    delete_block: delete_block_for(&conv.id, &protected_ids),
                     on_pick: on_pick,
                     on_delete: on_delete,
                     on_rename: on_rename,
@@ -249,9 +253,9 @@ pub(super) fn PinnedList(
 pub(super) fn CategoryList(
     label: &'static str,
     members: Vec<ConvHeader>,
+    profiles: HashMap<String, String>,
     active: Signal<Option<String>>,
     menu_for: Signal<Option<String>>,
-    protected_ids: Vec<String>,
     on_pick: EventHandler<String>,
     on_delete: EventHandler<String>,
     on_rename: EventHandler<(String, String)>,
@@ -270,10 +274,10 @@ pub(super) fn CategoryList(
             for conv in members.iter() {
                 SidebarRowCompact {
                     conv: conv.clone(),
+                    profile_name: profile_seed(&profiles, &conv.id),
                     active: active,
                     menu_for: menu_for,
                     action_error: action_error,
-                    delete_block: delete_block_for(&conv.id, &protected_ids),
                     on_pick: on_pick,
                     on_delete: on_delete,
                     on_rename: on_rename,
@@ -301,9 +305,9 @@ pub(super) fn ShowMoreRow(count: usize, expanded: Signal<bool>) -> Element {
 #[component]
 pub(super) fn AgentTailList(
     items: Vec<ConvHeader>,
+    profiles: HashMap<String, String>,
     active: Signal<Option<String>>,
     menu_for: Signal<Option<String>>,
-    protected_ids: Vec<String>,
     on_pick: EventHandler<String>,
     on_delete: EventHandler<String>,
     on_rename: EventHandler<(String, String)>,
@@ -315,10 +319,10 @@ pub(super) fn AgentTailList(
             for conv in items.iter() {
                 SidebarRowCompact {
                     conv: conv.clone(),
+                    profile_name: profile_seed(&profiles, &conv.id),
                     active: active,
                     menu_for: menu_for,
                     action_error: action_error,
-                    delete_block: delete_block_for(&conv.id, &protected_ids),
                     on_pick: on_pick,
                     on_delete: on_delete,
                     on_rename: on_rename,
@@ -356,21 +360,56 @@ pub(super) fn ChatList(
     }
 }
 
+fn search_noun(agents_shelf: bool) -> &'static str {
+    if agents_shelf {
+        "agent"
+    } else {
+        "conversation"
+    }
+}
+
+fn search_seed(
+    agents_shelf: bool,
+    profiles: &HashMap<String, String>,
+    id: &str,
+    title: &Option<String>,
+) -> String {
+    if agents_shelf {
+        profile_seed(profiles, id)
+    } else {
+        title.clone().unwrap_or_default()
+    }
+}
+
 #[component]
 pub(super) fn SearchResultList(
     results: Vec<ConversationSearchResult>,
     menu_for: Signal<Option<String>>,
     action_error: Signal<Option<String>>,
+    agents_shelf: bool,
+    profiles: HashMap<String, String>,
     on_pick: EventHandler<String>,
     on_delete: EventHandler<String>,
     on_rename: EventHandler<(String, String)>,
-    protected_ids: Vec<String>,
+    on_delete_profile: EventHandler<String>,
+    on_rename_profile: EventHandler<(String, String)>,
 ) -> Element {
     if results.is_empty() {
         return rsx! {
             div { class: "sidebar-empty", "No matches." }
         };
     }
+    let noun = search_noun(agents_shelf);
+    let delete = if agents_shelf {
+        on_delete_profile
+    } else {
+        on_delete
+    };
+    let rename = if agents_shelf {
+        on_rename_profile
+    } else {
+        on_rename
+    };
     rsx! {
         ul {
             class: "grok-list",
@@ -378,9 +417,8 @@ pub(super) fn SearchResultList(
                 {
                     let id = r.conversation_id.clone();
                     let title = r.title.clone().unwrap_or_else(|| "(untitled)".into());
-                    let seed = r.title.clone().unwrap_or_default();
+                    let seed = search_seed(agents_shelf, &profiles, &id, &r.title);
                     let row_dom_id = conversation_row_dom_id(&id);
-                    let delete_block = delete_block_for(&id, &protected_ids);
                     rsx! {
                         li {
                             id: "{row_dom_id}",
@@ -395,12 +433,11 @@ pub(super) fn SearchResultList(
                                 id: id.clone(),
                                 seed,
                                 display: title.clone(),
-                                noun: "conversation",
+                                noun,
                                 menu_for,
                                 action_error,
-                                delete_block,
-                                on_delete,
-                                on_rename,
+                                on_delete: delete,
+                                on_rename: rename,
                             }
                         }
                     }
