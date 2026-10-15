@@ -84,6 +84,8 @@ pub use agent_hooks::is_agent_dm_session;
 mod agent_spawn;
 #[path = "sessions/approval.rs"]
 mod approval;
+#[path = "sessions/pending_choice.rs"]
+mod pending_choice;
 mod provider_route;
 #[path = "sessions/reasoning_stamp.rs"]
 mod reasoning_stamp;
@@ -1040,11 +1042,11 @@ impl ChatSessions {
 
     /// Which model this turn runs on, in precedence order.
     ///
-    /// 1. **A pending pick** — a human chose a model for *this* conversation. Either they asked
-    ///    ahead of time (`POST /api/models/select` with a `conversation`) or the choice arrived on
-    ///    the message itself (`model` on the chat request, which is how a pick made *before* the
-    ///    conversation existed gets here). Held in memory only, because until a turn runs there is
-    ///    nothing to record; the pick becomes durable the moment the user node is stamped with it.
+    /// 1. **A pending pick** — a human chose a model for *this* conversation. The in-memory
+    ///    pick (`POST /api/models/select` with a `conversation`, or `model` on the chat request)
+    ///    wins over `pending_model` on the session header (`PATCH /api/conversations/{id}`).
+    ///    The chosen string is used as-is. The turn stamps it on the user message and clears
+    ///    the header field. It does not substitute another model.
     /// 2. **The profile's model**, when a session profile names one. Operator-declared.
     /// 3. **What this conversation last ran on**, read back off its own log. This is the sticky
     ///    behaviour: a conversation stays on the model that has been answering it, rather than
@@ -1077,10 +1079,7 @@ impl ChatSessions {
         from_profile: Option<String>,
         consume: ConsumePending,
     ) -> Option<String> {
-        let pending = match consume {
-            ConsumePending::Yes => self.pending_model(session),
-            ConsumePending::No => self.peek_pending_model(session),
-        };
+        let pending = self.pending_choice(session, consume).await;
         if let Some(pending) = pending {
             return Some(pending);
         }

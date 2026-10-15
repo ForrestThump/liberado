@@ -116,6 +116,9 @@ struct ConversationHeader {
     spawned_by: Option<Ulid>,        // the message node that spawned it
     created_at: Timestamp,
     updated_at: Timestamp,
+    // Optional, serde-default. Absent on logs written before the field.
+    project: Option<String>,         // enabled coding project name, or none
+    pending_model: Option<String>,   // model id for the next turn; cleared when that turn stamps it
 }
 ```
 

@@ -47,6 +47,8 @@ impl SessionStore {
             // may not carry. See `SessionHeader::to_conversation_header`.
             surface_mode: Default::default(),
             agent_creator: false,
+            project: None,
+            pending_model: None,
         };
         let mut map = self.inner.lock().await;
         if map.contains_key(&id) {

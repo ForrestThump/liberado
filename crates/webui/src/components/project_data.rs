@@ -1,15 +1,15 @@
 //! Coding projects from `GET /api/projects`.
 //!
-//! Selecting a row remembers it for this window and opens the chat. The daemon does not
-//! accept a project on a chat message. A project is only a field on a goal
-//! (`POST /api/goals`, `payload.project`). The chip and the projects page say so.
+//! A pick attaches the project to the open chat with `PATCH /api/conversations/{id}`.
+//! A chat that does not exist yet keeps the name until the first message, which sends
+//! it on that same patch as the title.
 
 use dioxus::prelude::*;
 use serde::Deserialize;
 
-/// Shown on the projects page. A phone has no hover, so the gap is not only a tooltip.
-pub(crate) const PROJECT_BIND_GAP: &str = "Choosing a project remembers it for this window and opens the chat. \
-     A chat message cannot carry a project. The daemon accepts one only as payload.project on POST /api/goals.";
+/// Shown on the projects page. A phone has no hover, so the sentence is not only a tooltip.
+pub(crate) const PROJECT_BIND_GAP: &str = "Choosing a project attaches it to the open chat. \
+     A new chat keeps the choice until the first message saves it on the conversation.";
 
 const DOTS: [&str; 3] = ["var(--dot-cyan)", "var(--dot-green)", "var(--dot-orange)"];
 
@@ -76,22 +76,136 @@ pub(crate) fn close_phone_drawer(mut collapsed: Signal<bool>) {
     ));
 }
 
-pub(crate) fn project_chip_line(name: &str) -> String {
-    format!("Project: {name}. Not attached to this chat.")
+pub(crate) fn project_chip_line(name: &str, saved_on_chat: bool) -> String {
+    if saved_on_chat {
+        format!("Project: {name}")
+    } else {
+        format!("Project: {name}. Saved on this chat with the first message.")
+    }
+}
+
+pub(crate) fn project_patch_body(project: Option<&str>) -> serde_json::Value {
+    match trimmed_project(project) {
+        Some(name) => serde_json::json!({ "project": name }),
+        None => serde_json::json!({ "project": serde_json::Value::Null }),
+    }
+}
+
+/// Title patch used after the first message. Includes the project only when one is chosen,
+/// so a chat with no project is not cleared.
+pub(crate) fn title_patch_body(title: &str, project: Option<&str>) -> serde_json::Value {
+    match trimmed_project(project) {
+        Some(name) => serde_json::json!({ "title": title, "project": name }),
+        None => serde_json::json!({ "title": title }),
+    }
+}
+
+fn trimmed_project(project: Option<&str>) -> Option<&str> {
+    project.map(str::trim).filter(|name| !name.is_empty())
+}
+
+pub(crate) async fn patch_project(
+    api_base: &str,
+    id: &str,
+    project: Option<&str>,
+) -> Result<(), String> {
+    let url = format!("{api_base}/api/conversations/{id}");
+    let resp = reqwest::Client::new()
+        .patch(&url)
+        .json(&project_patch_body(project))
+        .send()
+        .await
+        .map_err(|e| format!("Failed to reach daemon: {e}"))?;
+    if resp.status().is_success() {
+        Ok(())
+    } else {
+        let status = resp.status();
+        let text = resp.text().await.unwrap_or_default();
+        Err(format!("Project was not saved ({status}): {text}"))
+    }
+}
+
+/// Chats whose stored project is `name`.
+pub(crate) fn chats_for_project<'a>(
+    chats: &'a [chat_client_contract::ConvHeader],
+    name: &str,
+) -> Vec<&'a chat_client_contract::ConvHeader> {
+    chats
+        .iter()
+        .filter(|chat| chat.project.as_deref() == Some(name))
+        .collect()
+}
+
+pub(crate) fn queue_project_patch(
+    api_base: String,
+    id: String,
+    project: Option<String>,
+    list_epoch: Signal<u64>,
+    active_project: Signal<Option<String>>,
+    previous: Option<String>,
+) {
+    #[cfg(target_arch = "wasm32")]
+    {
+        let mut list_epoch = list_epoch;
+        let mut active_project = active_project;
+        wasm_bindgen_futures::spawn_local(async move {
+            match patch_project(&api_base, &id, project.as_deref()).await {
+                Ok(()) => list_epoch.set(list_epoch() + 1),
+                Err(error) => {
+                    active_project.set(previous);
+                    web_sys::console::log_1(&error.into());
+                }
+            }
+        });
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let _ = (api_base, id, project, list_epoch, active_project, previous);
+    }
 }
 
 /// One line above the composer when a project is selected. Empty when none is.
 #[component]
-pub(crate) fn ProjectContextChip(active_project: Signal<Option<String>>) -> Element {
+pub(crate) fn ProjectContextChip(
+    api_base: String,
+    mut active_project: Signal<Option<String>>,
+    session: Signal<Option<String>>,
+    list_epoch: Signal<u64>,
+) -> Element {
     let Some(name) = active_project() else {
         return rsx! {};
     };
-    let line = project_chip_line(&name);
+    let saved = session().is_some();
+    let line = project_chip_line(&name, saved);
     rsx! {
         p {
             class: "composer-project",
             title: PROJECT_BIND_GAP,
             "{line}"
+            if saved {
+                button {
+                    class: "composer-project-detach",
+                    r#type: "button",
+                    onclick: move |_| {
+                        let id = session().unwrap_or_default();
+                        if id.is_empty() {
+                            active_project.set(None);
+                            return;
+                        }
+                        let previous = active_project();
+                        active_project.set(None);
+                        queue_project_patch(
+                            api_base.clone(),
+                            id,
+                            None,
+                            list_epoch,
+                            active_project,
+                            previous,
+                        );
+                    },
+                    "Detach"
+                }
+            }
         }
     }
 }
@@ -146,13 +260,56 @@ mod tests {
     }
 
     #[test]
-    fn the_gap_names_the_goal_endpoint_and_not_a_chat_field() {
-        assert!(PROJECT_BIND_GAP.contains("POST /api/goals"));
-        assert!(PROJECT_BIND_GAP.contains("payload.project"));
-        assert!(!PROJECT_BIND_GAP.contains("/api/chat"));
-        let line = project_chip_line("liberado");
-        assert!(line.contains("liberado"));
-        assert!(line.contains("Not attached"));
+    fn the_chip_says_when_the_project_is_saved_on_the_chat() {
+        assert!(PROJECT_BIND_GAP.contains("attaches"));
+        assert!(PROJECT_BIND_GAP.contains("first message"));
+        let waiting = project_chip_line("liberado", false);
+        assert!(waiting.contains("liberado"));
+        assert!(waiting.contains("first message"));
+        assert_eq!(project_chip_line("liberado", true), "Project: liberado");
+    }
+
+    #[test]
+    fn patch_bodies_set_and_clear_without_dropping_the_title() {
+        assert_eq!(
+            project_patch_body(Some("liberado")),
+            serde_json::json!({ "project": "liberado" })
+        );
+        assert_eq!(
+            project_patch_body(None),
+            serde_json::json!({ "project": null })
+        );
+        assert_eq!(
+            title_patch_body("Notes", None),
+            serde_json::json!({ "title": "Notes" })
+        );
+        assert_eq!(
+            title_patch_body("Notes", Some("liberado")),
+            serde_json::json!({ "title": "Notes", "project": "liberado" })
+        );
+    }
+
+    #[test]
+    fn chats_group_under_their_project() {
+        let rows = vec![
+            chat_client_contract::ConvHeader {
+                id: "a".into(),
+                project: Some("liberado".into()),
+                ..Default::default()
+            },
+            chat_client_contract::ConvHeader {
+                id: "b".into(),
+                project: Some("other".into()),
+                ..Default::default()
+            },
+            chat_client_contract::ConvHeader {
+                id: "c".into(),
+                ..Default::default()
+            },
+        ];
+        let grouped = chats_for_project(&rows, "liberado");
+        assert_eq!(grouped.len(), 1);
+        assert_eq!(grouped[0].id, "a");
     }
 
     #[test]

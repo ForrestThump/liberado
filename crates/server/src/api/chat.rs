@@ -782,43 +782,17 @@ pub async fn set_conversation_profile(
     }
 }
 
-/// `PATCH /api/conversations/{id}` â€” update the title of an existing conversation.
-#[derive(Deserialize)]
-pub struct TitleRequest {
-    pub title: String,
-}
-
+/// `PATCH /api/conversations/{id}` — title, project, and the next turn's model.
 pub async fn patch_conversation_title(
     State(state): State<Arc<AppState>>,
     Path(id): Path<Ulid>,
-    Json(req): Json<TitleRequest>,
+    Json(req): Json<chat_patch::PatchConversation>,
 ) -> impl IntoResponse {
-    let Some(sessions) = &state.chat else {
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(ApiError {
-                error: CHAT_DISABLED_HINT.into(),
-            }),
-        )
-            .into_response();
-    };
-    match sessions.set_title(id, req.title).await {
-        Ok(()) => StatusCode::OK.into_response(),
-        Err(liberado_main_agent::SessionError::Store(
-            liberado_conversation_store::StoreError::NotFound(_),
-        )) => (
-            StatusCode::NOT_FOUND,
-            Json(ApiError {
-                error: "conversation not found".into(),
-            }),
-        )
-            .into_response(),
-        Err(e) => {
-            tracing::warn!(error = %e, "PATCH title failed for conversation {id}");
-            chat_error(e)
-        }
-    }
+    chat_patch::apply(state, id, req).await
 }
+
+#[path = "chat_patch.rs"]
+mod chat_patch;
 
 /// `GET /api/conversations/{id}` â€” the full message history of one conversation, for reopening it.
 /// 404 when the conversation does not exist, 500 on any other store error.
@@ -843,7 +817,7 @@ pub async fn get_conversation(
                 nodes.into_iter().map(chat_message_from_node).collect();
             // One session read: profile for the chip, projected shelf for whether the chip shows.
             // The projection is the same chat lens the sidebar list uses.
-            let (profile, surface_mode) = state
+            let (profile, surface_mode, project, pending_model) = state
                 .sessions
                 .session(id)
                 .await
@@ -853,9 +827,19 @@ pub async fn get_conversation(
                             .to_conversation_header_with(state.sessions.agent_profiles())
                             .surface_mode,
                     );
-                    (header.grant.profile, mode)
+                    (
+                        header.grant.profile,
+                        mode,
+                        header.project.clone(),
+                        header.pending_model.clone(),
+                    )
                 })
-                .unwrap_or((None, chat_client_contract::SurfaceMode::default()));
+                .unwrap_or((
+                    None,
+                    chat_client_contract::SurfaceMode::default(),
+                    None,
+                    None,
+                ));
             let approvals =
                 crate::approvals::conversation_cards(&state.approval_hub, &id.to_string()).await;
             Json(ConversationHistoryResponse {
@@ -869,6 +853,8 @@ pub async fn get_conversation(
                 turn_unanswered: sessions.last_turn_unanswered(id).await,
                 surface_mode,
                 approvals,
+                project,
+                pending_model,
             })
             .into_response()
         }

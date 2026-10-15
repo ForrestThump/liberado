@@ -106,9 +106,10 @@ pub async fn models(State(state): State<Arc<AppState>>) -> impl IntoResponse {
 /// turn runs on that model and stamps it onto the log, after which the conversation stays there on
 /// its own. Nothing global changes, so other chats are untouched.
 ///
-/// The per-conversation form is deliberately *not* durable at this point. There is nothing to record
-/// until a turn happens, and once one does the log carries it — a second stored copy would be a
-/// second thing to keep in sync with what actually ran.
+/// The per-conversation form is in memory until the turn stamps the message. A durable pick
+/// for a chat that already exists is `pending_model` on `PATCH /api/conversations/{id}`.
+/// The turn reads that field when no in-memory pick is set, stamps the same string, and clears it.
+/// Neither path substitutes a different model.
 pub async fn select_model(
     State(state): State<Arc<AppState>>,
     Json(body): Json<SelectModelRequest>,

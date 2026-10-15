@@ -63,6 +63,18 @@ impl ChatSessions {
         self.schedule_matrix_reconcile();
         Ok(())
     }
+
+    /// Set the chat's project, its pending model, or both.
+    ///
+    /// Does not schedule a Matrix reconcile. Neither field is a display name.
+    pub async fn set_chat_meta(
+        &self,
+        session: Ulid,
+        update: liberado_conversation_store::ChatMetaUpdate,
+    ) -> SessionResult<()> {
+        self.store.set_chat_meta(session, update).await?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
