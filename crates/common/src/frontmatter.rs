@@ -16,7 +16,7 @@ pub const FRONTMATTER_FENCE: &str = "---";
 /// `#[derive(Serialize)]` struct of primitive/serde-standard fields, which cannot fail — this
 /// matches the `.expect(...)` every caller wrote before this was consolidated.
 pub fn render_note(frontmatter: &impl Serialize, body: &str) -> String {
-    let yaml = serde_yaml::to_string(frontmatter).expect("frontmatter serializes to YAML");
+    let yaml = serde_norway::to_string(frontmatter).expect("frontmatter serializes to YAML");
     format!("{FRONTMATTER_FENCE}\n{yaml}{FRONTMATTER_FENCE}\n\n{body}")
 }
 
@@ -73,7 +73,7 @@ mod tests {
         let note = render_note(&meta, "Hello, body.\n");
 
         let fm = extract_frontmatter(&note).unwrap();
-        let parsed: Meta = serde_yaml::from_str(fm).unwrap();
+        let parsed: Meta = serde_norway::from_str(fm).unwrap();
         assert_eq!(parsed, meta);
 
         // body_after_frontmatter includes render_note's blank-line padding; callers trim it.
@@ -89,5 +89,70 @@ mod tests {
     fn body_after_frontmatter_falls_back_to_whole_content_when_malformed() {
         let content = "not a fenced note at all";
         assert_eq!(body_after_frontmatter(content), content);
+    }
+
+    #[derive(Debug, PartialEq, Serialize, Deserialize)]
+    struct Rich {
+        title: String,
+        flag: bool,
+        items: Vec<String>,
+        note: Option<String>,
+        nested: Nested,
+    }
+
+    #[derive(Debug, PartialEq, Serialize, Deserialize)]
+    struct Nested {
+        n: u32,
+    }
+
+    #[test]
+    fn parses_written_frontmatter_fields() {
+        let note = "\
+---
+title: \"true\"
+flag: true
+items:
+- a
+- b
+note: null
+nested:
+  n: 3
+---
+
+body line
+";
+        let parsed: Rich = serde_norway::from_str(extract_frontmatter(note).unwrap()).unwrap();
+        assert_eq!(
+            parsed,
+            Rich {
+                title: "true".into(),
+                flag: true,
+                items: vec!["a".into(), "b".into()],
+                note: None,
+                nested: Nested { n: 3 },
+            }
+        );
+        assert_eq!(body_after_frontmatter(note).trim(), "body line");
+    }
+
+    #[test]
+    fn yes_stays_a_string_and_true_is_a_bool() {
+        #[derive(Debug, Deserialize)]
+        struct Row {
+            quoted: String,
+            bare: String,
+            flag: bool,
+        }
+        let row: Row = serde_norway::from_str("quoted: \"yes\"\nbare: yes\nflag: true\n").unwrap();
+        assert_eq!(row.quoted, "yes");
+        assert_eq!(row.bare, "yes");
+        assert!(row.flag);
+    }
+
+    #[test]
+    fn broken_yaml_is_extracted_but_does_not_parse() {
+        let note = "---\ntitle: [\n---\n\nbody\n";
+        let fm = extract_frontmatter(note).unwrap();
+        assert!(serde_norway::from_str::<Rich>(fm).is_err());
     }
 }

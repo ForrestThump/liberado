@@ -5,6 +5,7 @@ Machine-oriented contracts and generated inventories.
 | Doc | Role |
 |-----|------|
 | [api.md](api.md) | Public HTTP + SSE API (surfaces ↔ daemon) |
+| [operator-dogfood-mcp.md](operator-dogfood-mcp.md) | External operator dogfood MCP: tools, auth, and the read-only approval and grant views |
 | [crate-map.md](crate-map.md) | Generated crate layer / deps table (`just gen-crate-map`) |
 | [doc-authority.md](doc-authority.md) | Documentation authority, metadata, executable examples, and source-impact rules |
 | [slim-build.md](slim-build.md) | Slim build profile — fenced sidecars, gated package list, full vs slim cargo invocations |

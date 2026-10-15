@@ -29,6 +29,7 @@ mod pr_review_observer;
 mod pr_review_poll;
 mod pr_review_publish;
 mod pr_review_publish_flow;
+mod profile_providers;
 mod shutdown;
 mod state;
 mod telegram;
@@ -374,9 +375,24 @@ fn build_app_router(state: &Arc<AppState>) -> Router {
             "/api/approvals/{id}/resolve",
             axum::routing::post(api::resolve_approval),
         )
+        // Read-only. The operator dogfood MCP lists these rows. It does not decide them.
+        .route(
+            "/api/approvals/pending",
+            axum::routing::get(api::list_pending_approvals),
+        )
         .route(
             "/api/conversations/{id}/approvals",
             axum::routing::get(api::list_approvals),
+        )
+        // Read-only. The grant is the current session header, not a fresh policy resolve.
+        .route(
+            "/api/conversations/{id}/grant",
+            axum::routing::get(api::get_header_grant),
+        )
+        // Read-only. The next turn's tool, MCP, and zone grants. No revoke on this route.
+        .route(
+            "/api/conversations/{id}/grants",
+            axum::routing::get(api::conversation_grants),
         )
         // Rejoin a turn after a reload, and stop one on purpose. Both exist because a turn no
         // longer belongs to the connection that started it. Not gated by drain.
@@ -831,6 +847,7 @@ async fn build_chat(
     );
 
     sessions = sessions.with_agent_workspace(workspace);
+    sessions = crate::profile_providers::attach(sessions, config);
 
     if compact_enabled {
         info!(

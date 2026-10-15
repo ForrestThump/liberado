@@ -24,6 +24,9 @@ use tokio::sync::Mutex;
 
 use crate::proposal_path;
 
+#[path = "pending_list.rs"]
+mod pending_list;
+
 /// What [`PermissionResolver::resolve`] did. HTTP and Telegram map these onto their own replies.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ResolveOutcome {

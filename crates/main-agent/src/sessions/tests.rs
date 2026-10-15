@@ -40,6 +40,9 @@ mod compaction_history;
 #[path = "model.rs"]
 mod model;
 
+#[path = "provider_route_tests.rs"]
+mod provider_route_tests;
+
 #[path = "metering.rs"]
 mod metering;
 

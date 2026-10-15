@@ -27,6 +27,7 @@ mod budget;
 mod conversation_reserve;
 mod loop_guard;
 mod mvl;
+mod provider_swap;
 mod reasoning_log;
 mod risk_gated;
 

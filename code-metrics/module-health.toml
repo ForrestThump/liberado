@@ -180,9 +180,9 @@ reviewed_on = "2026-09-21"
 [[waiver]]
 path = "crates/config-loader/src/model/topology.rs"
 metric = "ploc"
-ceiling = 1150
-reason = "Same as the cyclomatic waiver on this file: the new ploc is the `ProviderFallback` struct definition (with three fields, serde attributes, and a doc comment that explains the on_status default and the streaming limitation). The mechanical-jobs feature added nine `CronSchedule` fields (`job`, `habit_text`, `task_limit`, `capture_path`, `git_remote`, `git_branch`, `git_user_name`, `git_user_email`, `run_on_start`) with their doc comments — every one of them belongs on the schedule schema, and pulling them into a sibling module would split the schema from the struct that owns it."
-reviewed_on = "2026-09-25"
+ceiling = 1151
+reason = "Same as the cyclomatic waiver on this file: the new ploc is the `ProviderFallback` struct definition (with three fields, serde attributes, and a doc comment that explains the on_status default and the streaming limitation). The mechanical-jobs feature added nine `CronSchedule` fields (`job`, `habit_text`, `task_limit`, `capture_path`, `git_remote`, `git_branch`, `git_user_name`, `git_user_email`, `run_on_start`) with their doc comments — every one of them belongs on the schedule schema, and pulling them into a sibling module would split the schema from the struct that owns it. The session-profile `provider` field (serde attribute, field, and `empty()` initializer) is the same kind of schema line: rustfmt will not share it with a neighbor, and the profile model has nowhere else to live."
+reviewed_on = "2026-10-13"
 
 [[waiver]]
 path = "crates/bootstrap/src/lib.rs"

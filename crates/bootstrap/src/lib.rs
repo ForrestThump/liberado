@@ -36,6 +36,9 @@ use liberado_config::{ProviderProfile, RoleOverride};
 
 mod coder_provider_factory;
 mod fallback_builder;
+mod profile_providers;
+
+pub use profile_providers::{ProfileProviderWiring, profile_providers_from_config};
 
 // Re-export the coder-pack's provider factory. Lives in its own module (see
 // `coder_provider_factory.rs`'s doc comment) so this file's cyclomatic complexity stays under

@@ -4,6 +4,7 @@ pub mod chat;
 mod chat_submission;
 mod conversation_row;
 pub mod dashboard;
+pub mod grants_popover;
 pub mod imagine;
 pub mod incognito;
 pub mod library;

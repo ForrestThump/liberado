@@ -16,6 +16,10 @@ use chat_client_contract::{
 };
 
 use crate::components::projects_dialog::ProjectsDialog;
+use crate::components::sidebar_agent_creator::CreatorError;
+#[cfg(target_arch = "wasm32")]
+use crate::components::sidebar_agent_creator::open_agent_creator_session;
+use crate::components::sidebar_shelf::{Shelf, search_results_on_shelf, surface_for_id};
 use crate::icons::{IconChevronDown, IconChevronRight, IconSearch};
 
 // ── Routes ──────────────────────────────────────────────────────────────────
@@ -183,6 +187,13 @@ pub fn Sidebar(
 
     let mut search_query = use_signal(String::new);
     let mut search_open = use_signal(bool::default);
+    // Chats | Agents. Switching shelves only refilters the list. The categorised
+    // agent rows and the chat rows stay the new rail's content for each side.
+    let mut shelf = use_signal(Shelf::default);
+    let mut new_chat_nonce = new_chat_nonce;
+    // Agents + failure. Separate from row `action_error` so a delete error stays on the row.
+    #[cfg_attr(not(target_arch = "wasm32"), allow(unused_mut))]
+    let mut create_error = use_signal(Option::<String>::default);
     let expand_all = use_signal(bool::default);
     #[cfg_attr(not(target_arch = "wasm32"), allow(unused_mut))]
     let mut action_error = use_signal(|| None::<String>);
@@ -345,10 +356,11 @@ pub fn Sidebar(
                 }
                 div { class: "sidebar-brand-spacer" }
                 button {
-                    class: "sidebar-icon-btn",
+                    class: if search_open() { "sidebar-icon-btn active" } else { "sidebar-icon-btn" },
                     r#type: "button",
-                    title: "Search",
-                    "aria-label": "Search",
+                    title: if search_open() { "Close search" } else { shelf().search_button_label() },
+                    "aria-label": if search_open() { "Close search" } else { shelf().search_button_label() },
+                    "aria-expanded": "{search_open()}",
                     onclick: move |_| {
                         let open = !search_open();
                         search_open.set(open);
@@ -374,7 +386,8 @@ pub fn Sidebar(
                     input {
                         class: "sidebar-search-input",
                         r#type: "search",
-                        placeholder: "Search",
+                        placeholder: "{shelf().search_placeholder()}",
+                        "aria-label": "{shelf().search_field_label()}",
                         value: "{search_query()}",
                         autofocus: true,
                         oninput: move |e| search_query.set(e.value()),
@@ -389,16 +402,56 @@ pub fn Sidebar(
                 PrimaryNavRow { route: route, target: Route::Automations, label: "Automations", icon: rsx! { ClockGlyph {} } }
             }
 
+            div {
+                class: "sidebar-shelves",
+                role: "tablist",
+                "aria-label": "Conversation shelves",
+                button {
+                    class: if shelf() == Shelf::Chats { "sidebar-shelf-btn active" } else { "sidebar-shelf-btn" },
+                    role: "tab",
+                    r#type: "button",
+                    "aria-selected": "{shelf() == Shelf::Chats}",
+                    onclick: move |_| shelf.set(Shelf::Chats),
+                    "Chats"
+                }
+                button {
+                    class: if shelf() == Shelf::Agents { "sidebar-shelf-btn active" } else { "sidebar-shelf-btn" },
+                    role: "tab",
+                    r#type: "button",
+                    "aria-selected": "{shelf() == Shelf::Agents}",
+                    onclick: move |_| shelf.set(Shelf::Agents),
+                    "Agents"
+                }
+            }
+
             if search_open() && !search_query().trim().is_empty() {
                 div {
                     class: "sidebar-list",
                     match &*search_results.read() {
                         Some(Some(Ok(results))) => rsx! {
                             SearchResultList {
-                                results: results.iter().map(|r| r.clone()).collect(),
+                                results: search_results_on_shelf(results, &headers, shelf())
+                                    .into_iter()
+                                    .cloned()
+                                    .collect(),
                                 on_pick: move |id: String| {
+                                    let mode = conversations
+                                        .read()
+                                        .as_ref()
+                                        .and_then(|r| r.as_ref().ok())
+                                        .and_then(|list| surface_for_id(list, &id));
                                     active_conv_id.set(Some(id));
-                                    route.set(Route::ChatSession);
+                                    match mode {
+                                        Some(SurfaceMode::Agent) => {
+                                            active_surface.set(Some(SurfaceMode::Agent));
+                                            route.set(Route::AgentSession);
+                                        }
+                                        Some(mode) => {
+                                            active_surface.set(Some(mode));
+                                            route.set(Route::ChatSession);
+                                        }
+                                        None => route.set(Route::ChatSession),
+                                    }
                                     if crate::is_narrow_viewport() {
                                         collapsed.set(true);
                                     }
@@ -420,6 +473,7 @@ pub fn Sidebar(
                 div {
                     class: "sidebar-scroll",
 
+                    if shelf() == Shelf::Agents {
                     section {
                         class: "sidebar-section",
                         header {
@@ -435,10 +489,33 @@ pub fn Sidebar(
                                 r#type: "button",
                                 title: "New agent",
                                 "aria-label": "New agent",
-                                onclick: move |_: Event<MouseData>| { let _ = (); },
+                                onclick: move |_: Event<MouseData>| {
+                                    let base = api_base.clone();
+                                    #[cfg(target_arch = "wasm32")]
+                                    wasm_bindgen_futures::spawn_local(async move {
+                                        match open_agent_creator_session(&base).await {
+                                            Ok(header) => {
+                                                active_conv_id.set(Some(header.id));
+                                                active_surface.set(Some(SurfaceMode::Agent));
+                                                route.set(Route::AgentSession);
+                                                create_error.set(None);
+                                                conversations.restart();
+                                                if crate::is_narrow_viewport() {
+                                                    collapsed.set(true);
+                                                }
+                                            }
+                                            Err(e) => create_error.set(Some(e)),
+                                        }
+                                    });
+                                    #[cfg(not(target_arch = "wasm32"))]
+                                    {
+                                        let _ = base;
+                                    }
+                                },
                                 "+"
                             }
                         }
+                        CreatorError { message: create_error() }
 
                         PinnedList {
                             items: grouped.pinned.iter().map(|c| (*c).clone()).collect(),
@@ -500,18 +577,37 @@ pub fn Sidebar(
                             div { class: "sidebar-empty", "No agents yet." }
                         }
                     }
-
+                    } else {
                     section {
                         class: "sidebar-section",
                         header {
                             class: "sidebar-section-header",
                             span { class: "sidebar-section-label", "Chats" }
+                            button {
+                                class: "sidebar-section-add",
+                                r#type: "button",
+                                title: "New chat",
+                                "aria-label": "New chat",
+                                onclick: move |_| {
+                                    new_chat_nonce += 1;
+                                    if active_conv_id.read().is_some() {
+                                        active_conv_id.set(None);
+                                    }
+                                    active_surface.set(Some(SurfaceMode::Chat));
+                                    route.set(Route::Chat);
+                                    if crate::is_narrow_viewport() {
+                                        collapsed.set(true);
+                                    }
+                                },
+                                "+"
+                            }
                         }
                         ChatList {
                             items: chat_rows.iter().map(|c| (*c).clone()).collect(),
                             active: active_conv_id,
                             on_pick: move |id: String| {
                                 active_conv_id.set(Some(id));
+                                active_surface.set(Some(SurfaceMode::Chat));
                                 route.set(Route::ChatSession);
                                 if crate::is_narrow_viewport() {
                                     collapsed.set(true);
@@ -523,6 +619,7 @@ pub fn Sidebar(
                         if chat_rows.is_empty() {
                             div { class: "sidebar-empty", "No chats yet." }
                         }
+                    }
                     }
 
                     section {

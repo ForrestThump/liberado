@@ -11,6 +11,7 @@ mod pwa;
 mod theme;
 
 use components::chat::Chat;
+use components::grants_popover::ToolsPopover;
 use components::incognito::IncognitoToggle;
 use components::profile_browser::ProfileChip;
 use components::profile_surface::profile_chip_visible;
@@ -133,14 +134,23 @@ mod tests {
 
 // ── Grok-style top bar ─────────────────────────────────────────────────────
 
-/// Top-right region: just the incognito pill. The "agent pill" from the first draft was an
-/// extraneous waypoint for the user — selecting an agent happens through the Agents shelf in the
-/// sidebar, where the rows are already categorised and pinned.
+/// Top-right region: the read-only Tools list, then the incognito pill. Agent selection stays
+/// on the sidebar shelf. Tools lives here so Back can close it with the other header layers.
 #[component]
-fn HeaderRightSide(incognito: Signal<bool>) -> Element {
+fn HeaderRightSide(
+    incognito: Signal<bool>,
+    api_base: String,
+    active_conv_id: Signal<Option<String>>,
+    tools_open: Signal<bool>,
+) -> Element {
     rsx! {
         div {
             class: "header-right-cluster",
+            ToolsPopover {
+                api_base,
+                active_conv_id,
+                open: tools_open,
+            }
             IncognitoToggle { on: incognito }
         }
     }
@@ -169,7 +179,7 @@ fn App() -> Element {
     let base = api_base();
     // Default to Chat — the screenshot says Chat is the open surface. Imagine / Library /
     // Automations / Projects / Plugins are reachable via the sidebar.
-    let route = use_signal(|| Route::Chat);
+    let mut route = use_signal(|| Route::Chat);
     // The active theme name, restored from the last choice. Chat writes it when `/theme set` lands,
     // and the sidebar's theme swatch writes it through `save_theme_name`. The `theme_epoch`
     // counter below is the bridge: a write through either path bumps it, and the effect re-reads
@@ -191,7 +201,9 @@ fn App() -> Element {
     // Back-gesture layer stack stays in one place.
     let model_browser_open = use_signal(|| false);
     let theme_browser_open = use_signal(|| false);
-    let profile_browser_open = use_signal(|| false);
+    let mut profile_browser_open = use_signal(|| false);
+    // Read-only Tools popover. Owned here so Back closes it with the other layers.
+    let tools_open = use_signal(|| false);
     let active_profile = use_signal(|| None::<String>);
     let active_surface = use_signal(|| None::<chat_client_contract::SurfaceMode>);
     let palette_visible = use_signal(|| false);
@@ -225,6 +237,7 @@ fn App() -> Element {
         let mut model_browser_open = model_browser_open;
         let mut theme_browser_open = theme_browser_open;
         let mut profile_browser_open = profile_browser_open;
+        let mut tools_open = tools_open;
         let mut palette_dismissed = palette_dismissed;
         back_nav::install(move || {
             // Innermost first: the palette hovers over the input, a picker sits on top of the
@@ -237,6 +250,8 @@ fn App() -> Element {
                 theme_browser_open.set(false);
             } else if profile_browser_open() {
                 profile_browser_open.set(false);
+            } else if tools_open() {
+                tools_open.set(false);
             } else if !sidebar_collapsed() && is_narrow() {
                 sidebar_collapsed.set(true);
             } else if route() != Route::Chat {
@@ -251,6 +266,7 @@ fn App() -> Element {
             model_browser_open(),
             theme_browser_open(),
             profile_browser_open(),
+            tools_open(),
             sidebar_is_a_layer(),
             route() != Route::Chat,
         ]
@@ -274,11 +290,24 @@ fn App() -> Element {
                 div {
                     class: "grok-header-inner",
                     // The brand wordmark sits at the very left of the top bar. The sidebar has
-                    // its own collapse control baked into its header row, so the chrome here is
-                    // deliberately minimal — just the brand and the incognito pill.
+                    // its own collapse control. The chip and Tools stay here so profile routing
+                    // and the grants list remain reachable without the old Chat/Status nav.
                     span { class: "brand grok-header-brand", "Liberado" }
+                    HeaderProfileChip {
+                        active_profile,
+                        active_surface,
+                        on_open: move |_| {
+                            // The picker is rendered inside `Chat`. Switching first means a
+                            // click from another route still opens it.
+                            route.set(Route::Chat);
+                            profile_browser_open.set(true);
+                        },
+                    }
                     HeaderRightSide {
-                        incognito: incognito,
+                        incognito,
+                        api_base: base.clone(),
+                        active_conv_id,
+                        tools_open,
                     }
                 }
             }

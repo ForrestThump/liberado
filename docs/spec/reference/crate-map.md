@@ -5,7 +5,7 @@
 > Layer semantics and dependency rules: [contracts.md](../architecture/contracts.md) and
 > `crates/test-support/tests/layer_rules.rs` (the same role tags, mechanically enforced).
 
-57 workspace crates.
+58 workspace crates.
 
 ## foundation
 
@@ -17,6 +17,7 @@ The bottom layer: vocabulary and narrow-waist traits. Depends on nothing above i
 | [`liberado-config-loader`](../../../crates/config-loader/) | `liberado-common` | ConfigSource trait + ChainLoader for layered Liberado configuration loading. |
 | [`liberado-messaging`](../../../crates/messaging/) | *none* | Channel-agnostic messaging traits for Liberado chat clients (Telegram today; Matrix, Signal, Discord later). Transport only — no network deps. |
 | [`liberado-notify`](../../../crates/notify/) | `liberado-common`, `liberado-messaging` | A minimal, pluggable notification sink for events a human should know about even when nothing else in the daemon's own surfaces is open in front of them right now — the motivating case is an unattended (cron-triggered, Phase 3) proposal nobody's watching for. Telegram is the first implementation (free, mature); the Notifier trait exists so it isn't the only one. Also hosts Telegram's MessagingChannel impl so Matrix/Discord/Signal can plug in via the same trait. |
+| [`liberado-policy`](../../../crates/policy/) | *none* | Tool policy model: declared effects, vault-path and URL normalizers, a TOML loader, and a shim from zone_from_arg and write_tools. |
 | [`liberado-provider`](../../../crates/provider/) | `liberado-common` | The provider-agnostic inference interface for Liberado: a narrow async `Provider` trait (tool-calling + structured output) plus a scriptable mock for deterministic tests. |
 | [`liberado-tool-runtime`](../../../crates/tool-runtime/) | `liberado-common`, `liberado-provider` | The tool-runtime contract: ToolRuntime (catalog + invoke), RuntimeFactory (how an orchestrator obtains one), RuntimeSetupError, and the RebindableRuntime provenance-rebind extension. Sunk below executor and mcp so the engine, the MCP adapter, and the shared test doubles all implement the same trait instances. |
 
@@ -85,7 +86,7 @@ Out-of-process adapters: MCP servers, bots, the forge.
 | [`liberado-matrix`](../../../crates/matrix/) | `liberado-commands`, `liberado-markdown`, `liberado-messaging` | Matrix application-service transport: homeserver client, transaction listener, and one direct chat per agent. |
 | [`liberado-mcp-forge`](../../../crates/mcp-forge/) | `liberado-common`, `liberado-config` | Builds and installs Liberado MCP servers from git URLs via `cargo install --git`, wiring them to `McpTransport::Managed` entries in topology.toml by convention. |
 | [`liberado-memory-mcp`](../../../crates/memory-mcp/) | `liberado-common`, `liberado-config`, `liberado-memory-store`, `liberado-vault` | MCP server exposing general memory (user facts/preferences) and procedural memory (tool-selection guidance) as agent-callable tools, backed by liberado-memory-store. Registered in topology.toml as a stdio MCP; built in-workspace, not a managed (cargo-installed-from-git) MCP. Replaces the old liberado-tool-helper-mcp, which proxied every call over HTTP to an external mem0 service. |
-| [`liberado-operator-dogfood-mcp`](../../../crates/operator-dogfood-mcp/) | *none* | Stdio MCP for an external operator agent to dogfood Liberado through the existing HTTP API: find or create an Agents-shelf session, open a chat, post an explicit human turn, continue that session, and read history. |
+| [`liberado-operator-dogfood-mcp`](../../../crates/operator-dogfood-mcp/) | *none* | Stdio MCP for an external operator agent to dogfood Liberado through the existing HTTP API: find or create an Agents-shelf session, open a chat, post an explicit human turn, continue that session, read history, list pending permission requests, and read the current header grant for a conversation or agent. No approve or resolve tool. |
 | [`liberado-telegram-approvals`](../../../crates/telegram-approvals/) | `liberado-common`, `liberado-config-loader`, `liberado-messaging`, `liberado-notify`, `liberado-provider`, `liberado-vault` | Channel-agnostic approval/chat bot: Approve/Reject/Revise button taps become pure-code proposal frontmatter edits (Approve/Reject never touch an LLM; Revise redrafts content only). Telegram is the default MessagingChannel; Matrix/Discord/Signal plug in via the same trait. |
 
 ## surface
