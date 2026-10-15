@@ -53,6 +53,7 @@ pub mod path;
 pub mod process;
 pub mod proposal;
 pub mod provenance;
+pub mod redact;
 pub mod risk_waiver;
 pub mod session_grants;
 mod sweeping;
@@ -86,12 +87,14 @@ pub use model::{
     ModelChoice, ModelProfile, ModelRole, ModelTier, ModelTokenPrices, ReasoningLevel, RequiredCaps,
 };
 pub use permission::{
-    ApprovalOrigin, DecisionVia, PermissionDecide, PermissionDecideError, PermissionRoute,
-    apply_permission_decision, card_belongs_to_session, recorded_action, route_permission,
+    ApprovalOrigin, ChannelKind, DecisionVia, PermissionDecide, PermissionDecideError,
+    PermissionRoute, SessionChannel, apply_permission_decision, card_belongs_to_session,
+    channel_for_session, recorded_action, route_permission,
 };
 pub use proposal::{
     ApprovedGuard, GrantScope, PROPOSALS_DIR, Proposal, ProposalNoteError, ProposalSigner,
     ProposalStatus, ProposedAction, SignedProposal,
 };
 pub use provenance::{HUMAN_SOURCE, PROVENANCE_KEY, WriteProvenance};
+pub use redact::redact_secrets;
 pub use risk_waiver::{Guard, RiskWaiver, RiskWaiverSet, WaiverTarget};

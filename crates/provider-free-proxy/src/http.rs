@@ -59,7 +59,7 @@ async fn list_models(State(state): State<Arc<ProxyService>>) -> Response {
         }
         Err(e) => (
             StatusCode::SERVICE_UNAVAILABLE,
-            Json(json!({ "error": { "message": e.to_string() } })),
+            Json(json!({ "error": { "message": crate::redact_http::text(&e) } })),
         )
             .into_response(),
     }
@@ -150,7 +150,7 @@ async fn attempt_candidate(
     ProxyService::rewrite_model(body, &candidate.upstream_id);
     match post_candidate(state, &prepared, body).await {
         Ok(response) => step_from_upstream(state, prepared.slug, response).await,
-        Err(error) => transport_failure_step(prepared.slug, &candidate.provider, &error),
+        Err(error) => transport_failure_step(prepared.slug, &candidate.provider, error),
     }
 }
 
@@ -224,14 +224,15 @@ async fn post_candidate(
         .await
 }
 
-fn transport_failure_step(slug: &str, provider: &str, error: &reqwest::Error) -> Step {
+fn transport_failure_step(slug: &str, provider: &str, error: reqwest::Error) -> Step {
     // Candidate-scoped: this vendor timed out or the path to it failed. The next
     // ranked model may live on a different provider, so walk on. Exhaustion still
     // answers 502.
+    let error = crate::redact_http::transport(error);
     tracing::warn!(
         candidate = %slug,
         provider = %provider,
-        error = %error,
+        %error,
         "upstream transport failure; trying next candidate"
     );
     Step::NextCandidate
@@ -266,7 +267,8 @@ async fn failure_body_text(response: reqwest::Response) -> String {
     match crate::bounded::read_capped(response, "upstream error", 64 * 1024).await {
         Ok(bytes) => String::from_utf8_lossy(&bytes).into_owned(),
         Err(e) => {
-            tracing::warn!(error = %e, "unreadable upstream error body");
+            let error = crate::redact_http::text(&e);
+            tracing::warn!(%error, "unreadable upstream error body");
             String::new()
         }
     }
@@ -280,7 +282,7 @@ async fn classify_failure(
     let status = response.status();
     // Bounded read, then clip again for the log line and relay. A payload problem relays
     // straight back instead of burning another free model's quota.
-    let text = failure_body_text(response).await;
+    let text = crate::redact_http::text(failure_body_text(response).await);
     let clipped: String = text.chars().take(2_000).collect();
     let status_code = status.as_u16();
     tracing::warn!(

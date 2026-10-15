@@ -286,3 +286,110 @@ async fn chat_error_is_a_json_500() {
     let body = body_string(response).await;
     assert!(body.contains("error"), "{body}");
 }
+
+const TURN_SECRET: &str = "123456789:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw";
+const PROVIDER_FAILED: &str = "The model provider failed before it could reply.";
+
+fn transport_with_secret() -> liberado_provider::ProviderError {
+    liberado_provider::ProviderError::Transport(format!(
+        "https://api.telegram.org/bot{TURN_SECRET}/getUpdates"
+    ))
+}
+
+async fn failing_chat_state() -> (tempfile::TempDir, Arc<AppState>) {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Arc::new(SessionStore::open(dir.path()).await);
+    let provider = Arc::new(liberado_provider::MockProvider::new("m"));
+    provider.push_error(transport_with_secret());
+    provider.push_error(transport_with_secret());
+    let executor = Executor::new(provider, liberado_executor::Budget::default());
+    let chat = Arc::new(ChatSessions::new(
+        store.clone(),
+        executor,
+        Arc::new(no_tools_runtime()),
+    ));
+    let state = Arc::new(AppState::for_test(
+        store,
+        Some(chat),
+        dir.path().to_path_buf(),
+    ));
+    (dir, state)
+}
+
+fn sse_session_id(body: &str) -> String {
+    let mut want_data = false;
+    for line in body.lines() {
+        let line = line.trim();
+        if line == "event: session" || line == "event:session" {
+            want_data = true;
+            continue;
+        }
+        if want_data && let Some(data) = line.strip_prefix("data:") {
+            return data.trim().to_string();
+        }
+        if line.is_empty() {
+            want_data = false;
+        }
+    }
+    panic!("session id missing from SSE body:\n{body}");
+}
+
+/// A provider failure is an SSE `failed` event and a stored `error` bubble.
+/// The token in the provider error must not reach either.
+#[tokio::test]
+async fn a_failed_turn_emits_failed_and_stores_an_error_role() {
+    let (_dir, state) = failing_chat_state().await;
+    let response = chat_stream_post(
+        State(state.clone()),
+        Json(ChatRequest {
+            message: "hi".into(),
+            session: None,
+            incognito: false,
+            background: false,
+            profile: None,
+            model: None,
+        }),
+    )
+    .await;
+    let body = body_with(response, &["event: failed", PROVIDER_FAILED]).await;
+    assert!(body.contains("event: failed"), "{body}");
+    assert!(body.contains(PROVIDER_FAILED), "{body}");
+    assert!(!body.contains(TURN_SECRET), "{body}");
+    assert!(
+        !body.contains("AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw"),
+        "{body}"
+    );
+
+    let history = get_conversation(
+        State(state.clone()),
+        Path(sse_session_id(&body).parse().unwrap()),
+    )
+    .await
+    .into_response();
+    let history_body = body_string(history).await;
+    assert!(
+        history_body.contains("\"role\":\"error\""),
+        "{history_body}"
+    );
+    assert!(history_body.contains(PROVIDER_FAILED), "{history_body}");
+    assert!(!history_body.contains(TURN_SECRET), "{history_body}");
+
+    let id = state.chat.as_ref().unwrap().create(None).await.unwrap();
+    let json = chat(
+        State(state),
+        Json(ChatRequest {
+            message: "again".into(),
+            session: Some(id),
+            incognito: false,
+            background: false,
+            profile: None,
+            model: None,
+        }),
+    )
+    .await
+    .into_response();
+    assert_eq!(json.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let json_body = body_string(json).await;
+    assert!(json_body.contains(PROVIDER_FAILED), "{json_body}");
+    assert!(!json_body.contains(TURN_SECRET), "{json_body}");
+}
