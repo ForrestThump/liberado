@@ -3043,14 +3043,14 @@ body {
  */
 
 .sidebar-collapsed {
-    width: 64px;
+    width: 44px;
     background: var(--grok-rail-bg);
     border-right: 1px solid var(--grok-rail-border);
     display: flex;
     flex-direction: column;
     align-items: center;
-    padding: 0.5rem 0;
-    gap: 0.25rem;
+    padding: 0.4rem 0;
+    gap: 0.15rem;
     flex-shrink: 0;
     overflow: hidden;
 }
@@ -3059,9 +3059,9 @@ body {
     background: transparent;
     border: none;
     cursor: pointer;
-    margin-bottom: 0.4rem;
+    margin-bottom: 0.25rem;
     padding: 0.25rem;
-    border-radius: 0.5rem;
+    border-radius: 0.4rem;
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -3074,13 +3074,13 @@ body {
 .sidebar-rail-btn {
     background: transparent;
     border: none;
-    width: 2.5rem;
-    height: 2.5rem;
+    width: 2rem;
+    height: 2rem;
     cursor: pointer;
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    border-radius: 0.5rem;
+    border-radius: 0.4rem;
     color: var(--grok-rail-text-muted);
     transition: background 0.12s, color 0.12s;
 }

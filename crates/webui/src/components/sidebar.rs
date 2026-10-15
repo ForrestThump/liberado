@@ -182,6 +182,7 @@ pub fn Sidebar(
     let expand_all = use_signal(bool::default);
     #[cfg_attr(not(target_arch = "wasm32"), allow(unused_mut))]
     let mut action_error = use_signal(|| None::<String>);
+    #[cfg_attr(not(target_arch = "wasm32"), allow(unused_mut))]
     let mut search_results = use_resource({
         let base = api_base.clone();
         move || {
@@ -249,8 +250,8 @@ pub fn Sidebar(
 
     if collapsed() {
         // Icon rail — vertical column of buttons that bring the rail back / navigate without
-        // expanding the panel. The brand at top expands the sidebar; the rest mirror the primary
-        // nav so the user can hop routes without needing 260px of canvas.
+        // expanding the panel. The top button is an expand-sidebar chevron. The rest mirror the
+        // primary nav so the user can hop routes without needing 260px of canvas.
         return rsx! {
             aside { class: "sidebar sidebar-collapsed",
                 button {
@@ -259,7 +260,7 @@ pub fn Sidebar(
                     title: "Expand sidebar",
                     "aria-label": "Expand sidebar",
                     onclick: move |_| collapsed.set(false),
-                    BrandLogo {}
+                    ExpandGlyph {}
                 }
                 button {
                     class: if route() == Route::Chat || route().is_chat_view() {
@@ -801,6 +802,28 @@ fn CollapseGlyph() -> Element {
             // the very left edge of the brand row, identical to the rotate-by-180 mirror image of
             // the icon in the collapsed-rail state.
             path { d: "M14.5 5l-6 6 6 6" }
+        }
+    }
+}
+
+/// Chevron pointing right — the inverse of `CollapseGlyph`. Sits at the top of the rail when
+/// collapsed so the user's eye lands on it first; clicking brings the panel back.
+#[component]
+fn ExpandGlyph() -> Element {
+    rsx! {
+        svg {
+            class: "icon sidebar-icon",
+            xmlns: "http://www.w3.org/2000/svg",
+            view_box: "0 0 22 22",
+            fill: "none",
+            stroke: "currentColor",
+            stroke_width: "1.6",
+            stroke_linecap: "round",
+            stroke_linejoin: "round",
+            "aria-hidden": "true",
+            // Open-panel glyph: a forward chevron that reads as "push the rail out". Same shape
+            // as CollapseGlyph rotated 180°.
+            path { d: "M7.5 5l6 6-6 6" }
         }
     }
 }
