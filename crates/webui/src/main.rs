@@ -137,9 +137,7 @@ mod tests {
 /// extraneous waypoint for the user — selecting an agent happens through the Agents shelf in the
 /// sidebar, where the rows are already categorised and pinned.
 #[component]
-fn HeaderRightSide(
-    incognito: Signal<bool>,
-) -> Element {
+fn HeaderRightSide(incognito: Signal<bool>) -> Element {
     rsx! {
         div {
             class: "header-right-cluster",

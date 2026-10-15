@@ -8,10 +8,7 @@
 use dioxus::prelude::*;
 
 #[component]
-pub fn ProjectsDialog(
-    on_cancel: EventHandler<()>,
-    on_create: EventHandler<String>,
-) -> Element {
+pub fn ProjectsDialog(on_cancel: EventHandler<()>, on_create: EventHandler<String>) -> Element {
     let mut name = use_signal(String::new);
     let mut error = use_signal(|| None::<&'static str>);
 

@@ -11,7 +11,9 @@
 
 use dioxus::prelude::*;
 
-use chat_client_contract::{ConvHeader, ConversationSearchResponse, ConversationSearchResult, SurfaceMode};
+use chat_client_contract::{
+    ConvHeader, ConversationSearchResponse, ConversationSearchResult, SurfaceMode,
+};
 
 use crate::components::projects_dialog::ProjectsDialog;
 use crate::icons::{IconChevronDown, IconChevronRight, IconSearch};
@@ -110,9 +112,11 @@ fn agent_category(title: &str) -> Option<&'static str> {
 }
 
 fn pinned(title: &str) -> bool {
-    PINNED_PREFIXES
-        .iter()
-        .any(|prefix| title.to_ascii_lowercase().starts_with(&prefix.to_ascii_lowercase()))
+    PINNED_PREFIXES.iter().any(|prefix| {
+        title
+            .to_ascii_lowercase()
+            .starts_with(&prefix.to_ascii_lowercase())
+    })
 }
 
 const CATEGORY_ORDER: &[&str] = &["Liberado Development", "Liberado Finance"];
@@ -971,7 +975,11 @@ fn SidebarRowCompact(
 ) -> Element {
     let id = conv.id.clone();
     let is_active = active().as_deref() == Some(id.as_str());
-    let cls = if is_active { "grok-row grok-row-active" } else { "grok-row" };
+    let cls = if is_active {
+        "grok-row grok-row-active"
+    } else {
+        "grok-row"
+    };
     let display = conv_display_title(&conv);
     let dot = row_dot_color(display.as_str());
     let id_for_pick = id.clone();
@@ -1002,7 +1010,11 @@ fn SidebarRowChat(
 ) -> Element {
     let id = conv.id.clone();
     let is_active = active().as_deref() == Some(id.as_str());
-    let cls = if is_active { "grok-row grok-row-active" } else { "grok-row" };
+    let cls = if is_active {
+        "grok-row grok-row-active"
+    } else {
+        "grok-row"
+    };
     let display = conv_display_title(&conv);
     let time = relative_time(&conv.created_at);
     let id_for_pick = id.clone();
@@ -1300,7 +1312,10 @@ mod tests {
 
     #[test]
     fn age_bands_choose_the_unit() {
-        assert_eq!(relative_time(&ago(chrono::Duration::seconds(12))), "12s ago");
+        assert_eq!(
+            relative_time(&ago(chrono::Duration::seconds(12))),
+            "12s ago"
+        );
         assert_eq!(relative_time(&ago(chrono::Duration::minutes(5))), "5m ago");
         assert_eq!(relative_time(&ago(chrono::Duration::hours(3))), "3h ago");
         assert_eq!(relative_time(&ago(chrono::Duration::days(2))), "2d ago");
@@ -1349,7 +1364,10 @@ mod tests {
             assert!(delete_accepted(ok), "{ok} should delete cleanly");
         }
         for no in [300, 403, 500] {
-            assert!(!delete_accepted(no), "{no} should surface as a delete failure");
+            assert!(
+                !delete_accepted(no),
+                "{no} should surface as a delete failure"
+            );
         }
     }
 
@@ -1376,7 +1394,14 @@ mod tests {
 
     #[test]
     fn dot_palette_covers_prototype_categories() {
-        for name in ["Grok", "Liberado-Budget", "Disk Saver", "Self Help", "Life System", "Homelab"] {
+        for name in [
+            "Grok",
+            "Liberado-Budget",
+            "Disk Saver",
+            "Self Help",
+            "Life System",
+            "Homelab",
+        ] {
             assert!(
                 !row_dot_color(name).is_empty(),
                 "row_dot_color should resolve a colour for {name}"

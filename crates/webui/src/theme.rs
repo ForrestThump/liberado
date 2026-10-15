@@ -47,10 +47,7 @@ pub fn theme_names() -> Vec<String> {
 /// because a registry merge dropped it.
 pub fn builtin_theme_names() -> Vec<String> {
     use liberado_theme::Theme;
-    Theme::builtins()
-        .into_iter()
-        .map(|t| t.name)
-        .collect()
+    Theme::builtins().into_iter().map(|t| t.name).collect()
 }
 
 /// The remembered theme name, or `dark` when nothing is stored yet.
