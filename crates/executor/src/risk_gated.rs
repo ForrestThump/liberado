@@ -727,19 +727,27 @@ impl RiskGatedToolRuntime {
     async fn notify_on_surface(&self, proposal_id: &str, message: &str) {
         match self.approval.as_ref().map(|stamp| stamp.origin) {
             Some(ApprovalOrigin::Web) => {
-                // The card in this chat is the surface. There is no Telegram message.
+                // The card in this chat is the surface. There is no channel message.
                 self.notified_deferral.store(true, Ordering::Relaxed);
             }
-            Some(ApprovalOrigin::Telegram) => self.notify_telegram(proposal_id, message).await,
+            Some(ApprovalOrigin::Channel(_)) => self.notify_channel(proposal_id, message).await,
             Some(ApprovalOrigin::Background) | None => {
                 self.notify_via_notifier(proposal_id, message).await
             }
         }
     }
 
-    async fn notify_telegram(&self, proposal_id: &str, message: &str) {
+    async fn notify_channel(&self, proposal_id: &str, message: &str) {
         if let Some(sink) = &self.permission_sink {
-            match sink.notify_permission(proposal_id, message).await {
+            // A closure would count as another function, and this file is at that boundary.
+            let mut session = None;
+            if let Some(stamp) = &self.approval {
+                session = Some(stamp.session_id.as_str());
+            }
+            match sink
+                .notify_permission_in(proposal_id, message, session)
+                .await
+            {
                 Ok(()) => self.notified_deferral.store(true, Ordering::Relaxed),
                 Err(error) => {
                     tracing::warn!(%error, "failed to send permission-request notification");

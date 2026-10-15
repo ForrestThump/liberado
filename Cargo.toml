@@ -89,6 +89,7 @@ liberado-server = { path = "crates/server" }
 liberado-theme = { path = "crates/theme" }
 chat-client-contract = { path = "crates/chat-client-contract" }
 liberado-markdown = { path = "crates/markdown" }
+liberado-matrix = { path = "crates/matrix" }
 liberado-commands = { path = "crates/liberado-commands" }
 liberado-test-support = { path = "crates/test-support" }
 liberado-tool-runtime = { path = "crates/tool-runtime" }

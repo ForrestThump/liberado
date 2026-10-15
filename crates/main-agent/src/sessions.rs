@@ -22,6 +22,9 @@
 //!   the incoherence this rule guards against; it is simply an unanswered question. See
 //!   [`ChatSessions::persist_user_message`].
 //!
+//!   **A failed turn also writes one short error note.** The note is not an assistant tool tail.
+//!   Its text is a fixed sentence, so a reload can show the failure without the raw provider error.
+//!
 //! We depend on the [`ConversationStore`] *trait*, never a concrete store: the composition root
 //! injects the engine (JSONL today, SQLite/Postgres later) so it stays swappable.
 //!
@@ -72,8 +75,11 @@ use liberado_mcp::ScopedRuntime;
 use liberado_provider::{Message, Provider, Role};
 use liberado_session::{DomainHint, GoalSessionHub, GoalSpec, SessionGrant, SessionOrigin};
 
+#[path = "sessions/agent_hooks.rs"]
+mod agent_hooks;
 #[path = "sessions/agent_profiles.rs"]
 mod agent_profiles;
+pub use agent_hooks::is_agent_dm_session;
 #[path = "sessions/agent_spawn.rs"]
 mod agent_spawn;
 #[path = "sessions/approval.rs"]
@@ -84,6 +90,9 @@ mod reasoning_stamp;
 mod surface_mode;
 #[path = "sessions/turn_clock.rs"]
 mod turn_clock;
+#[path = "sessions/turn_failure.rs"]
+mod turn_failure;
+pub use turn_failure::{TURN_ERROR_AUTHOR, public_turn_failure};
 #[path = "sessions_waivers.rs"]
 mod waivers;
 #[path = "sessions/workspace.rs"]
@@ -322,6 +331,8 @@ pub struct ChatSessions {
     user_timezone: Option<UserTimezone>,
     /// Sticky Telegram id and the scope-button sender. Filled after this value is inside an `Arc`.
     approval_hooks: approval::ApprovalHooks,
+    /// Runs after an agent is created, renamed, or deleted. Empty unless Matrix is on.
+    matrix_hook: Mutex<Option<agent_hooks::MatrixHook>>,
 }
 
 /// The moving parts of automatic compaction: the tunables, plus the provider used for the one
@@ -385,6 +396,7 @@ impl ChatSessions {
             agent_workspace: None,
             user_timezone: None,
             approval_hooks: approval::ApprovalHooks::new(),
+            matrix_hook: Mutex::new(None),
         }
     }
 
@@ -783,9 +795,10 @@ impl ChatSessions {
                 // Derived from the runtime the executor is about to be handed, never from a list built
                 // beside it — see `Conversation::apply_available_tools`.
                 self.state_tool_surface(&mut convo, session, &settings, turn_runtime.as_ref());
-                let reply = convo
+                let ran = convo
                     .turn(&executor, turn_runtime.as_ref(), &framed_user)
-                    .await?;
+                    .await;
+                let reply = turn_failure::keep_or_record(self, session, ran).await?;
                 // Gap 2: if a `delegate` this turn deferred to the human out-of-band (an interactive
                 // proposal/permission notification already landed on this surface), collapse the face
                 // agent's now-redundant reply to a tiny pointer at that notification.
@@ -809,9 +822,10 @@ impl ChatSessions {
                             &settings,
                             turn_runtime.as_ref(),
                         );
-                        convo
+                        let ran = convo
                             .turn(&executor, turn_runtime.as_ref(), &framed_user)
-                            .await?
+                            .await;
+                        turn_failure::keep_or_record(self, session, ran).await?
                     }
                 }
             };
@@ -904,9 +918,10 @@ impl ChatSessions {
                     settings.profile.as_deref(),
                 );
                 self.state_tool_surface(&mut convo, session, &settings, turn_runtime.as_ref());
-                convo
+                let ran = convo
                     .turn_stream(&executor, turn_runtime.as_ref(), &framed_user, events)
-                    .await?;
+                    .await;
+                turn_failure::keep_or_record(self, session, ran).await?;
             } else {
                 match self.dispatch_turn(user, settings.delegation).await {
                     DispatchOutcome::Answered(reply) => {
@@ -928,9 +943,10 @@ impl ChatSessions {
                             &settings,
                             turn_runtime.as_ref(),
                         );
-                        convo
+                        let ran = convo
                             .turn_stream(&executor, turn_runtime.as_ref(), &framed_user, events)
-                            .await?;
+                            .await;
+                        turn_failure::keep_or_record(self, session, ran).await?
                     }
                 }
             }
@@ -1235,10 +1251,7 @@ impl ChatSessions {
 
             let terminal = match result {
                 Ok(()) => AgentEvent::Done,
-                Err(e) => {
-                    tracing::warn!(error = %e, session = %session, "chat turn failed");
-                    AgentEvent::Error(e.to_string())
-                }
+                Err(e) => turn_failure::failure_event(session, &e),
             };
             entry.publish(terminal);
             // Retired last: while this key is present, `start_or_attach` will attach rather than
@@ -1376,14 +1389,6 @@ impl ChatSessions {
     ///
     /// Lazy backfill: if a header still has no title but history has a user message, persist the
     /// first-line default once so the sidebar is scannable without waiting for another turn.
-    /// Permanently delete a conversation. Thin passthrough: the store owns the semantics (see
-    /// [`ConversationStore::delete`]) and there is no cached conversation state here to invalidate —
-    /// every turn rehydrates from the store.
-    pub async fn delete(&self, id: Ulid) -> SessionResult<()> {
-        self.store.delete(id).await?;
-        Ok(())
-    }
-
     pub async fn list(&self) -> SessionResult<Vec<ConversationHeader>> {
         let mut headers = self.store.list().await?;
         for h in &mut headers {
@@ -1432,7 +1437,8 @@ impl ChatSessions {
     ///
     /// True when the transcript ends on the human's message and nothing is running for it. The
     /// honest reading of that state is "a turn was started and did not finish" — the daemon was
-    /// restarted mid-inference, the turn was cancelled, or it failed before persisting anything.
+    /// restarted mid-inference, or the turn was cancelled. A failed turn writes an error note,
+    /// so this stays false after a provider error.
     ///
     /// Derived rather than recorded, because the alternative is a durable "turn in flight" flag that
     /// has to be cleared on every exit path including the ones that do not run (a killed process
@@ -1459,15 +1465,6 @@ impl ChatSessions {
             // decorate a conversation we could not read.
             Err(_) => false,
         }
-    }
-
-    /// Set the title of a conversation. Idempotent — subsequent calls overwrite the same field.
-    ///
-    /// Intended writers: first-line default seed, future flash-title agent, HTTP `PATCH`,
-    /// future `/title` slash command. Always overwrites; never blocked by the default seed
-    /// (seed only runs when the current title is `None`).
-    pub async fn set_title(&self, session: Ulid, title: String) -> SessionResult<()> {
-        Ok(self.store.set_title(session, title).await?)
     }
 
     // ── private helpers ──────────────────────────────────────────────────────

@@ -175,10 +175,13 @@ fn verify_http(config: &HomelabConfig) -> Result<(), String> {
         .build()
         .map_err(|error| format!("build HTTP client: {error}"))?;
     let url = format!("{}/api/status", config.api_url.trim_end_matches('/'));
-    let response = client
-        .get(&url)
-        .send()
-        .map_err(|error| format!("verify {url}: {error}"))?;
+    let response = client.get(&url).send().map_err(|error| {
+        format!(
+            "verify {}: {}",
+            liberado_common::redact_secrets(&url),
+            liberado_common::redact_secrets(&error.without_url().to_string())
+        )
+    })?;
     if !response.status().is_success() {
         return Err(format!("verify {url}: HTTP {}", response.status()));
     }

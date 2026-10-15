@@ -4,7 +4,7 @@
     "proven_invariant": 65,
     "local_failure": 0,
     "process_fatal": 46,
-    "files_scanned": 564,
+    "files_scanned": 604,
     "files_with_unwraps": 49
   },
   "files": {
@@ -765,7 +765,7 @@
       "occurrences": [
         {
           "file": "crates/markdown/src/lib.rs",
-          "line": 137,
+          "line": 140,
           "column": 17,
           "method": "unwrap",
           "snippet": "trimmed.strip_prefix(\"### \").unwrap()",
@@ -776,7 +776,7 @@
         },
         {
           "file": "crates/markdown/src/lib.rs",
-          "line": 144,
+          "line": 147,
           "column": 17,
           "method": "unwrap",
           "snippet": "trimmed.strip_prefix(\"## \").unwrap()",
@@ -787,7 +787,7 @@
         },
         {
           "file": "crates/markdown/src/lib.rs",
-          "line": 151,
+          "line": 154,
           "column": 17,
           "method": "unwrap",
           "snippet": "trimmed.strip_prefix(\"# \").unwrap()",
@@ -882,7 +882,7 @@
       "occurrences": [
         {
           "file": "crates/provider-free-proxy/src/http.rs",
-          "line": 333,
+          "line": 335,
           "column": 5,
           "method": "expect",
           "snippet": "Response::builder()\n        .status(status)\n        .header(header::CONTENT_TYPE, content_type)\n        .body(axum::body::Body::from_stream(upstream.bytes_stream()))\n        .expect(\"statically valid response builder\")",
@@ -912,7 +912,7 @@
         },
         {
           "file": "crates/provider-free-proxy/src/resolver.rs",
-          "line": 449,
+          "line": 452,
           "column": 21,
           "method": "expect",
           "snippet": "self.state.lock().expect(\"cache lock\")",
@@ -923,7 +923,7 @@
         },
         {
           "file": "crates/provider-free-proxy/src/resolver.rs",
-          "line": 459,
+          "line": 462,
           "column": 21,
           "method": "expect",
           "snippet": "self.state.lock().expect(\"cache lock\")",
@@ -934,7 +934,7 @@
         },
         {
           "file": "crates/provider-free-proxy/src/resolver.rs",
-          "line": 464,
+          "line": 467,
           "column": 25,
           "method": "expect",
           "snippet": "self.state.lock().expect(\"cache lock\")",
@@ -945,7 +945,7 @@
         },
         {
           "file": "crates/provider-free-proxy/src/resolver.rs",
-          "line": 469,
+          "line": 472,
           "column": 9,
           "method": "expect",
           "snippet": "self.state.lock().expect(\"cache lock\")",

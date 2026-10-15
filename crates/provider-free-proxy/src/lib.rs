@@ -125,6 +125,7 @@ pub mod match_slug;
 pub mod providers;
 pub mod quota;
 pub mod rank;
+mod redact_http;
 pub mod resolver;
 pub mod scrape_parse;
 pub mod service;

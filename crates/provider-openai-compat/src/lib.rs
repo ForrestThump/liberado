@@ -198,7 +198,10 @@ impl OpenAiCompatibleProvider {
         let value: Value = response.json().await.map_err(|e| {
             (
                 0,
-                ProviderError::Transport(format!("malformed response body: {e}")),
+                ProviderError::Transport(format!(
+                    "malformed response body: {}",
+                    liberado_common::redact_secrets(&e.without_url().to_string())
+                )),
             )
         })?;
         from_openai_response(&value, &name_map).map_err(|e| (0, e))
@@ -310,14 +313,21 @@ impl OpenAiCompatibleProvider {
             .bearer_auth(&self.api_key)
             .send()
             .await
-            .map_err(|e| ProviderError::Transport(e.to_string()))?;
+            .map_err(|e| {
+                ProviderError::Transport(liberado_common::redact_secrets(
+                    &e.without_url().to_string(),
+                ))
+            })?;
 
         let status = response.status();
         if !status.is_success() {
-            let detail = response
-                .text()
-                .await
-                .unwrap_or_else(|e| format!("<error body unavailable: {e}>"));
+            let detail = response.text().await.unwrap_or_else(|e| {
+                format!(
+                    "<error body unavailable: {}>",
+                    liberado_common::redact_secrets(&e.without_url().to_string())
+                )
+            });
+            let detail = liberado_common::redact_secrets(&detail);
             return Err(map_status(
                 status.as_u16(),
                 detail,
@@ -325,10 +335,12 @@ impl OpenAiCompatibleProvider {
             ));
         }
 
-        let value: Value = response
-            .json()
-            .await
-            .map_err(|e| ProviderError::Transport(format!("malformed response body: {e}")))?;
+        let value: Value = response.json().await.map_err(|e| {
+            ProviderError::Transport(format!(
+                "malformed response body: {}",
+                liberado_common::redact_secrets(&e.without_url().to_string())
+            ))
+        })?;
         Ok(parse_models_response(&value))
     }
 
@@ -360,14 +372,24 @@ impl OpenAiCompatibleProvider {
             .json(body)
             .send()
             .await
-            .map_err(|e| (0, ProviderError::Transport(e.to_string())))?;
+            .map_err(|e| {
+                (
+                    0,
+                    ProviderError::Transport(liberado_common::redact_secrets(
+                        &e.without_url().to_string(),
+                    )),
+                )
+            })?;
 
         let status = response.status();
         if !status.is_success() {
-            let detail = response
-                .text()
-                .await
-                .unwrap_or_else(|e| format!("<error body unavailable: {e}>"));
+            let detail = response.text().await.unwrap_or_else(|e| {
+                format!(
+                    "<error body unavailable: {}>",
+                    liberado_common::redact_secrets(&e.without_url().to_string())
+                )
+            });
+            let detail = liberado_common::redact_secrets(&detail);
             let status_u16 = status.as_u16();
             let err = map_status(status_u16, detail, &self.extra_client_error_status);
             return Err((status_u16, err));

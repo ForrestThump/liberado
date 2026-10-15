@@ -25,6 +25,10 @@ use liberado_messaging::{
     permission_action_rows,
 };
 
+mod http_error;
+mod outbound_cards;
+pub use outbound_cards::{OutboundCards, TelegramCardUpdater};
+
 /// Something that can be told about an event worth a human's attention.
 #[async_trait]
 pub trait Notifier: Send + Sync {
@@ -147,6 +151,9 @@ pub struct TelegramNotifier {
     getupdate_timeout_secs: u64,
     /// Sleep after a failed `getUpdates` before retrying.
     poll_retry_backoff_secs: u64,
+    /// Message ids of permission cards this process sent. `None` for unit tests and the
+    /// reminder bot. Every [`TelegramNotifier::from_env`] notifier shares one book.
+    cards: Option<Arc<OutboundCards>>,
 }
 
 /// Prefer this name when treating Telegram as a [`MessagingChannel`]. Same type as
@@ -162,6 +169,7 @@ impl TelegramNotifier {
             api_base: TELEGRAM_API_BASE.to_string(),
             getupdate_timeout_secs: 25,
             poll_retry_backoff_secs: 10,
+            cards: None,
         }
     }
 
@@ -188,7 +196,7 @@ impl TelegramNotifier {
     pub fn from_env() -> Option<Self> {
         let token = std::env::var("LIBERADO_TELEGRAM_BOT_TOKEN").ok()?;
         let chat_id = std::env::var("LIBERADO_TELEGRAM_CHAT_ID").ok()?;
-        Some(Self::new(token, chat_id))
+        Some(Self::new(token, chat_id).with_cards(outbound_cards::shared_outbound_cards()))
     }
 
     /// Second bot for mechanical reminders. Unset means those jobs log and do not write
@@ -203,21 +211,26 @@ impl TelegramNotifier {
         format!("{}{}/{}", self.api_base, self.token, method)
     }
 
-    /// POST `payload` to `sendMessage` and translate a non-2xx response into a [`MessagingError`].
-    async fn send_message_payload(&self, payload: serde_json::Value) -> Result<(), MessagingError> {
+    /// POST `payload` to `sendMessage`. A success body that is not a Telegram message is still
+    /// success: the id is only needed when a card must be edited later.
+    async fn send_message_payload(
+        &self,
+        payload: serde_json::Value,
+    ) -> Result<Option<i64>, MessagingError> {
         let response = self
             .client
             .post(self.api_url("sendMessage"))
             .json(&payload)
             .send()
             .await
-            .map_err(|e| MessagingError(format!("Telegram request failed: {e}")))?;
+            .map_err(|e| http_error::transport("Telegram request failed", e))?;
 
         if !response.status().is_success() {
             let body = response.text().await.unwrap_or_default();
-            return Err(MessagingError(format!("Telegram API error: {body}")));
+            return Err(http_error::api_body(&body));
         }
-        Ok(())
+        let body = response.text().await.unwrap_or_default();
+        Ok(outbound_cards::message_id_from_body(&body))
     }
 
     fn message_is_from_allowed_chat(&self, msg: &serde_json::Value) -> bool {
@@ -297,11 +310,12 @@ impl MessagingChannel for TelegramNotifier {
 
     async fn send_text(&self, text: &str) -> Result<(), MessagingError> {
         for chunk in split_telegram_chunks(text) {
-            self.send_message_payload(serde_json::json!({
-                "chat_id": self.chat_id,
-                "text": chunk,
-            }))
-            .await?;
+            let _id = self
+                .send_message_payload(serde_json::json!({
+                    "chat_id": self.chat_id,
+                    "text": chunk,
+                }))
+                .await?;
         }
         Ok(())
     }
@@ -322,18 +336,21 @@ impl MessagingChannel for TelegramNotifier {
         let Some(first) = chunks.next() else {
             return Ok(());
         };
-        self.send_message_payload(serde_json::json!({
-            "chat_id": self.chat_id,
-            "text": first,
-            "reply_markup": Self::actions_to_inline_keyboard(rows),
-        }))
-        .await?;
-        for chunk in chunks {
-            self.send_message_payload(serde_json::json!({
+        let message_id = self
+            .send_message_payload(serde_json::json!({
                 "chat_id": self.chat_id,
-                "text": chunk,
+                "text": first,
+                "reply_markup": Self::actions_to_inline_keyboard(rows),
             }))
             .await?;
+        self.remember_card(rows, message_id);
+        for chunk in chunks {
+            let _id = self
+                .send_message_payload(serde_json::json!({
+                    "chat_id": self.chat_id,
+                    "text": chunk,
+                }))
+                .await?;
         }
         Ok(())
     }
@@ -352,17 +369,17 @@ impl MessagingChannel for TelegramNotifier {
             }))
             .send()
             .await
-            .map_err(|e| MessagingError(format!("Telegram request_reply failed: {e}")))?;
+            .map_err(|e| http_error::transport("Telegram request_reply failed", e))?;
 
         if !response.status().is_success() {
             let body = response.text().await.unwrap_or_default();
-            return Err(MessagingError(format!("Telegram API error: {body}")));
+            return Err(http_error::api_body(&body));
         }
 
         let body: serde_json::Value = response
             .json()
             .await
-            .map_err(|e| MessagingError(format!("Telegram request_reply decode: {e}")))?;
+            .map_err(|e| http_error::transport("Telegram request_reply decode", e))?;
         let message_id = body
             .get("result")
             .and_then(|r| r.get("message_id"))
@@ -381,10 +398,10 @@ impl MessagingChannel for TelegramNotifier {
             }))
             .send()
             .await
-            .map_err(|e| MessagingError(format!("Telegram acknowledge failed: {e}")))?;
+            .map_err(|e| http_error::transport("Telegram acknowledge failed", e))?;
         if !response.status().is_success() {
             let body = response.text().await.unwrap_or_default();
-            return Err(MessagingError(format!("Telegram API error: {body}")));
+            return Err(http_error::api_body(&body));
         }
         Ok(())
     }
@@ -405,10 +422,10 @@ impl MessagingChannel for TelegramNotifier {
             }))
             .send()
             .await
-            .map_err(|e| MessagingError(format!("Telegram editMessageText failed: {e}")))?;
+            .map_err(|e| http_error::transport("Telegram editMessageText failed", e))?;
         if !response.status().is_success() {
             let body = response.text().await.unwrap_or_default();
-            return Err(MessagingError(format!("Telegram API error: {body}")));
+            return Err(http_error::api_body(&body));
         }
         Ok(())
     }
@@ -447,7 +464,7 @@ impl MessagingChannel for TelegramNotifier {
             .json(&body)
             .send()
             .await
-            .map_err(|e| MessagingError(format!("Telegram setMyCommands failed: {e}")))?;
+            .map_err(|e| http_error::transport("Telegram setMyCommands failed", e))?;
         if !response.status().is_success() {
             let status = response.status();
             return Err(MessagingError(format!(
@@ -478,7 +495,8 @@ impl MessagingChannel for TelegramNotifier {
                 return Ok(vec![]);
             }
             Err(e) => {
-                tracing::warn!("Telegram getUpdates error: {e}");
+                let error = http_error::line("Telegram getUpdates error", e);
+                tracing::warn!(%error, "Telegram getUpdates error");
                 tokio::time::sleep(Duration::from_secs(self.poll_retry_backoff_secs)).await;
                 return Ok(vec![]);
             }
@@ -487,7 +505,7 @@ impl MessagingChannel for TelegramNotifier {
         let body: serde_json::Value = response
             .json()
             .await
-            .map_err(|e| MessagingError(format!("Telegram getUpdates decode: {e}")))?;
+            .map_err(|e| http_error::transport("Telegram getUpdates decode", e))?;
         let updates = body["result"].as_array().cloned().unwrap_or_default();
 
         let mut events = Vec::new();

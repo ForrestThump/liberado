@@ -249,7 +249,9 @@ pub fn from_openai_response(
     // Some OpenAI-compatible servers return 2xx with a top-level `error` object instead of
     // `choices`; surface it rather than the misleading "empty response".
     if let Some(error) = v.get("error") {
-        return Err(ProviderError::InvalidRequest(error.to_string()));
+        return Err(ProviderError::InvalidRequest(
+            liberado_common::redact_secrets(&error.to_string()),
+        ));
     }
 
     let choice = v["choices"].get(0).ok_or(ProviderError::EmptyResponse)?;

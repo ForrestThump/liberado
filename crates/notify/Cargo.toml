@@ -10,6 +10,7 @@ repository.workspace = true
 
 [dependencies]
 async-trait = { workspace = true }
+liberado-common = { workspace = true }
 liberado-messaging = { workspace = true }
 reqwest = { workspace = true }
 serde_json = { workspace = true }
