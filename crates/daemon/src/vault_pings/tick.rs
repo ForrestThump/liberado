@@ -83,18 +83,11 @@ fn collect(root: &Path, tick: &ReminderTick) -> Vec<DueItem> {
 
 fn tasks_due(rel: &str, text: &str, now: NaiveDateTime, config: &TasksConfig) -> Vec<DueItem> {
     let lines = task_source_lines(text);
-    let mut items = Vec::new();
-    for (index, task) in parse_tasks_for_jobs(text).into_iter().enumerate() {
-        if !config.accepts(&task) || !task.status.is_open() {
-            continue;
-        }
-        let line_number = index + 1;
-        let line = lines.get(index).copied().unwrap_or_default();
-        if let Some(item) = task_due(rel, &task.content, line, line_number, now) {
-            items.push(item);
-        }
-    }
-    items
+    parse_tasks_for_jobs(text)
+        .into_iter()
+        .enumerate()
+        .filter_map(|(index, task)| due_item_for_task(rel, now, config, &lines, index, task))
+        .collect()
 }
 
 fn task_due(
@@ -117,6 +110,22 @@ fn task_due(
         key: fire_key("task", rel, &when, &line_number.to_string()),
         line: format!("{} — {} {when} — {rel}", content.trim(), stamp.label),
     })
+}
+
+fn due_item_for_task(
+    rel: &str,
+    now: NaiveDateTime,
+    config: &TasksConfig,
+    lines: &[&str],
+    index: usize,
+    task: turbovault_core::TaskItem,
+) -> Option<DueItem> {
+    if !config.accepts(&task) || !task.status.is_open() {
+        return None;
+    }
+    let line_number = index + 1;
+    let line = lines.get(index).copied().unwrap_or_default();
+    task_due(rel, &task.content, line, line_number, now)
 }
 
 fn task_source_lines(text: &str) -> Vec<&str> {

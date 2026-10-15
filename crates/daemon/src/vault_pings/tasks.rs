@@ -45,32 +45,11 @@ fn collect_tasks(
 ) {
     let source_lines = task_source_lines(text);
     for (index, task) in parse_tasks_for_jobs(text).into_iter().enumerate() {
-        if !config.accepts(&task) || !task.status.is_open() {
-            continue;
+        if let Some(open_task) =
+            open_task_from_parsed(rel, today, config, &source_lines, index, task)
+        {
+            out.push(open_task);
         }
-        let text = config.display_text(&task);
-        if text.trim().is_empty() {
-            continue;
-        }
-        let start = task.start_date;
-        if matches!(start, Some(date) if date > today) {
-            continue;
-        }
-        let line = source_lines.get(index).copied().unwrap_or_default();
-        let due_at = clock_after(line, '📅');
-        let scheduled_at = clock_after(line, '⏳');
-        out.push(OpenTask {
-            priority: task_priority(task.priority),
-            due: task.due_date,
-            due_at,
-            scheduled: task.scheduled_date,
-            scheduled_at,
-            start,
-            recurrence: task.recurrence.clone(),
-            in_progress: task.status == TaskStatus::InProgress,
-            text,
-            path: rel.to_string(),
-        });
     }
 }
 
@@ -169,14 +148,54 @@ fn starts_with_ordered_task(line: &str) -> bool {
 }
 
 fn task_priority(priority: TaskPriority) -> u8 {
-    match priority {
-        TaskPriority::Highest => 5,
-        TaskPriority::High => 4,
-        TaskPriority::Medium => 3,
-        TaskPriority::Normal => 2,
-        TaskPriority::Low => 1,
-        TaskPriority::Lowest => 0,
+    const PRIORITY_ORDER: [TaskPriority; 6] = [
+        TaskPriority::Lowest,
+        TaskPriority::Low,
+        TaskPriority::Normal,
+        TaskPriority::Medium,
+        TaskPriority::High,
+        TaskPriority::Highest,
+    ];
+    PRIORITY_ORDER
+        .iter()
+        .position(|candidate| *candidate == priority)
+        .unwrap_or(2) as u8
+}
+
+fn open_task_from_parsed(
+    rel: &str,
+    today: NaiveDate,
+    config: &TasksConfig,
+    source_lines: &[&str],
+    index: usize,
+    task: TaskItem,
+) -> Option<OpenTask> {
+    if !config.accepts(&task) || !task.status.is_open() {
+        return None;
     }
+    let text = config.display_text(&task);
+    if text.trim().is_empty() {
+        return None;
+    }
+    let start = task.start_date;
+    if matches!(start, Some(date) if date > today) {
+        return None;
+    }
+    let line = source_lines.get(index).copied().unwrap_or_default();
+    let due_at = clock_after(line, '📅');
+    let scheduled_at = clock_after(line, '⏳');
+    Some(OpenTask {
+        priority: task_priority(task.priority),
+        due: task.due_date,
+        due_at,
+        scheduled: task.scheduled_date,
+        scheduled_at,
+        start,
+        recurrence: task.recurrence.clone(),
+        in_progress: task.status == TaskStatus::InProgress,
+        text,
+        path: rel.to_string(),
+    })
 }
 
 /// Clock after `emoji` when the value is `YYYY-MM-DD HH:MM` or
