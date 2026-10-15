@@ -3725,6 +3725,90 @@
     "functions": 147,
     "cyclomatic": 283
   },
+  "crates/policy/src/compat.rs": {
+    "ploc": 242,
+    "lloc": 47,
+    "functions": 21,
+    "cyclomatic": 64
+  },
+  "crates/policy/src/compat_tests.rs": {
+    "ploc": 171,
+    "lloc": 112,
+    "functions": 14,
+    "cyclomatic": 15
+  },
+  "crates/policy/src/decide.rs": {
+    "ploc": 164,
+    "lloc": 30,
+    "functions": 13,
+    "cyclomatic": 35
+  },
+  "crates/policy/src/decide_tests.rs": {
+    "ploc": 198,
+    "lloc": 73,
+    "functions": 16,
+    "cyclomatic": 17
+  },
+  "crates/policy/src/descriptor.rs": {
+    "ploc": 225,
+    "lloc": 40,
+    "functions": 24,
+    "cyclomatic": 61
+  },
+  "crates/policy/src/effect.rs": {
+    "ploc": 10,
+    "lloc": 0,
+    "functions": 0,
+    "cyclomatic": 1
+  },
+  "crates/policy/src/lib.rs": {
+    "ploc": 15,
+    "lloc": 0,
+    "functions": 0,
+    "cyclomatic": 1
+  },
+  "crates/policy/src/load.rs": {
+    "ploc": 99,
+    "lloc": 15,
+    "functions": 12,
+    "cyclomatic": 28
+  },
+  "crates/policy/src/load_tests.rs": {
+    "ploc": 84,
+    "lloc": 28,
+    "functions": 9,
+    "cyclomatic": 10
+  },
+  "crates/policy/src/path.rs": {
+    "ploc": 115,
+    "lloc": 26,
+    "functions": 10,
+    "cyclomatic": 34
+  },
+  "crates/policy/src/path_tests.rs": {
+    "ploc": 118,
+    "lloc": 31,
+    "functions": 16,
+    "cyclomatic": 17
+  },
+  "crates/policy/src/segment.rs": {
+    "ploc": 49,
+    "lloc": 11,
+    "functions": 10,
+    "cyclomatic": 16
+  },
+  "crates/policy/src/url.rs": {
+    "ploc": 233,
+    "lloc": 75,
+    "functions": 25,
+    "cyclomatic": 81
+  },
+  "crates/policy/src/url_tests.rs": {
+    "ploc": 90,
+    "lloc": 32,
+    "functions": 14,
+    "cyclomatic": 15
+  },
   "crates/provider-free-proxy/src/bench_api.rs": {
     "ploc": 145,
     "lloc": 56,

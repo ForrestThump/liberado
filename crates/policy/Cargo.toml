@@ -1,0 +1,18 @@
+[package]
+name = "liberado-policy"
+version = "0.1.0"
+description = "Tool policy model: declared effects, vault-path and URL normalizers, a TOML loader, and a shim from zone_from_arg and write_tools."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+thiserror = { workspace = true }
+toml = { workspace = true }
+
+[package.metadata.liberado]
+# Layer role for the layer-rules test + crate-map generator (docs/architecture/contracts.md)
+role = "foundation"
