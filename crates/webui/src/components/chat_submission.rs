@@ -27,6 +27,19 @@ pub(super) fn profile_switched_note(name: Option<String>) -> ChatMsg {
 }
 }
 
+/// Map a wire role onto the bubble role the transcript renders.
+///
+/// Unknown roles stay user bubbles so a new wire value still shows text.
+pub(super) fn bubble_role(wire: &str) -> &'static str {
+    match wire {
+        "assistant" => "assistant",
+        "tool" => "tool",
+        "system" => "system",
+        "error" => "error",
+        _ => "user",
+    }
+}
+
 /// Resolve what one submit gesture runs. Palette rows carry an exact command so they never depend
 /// on a preceding signal update; form/keyboard submits still accept the highlighted completion.
 pub(super) fn submission_text(

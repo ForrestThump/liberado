@@ -19,7 +19,7 @@
 //! | Surface | Starts work how | Gated? |
 //! |---|---|---|
 //! | Chat HTTP `POST /api/chat`, `/api/chat/stream` | route layer [`refuse_new_turns_if_draining`] | **yes** |
-//! | Chat Telegram free-form | `TelegramChatBridge` checks `drain.is_accepting()` | **yes** (capability, not this middleware) |
+//! | Chat Telegram free-form | `TextChatBridge` checks `drain.is_accepting()` | **yes** (capability, not this middleware) |
 //! | Goals HTTP `POST /api/goals` | same refuse middleware as chat starts | **yes** |
 //! | Goals HTTP cancel/park/message/stream/list | do not start new goal work | no (manage in-flight) |
 //! | Hooks `POST /api/hooks/{name}` | `trigger_hook` checks `drain.is_accepting()` | **yes** |

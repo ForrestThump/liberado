@@ -1,88 +1,133 @@
 //! Chat-turn approval stamp, plus the risk-gate switch that sits next to it.
 //!
-//! Both live here so `sessions.rs` stays inside its ploc ceiling.
+//! Both live here so `sessions.rs` stays inside its ploc ceiling. The gate
+//! builder lives here for the same reason: the surface and the gate must share
+//! one session grant, and a second copy of that construction is how they drifted.
 
 use std::sync::{Arc, Mutex};
 
-use liberado_common::{ApprovalOrigin, PermissionRoute, route_permission};
+use liberado_common::{
+    ApprovalOrigin, CapabilitySet, ChannelKind, DEFAULT_POOL, PermissionRoute, SessionChannel,
+    channel_for_session, route_permission,
+};
 use liberado_conversation_store::Ulid;
-use liberado_executor::{ApprovalStamp, PermissionSink, RiskGatedToolRuntime};
+use liberado_executor::{ApprovalStamp, PermissionSink, RiskGatedToolRuntime, ToolRuntime};
 
 use super::ChatSessions;
 
-/// Sticky Telegram id and the scope-button sender. The server fills both after `Arc::new`.
+/// Bound channel sessions and the scope-button senders. The server fills both after `Arc::new`.
 pub(super) struct ApprovalHooks {
-    sticky_slot: Arc<Mutex<Option<Ulid>>>,
-    permission_sink: Mutex<Option<Arc<dyn PermissionSink>>>,
+    binding_slot: Arc<Mutex<Vec<SessionChannel>>>,
+    permission_sinks: Mutex<Vec<(ChannelKind, Arc<dyn PermissionSink>)>>,
 }
 
 impl ApprovalHooks {
     pub(super) fn new() -> Self {
         Self {
-            sticky_slot: Arc::new(Mutex::new(None)),
-            permission_sink: Mutex::new(None),
+            binding_slot: Arc::new(Mutex::new(Vec::new())),
+            permission_sinks: Mutex::new(Vec::new()),
         }
     }
 }
 
 impl ChatSessions {
-    /// The slot the server fills with the sticky Telegram session id.
-    pub fn sticky_slot(&self) -> Arc<Mutex<Option<Ulid>>> {
-        Arc::clone(&self.approval_hooks.sticky_slot)
+    /// The slot the server fills with the channel-binding snapshot.
+    pub fn binding_slot(&self) -> Arc<Mutex<Vec<SessionChannel>>> {
+        Arc::clone(&self.approval_hooks.binding_slot)
     }
 
-    /// Attach the Telegram button sender. Interior mutability so this can run after `Arc::new`.
-    pub fn set_permission_sink(&self, sink: Arc<dyn PermissionSink>) {
-        *self
+    /// Attach the button sender for `channel`. Interior mutability so this can run after `Arc::new`.
+    pub fn set_permission_sink(&self, channel: ChannelKind, sink: Arc<dyn PermissionSink>) {
+        let mut sinks = self
             .approval_hooks
-            .permission_sink
+            .permission_sinks
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(sink);
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        sinks.retain(|(kind, _)| *kind != channel);
+        sinks.push((channel, sink));
     }
 
-    /// Whether a Telegram button sender is attached.
+    /// Whether any channel button sender is attached.
     pub fn has_permission_sink(&self) -> bool {
-        self.approval_hooks
-            .permission_sink
+        !self
+            .approval_hooks
+            .permission_sinks
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .is_some()
+            .is_empty()
     }
 
-    fn sticky_label(&self) -> Option<String> {
+    fn bound_channel(&self, session_id: &str) -> Option<ChannelKind> {
+        let bindings = self
+            .approval_hooks
+            .binding_slot
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        channel_for_session(&bindings, session_id)
+    }
+
+    fn sink_for(&self, channel: ChannelKind) -> Option<Arc<dyn PermissionSink>> {
         self.approval_hooks
-            .sticky_slot
+            .permission_sinks
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .map(|id| id.to_string())
+            .iter()
+            .find(|(kind, _)| *kind == channel)
+            .map(|(_, sink)| Arc::clone(sink))
     }
 
-    /// Stamp session and origin onto a chat risk gate, and attach the Telegram sink when this
-    /// session is the sticky one. The grant already chosen by the caller is left alone.
+    /// Stamp session and origin onto a chat risk gate, and attach that channel's sink when this
+    /// session is bound to one. The grant already chosen by the caller is left alone.
     pub(super) fn stamp_approval(
         &self,
         session: Ulid,
         mut gated: RiskGatedToolRuntime,
     ) -> RiskGatedToolRuntime {
         let session_id = session.to_string();
-        let origin =
-            match route_permission(Some(&session_id), self.sticky_label().as_deref(), false) {
-                PermissionRoute::TelegramAndWeb { .. } => ApprovalOrigin::Telegram,
-                PermissionRoute::WebOnly { .. } => ApprovalOrigin::Web,
-                PermissionRoute::Background { .. } => ApprovalOrigin::Background,
-            };
+        let origin = approval_origin(&session_id, self.bound_channel(&session_id));
         gated = gated.with_approval(ApprovalStamp { session_id, origin });
-        if origin == ApprovalOrigin::Telegram
-            && let Some(sink) = self
-                .approval_hooks
-                .permission_sink
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .clone()
+        if let Some(channel) = origin.channel()
+            && let Some(sink) = self.sink_for(channel)
         {
             gated = gated.with_permission_sink(sink);
         }
         gated
+    }
+
+    /// Wrap `inner` in the chat risk gate and stamp this session on it.
+    ///
+    /// `grant` is the session's authority. Callers pass the set that scoped `inner`,
+    /// or the full session grant when dispatcher narrowing has already shrunk the
+    /// visible surface. The process-wide grant is the wrong value: the model would
+    /// see a session-only tool and this gate would refuse the call.
+    ///
+    /// Chat is not one of the daemon's named pools. Proposals are tagged
+    /// [`DEFAULT_POOL`] so an approved chat proposal runs on the daemon's default
+    /// pool orchestrator.
+    pub(super) fn gate_with_session_grant(
+        &self,
+        inner: Arc<dyn ToolRuntime>,
+        grant: CapabilitySet,
+        user: &str,
+        session: Ulid,
+    ) -> RiskGatedToolRuntime {
+        let mut gated = RiskGatedToolRuntime::new(
+            inner,
+            grant,
+            self.consequences.clone(),
+            self.zone_catalog.clone(),
+            self.zone_write_classes.clone(),
+            self.proposals_dir.clone(),
+            user.to_string(),
+            session.to_string(),
+            self.signer.clone(),
+            DEFAULT_POOL,
+        )
+        .with_risk_waivers(self.risk_waivers.clone());
+        if let Some(catalog) = &self.live_catalog {
+            gated = gated.with_live_catalog(catalog.clone());
+        }
+        self.stamp_approval(session, gated)
     }
 
     /// Whether runtime risk/zone/consequence gates must wrap tool calls.
@@ -93,5 +138,13 @@ impl ChatSessions {
         self.live_catalog.is_some()
             || !self.consequences.is_empty()
             || !self.zone_catalog.is_empty()
+    }
+}
+
+fn approval_origin(session_id: &str, bound: Option<ChannelKind>) -> ApprovalOrigin {
+    match route_permission(Some(session_id), bound, None, false) {
+        PermissionRoute::ChannelAndWeb { channel, .. } => ApprovalOrigin::Channel(channel),
+        PermissionRoute::WebOnly { .. } => ApprovalOrigin::Web,
+        PermissionRoute::Background { .. } => ApprovalOrigin::Background,
     }
 }

@@ -13,6 +13,7 @@ mod theme;
 
 use components::chat::Chat;
 use components::dashboard::Dashboard;
+use components::grants_popover::ToolsPopover;
 use components::incognito::IncognitoToggle;
 use components::profile_browser::ProfileChip;
 use components::profile_surface::profile_chip_visible;
@@ -183,6 +184,8 @@ fn App() -> Element {
     // The session-profile picker, and which profile the open chat runs under. Both live here for
     // the same reason the other pickers do: `App` owns the Back-gesture layer stack.
     let mut profile_browser_open = use_signal(|| false);
+    // Read-only Tools popover. Owned here so Back closes it with the other layers.
+    let tools_open = use_signal(|| false);
     let active_profile = use_signal(|| None::<String>);
     // None until a conversation is open. Agent hides the profile chip; Chat and empty keep it.
     let mut active_surface = use_signal(|| None::<SurfaceMode>);
@@ -231,6 +234,7 @@ fn App() -> Element {
         let mut model_browser_open = model_browser_open;
         let mut theme_browser_open = theme_browser_open;
         let mut profile_browser_open = profile_browser_open;
+        let mut tools_open = tools_open;
         let mut palette_dismissed = palette_dismissed;
         back_nav::install(move || {
             // Innermost first: the palette hovers over the input, a picker sits on top of the
@@ -243,6 +247,8 @@ fn App() -> Element {
                 theme_browser_open.set(false);
             } else if profile_browser_open() {
                 profile_browser_open.set(false);
+            } else if tools_open() {
+                tools_open.set(false);
             } else if !sidebar_collapsed() && is_narrow() {
                 sidebar_collapsed.set(true);
             } else if view() != "chat" {
@@ -257,6 +263,7 @@ fn App() -> Element {
             model_browser_open(),
             theme_browser_open(),
             profile_browser_open(),
+            tools_open(),
             sidebar_is_a_layer(),
             view() != "chat",
         ]
@@ -318,6 +325,11 @@ fn App() -> Element {
                     }
                     nav {
                         class: "nav",
+                        ToolsPopover {
+                            api_base: base.clone(),
+                            active_conv_id,
+                            open: tools_open,
+                        }
                         IncognitoToggle { on: incognito }
                         button { class: "{chat_cls}", onclick: move |_| view.set("chat"), "Chat" }
                         button { class: "{status_cls}", onclick: move |_| view.set("status"), "Status" }

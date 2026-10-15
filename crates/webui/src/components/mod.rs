@@ -3,6 +3,7 @@ pub mod chat;
 mod chat_submission;
 mod conversation_row;
 pub mod dashboard;
+pub mod grants_popover;
 pub mod incognito;
 pub mod markdown;
 pub mod mcp_panel;

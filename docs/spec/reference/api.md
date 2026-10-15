@@ -10,7 +10,8 @@ share everything.
               │  /api/status   /api/models (+ POST select)   /api/catalog   │
               │  /api/reactions   /api/vault   /api/chat (+ stream)         │
               │  /api/conversations   /api/conversations/{id} (GET/PATCH)   │
-              │  /api/conversations/{id}/approvals   POST /api/approvals/{id}/resolve │
+              │  /api/conversations/{id}/grants (read-only)                 │
+              │  /api/conversations/{id}/approvals   POST .../resolve       │
               │  /api/goals  /api/goals/{id}/stream  (goal sessions)        │
               └───────────────┬───────────────────────────┬────────────────┘
                               │                            │
@@ -131,6 +132,13 @@ conversation header (`[{id,title,created_at}]`, newest first), and **`GET /api/c
 returns one conversation's full message history (`{"messages":[…]}`; `404` if it doesn't exist).
 **`PATCH /api/conversations/{id}`** with `{"title": "..."}` renames a conversation (`200` on success,
 `404` if it doesn't exist, `503` if chat is disabled).
+
+**`GET /api/conversations/{id}/grants`** is read-only. It returns the effective tool, MCP, and zone
+grants for that conversation's agent and session. `agent` is the process `main-agent` grant.
+`session` is the named profile's stored grant, and it is empty when no profile is set — an unnamed
+header is not a grant of nothing. `effective` is `session` when a profile is named, otherwise
+`agent`. `callable` lists connected tools that the effective grant permits. `404` if the
+conversation does not exist, `503` if chat is disabled. There is no revoke on this route.
 
 > **Since S5′ these are *lenses*, not separate stores.** Chats and goal sessions live in one
 > converged `Session` store, so `/api/conversations` is the **chat lens** — and it therefore lists

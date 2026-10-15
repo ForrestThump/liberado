@@ -4,7 +4,7 @@
     "proven_invariant": 65,
     "local_failure": 0,
     "process_fatal": 46,
-    "files_scanned": 564,
+    "files_scanned": 593,
     "files_with_unwraps": 49
   },
   "files": {
@@ -466,8 +466,8 @@
           "line": 19,
           "column": 16,
           "method": "expect",
-          "snippet": "serde_norway::to_string(frontmatter).expect(\"frontmatter serializes to YAML\")",
-          "receiver": "serde_norway::to_string(frontmatter)",
+          "snippet": "serde_yaml::to_string(frontmatter).expect(\"frontmatter serializes to YAML\")",
+          "receiver": "serde_yaml::to_string(frontmatter)",
           "context": "render_noteString",
           "classification": "process_fatal",
           "reason": "production path unwrap requiring conversion to Result or waiver"
@@ -501,7 +501,7 @@
       "occurrences": [
         {
           "file": "crates/common/src/proposal.rs",
-          "line": 363,
+          "line": 362,
           "column": 23,
           "method": "expect",
           "snippet": "<Hmac<Sha256> as Mac>::new_from_slice(&self.key)\n            .expect(\"HMAC accepts a key of any length\")",
@@ -512,7 +512,7 @@
         },
         {
           "file": "crates/common/src/proposal.rs",
-          "line": 371,
+          "line": 370,
           "column": 27,
           "method": "expect",
           "snippet": "serde_json::to_vec(&proposal.proposed_action)\n            .expect(\"ProposedAction serializes to JSON\")",
@@ -523,7 +523,7 @@
         },
         {
           "file": "crates/common/src/proposal.rs",
-          "line": 379,
+          "line": 378,
           "column": 28,
           "method": "expect",
           "snippet": "serde_json::to_vec(cap).expect(\"Capability serializes to JSON\")",
@@ -534,7 +534,7 @@
         },
         {
           "file": "crates/common/src/proposal.rs",
-          "line": 423,
+          "line": 422,
           "column": 9,
           "method": "expect",
           "snippet": "write!(s, \"{b:02x}\").expect(\"writing to a String cannot fail\")",
@@ -765,7 +765,7 @@
       "occurrences": [
         {
           "file": "crates/markdown/src/lib.rs",
-          "line": 137,
+          "line": 140,
           "column": 17,
           "method": "unwrap",
           "snippet": "trimmed.strip_prefix(\"### \").unwrap()",
@@ -776,7 +776,7 @@
         },
         {
           "file": "crates/markdown/src/lib.rs",
-          "line": 144,
+          "line": 147,
           "column": 17,
           "method": "unwrap",
           "snippet": "trimmed.strip_prefix(\"## \").unwrap()",
@@ -787,7 +787,7 @@
         },
         {
           "file": "crates/markdown/src/lib.rs",
-          "line": 151,
+          "line": 154,
           "column": 17,
           "method": "unwrap",
           "snippet": "trimmed.strip_prefix(\"# \").unwrap()",

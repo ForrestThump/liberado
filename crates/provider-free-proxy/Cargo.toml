@@ -10,6 +10,7 @@ repository.workspace = true
 
 [dependencies]
 async-trait = { workspace = true }
+liberado-common = { workspace = true }
 axum = { version = "0.8", features = ["json"] }
 regex = { workspace = true }
 reqwest = { workspace = true }

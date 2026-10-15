@@ -19,6 +19,13 @@ cargo-vet before any job may compile a build script or procedural macro.
    entries, and the cargo-vet exemptions together.
 4. Run `just dependency-security` and request the CODEOWNER review.
 
+`deny.toml` allows the build script `rustls@0.23.46`. The vet exemption
+in `supply-chain/config.toml` names the same version. 0.23.46 is the
+2026-10-14 security release. It replaces 0.23.45, which cargo-deny
+rejects for the unauthenticated ServerHello key-exchange downgrade.
+The build script is the same file as in 0.23.45. The exemption is
+still debt, not an audit.
+
 GitHub Actions use full commit SHAs. Dependabot proposes Action SHA changes.
 `turbovault*` and `turbomcp*` are git+tag pins on the public ForrestThump forks
 (`tag = "liberado-2026-08-27"`). `Cargo.lock` records the resolved commit SHA.
