@@ -43,10 +43,10 @@ pub use model::{
     ConcurrencyTuning, Config, ConfigBuilder, ContextTuning, CronDeliveryTuning, CronSchedule,
     DispatchTuning, EnterKey, Grant, HookConfig, MainAgentConfig, MaintenanceTuning, McpConfig,
     McpPoolingTuning, McpTransport, ModelCompactionSettings, Policy, PoolConfig, ProjectConfig,
-    ProviderFallback, ProviderProfile, RoleOverride, ShepherdAuthConfig, ShepherdConfig,
-    ShepherdProjectConfig, ShepherdReviewConfig, SubagentIsolation, TelegramApprovalsTuning,
-    ToolImpact, Topology, Tuning, VaultRemindersConfig, WebUiConfig, ZonePolicy,
-    managed_binary_path, resolve_declared_zone,
+    ProviderFallback, ProviderProfile, RoleOverride, SessionProfile, ShepherdAuthConfig,
+    ShepherdConfig, ShepherdProjectConfig, ShepherdReviewConfig, SubagentIsolation,
+    TelegramApprovalsTuning, ToolImpact, Topology, Tuning, VaultRemindersConfig, WebUiConfig,
+    ZonePolicy, managed_binary_path, resolve_declared_zone,
 };
 pub use source::{ConfigLoadError, ConfigSource};
 pub use validation::validate_merged_config;

@@ -2,7 +2,7 @@
 
 **Status**: Resolves Tier-3 Decision 14 (single source of truth for config / topology). Actionable.
 **Owner**: Shiloh Mangus
-**Last Updated**: September 21, 2026
+**Last Updated**: October 13, 2026
 **Related**:
 - `liberado-architecture-decisions.md` (Decision 14; Decision 10 secrets; Decision 4 policy)
 - Every companion spec contributes tunables (their "Tunables — single source of truth" tables)
@@ -86,6 +86,8 @@ before anything starts. Examples of what it rejects:
 - **Duplicate ownership** of a setting across files.
 - Unknown keys in `[main_agent]`, including top-level keys placed below that table header.
 - Out-of-range tunables (e.g. `MAX_CONCURRENT_SUBAGENTS = 0`).
+- An enabled `[[session_profiles]]` `provider` that is blank, names no `[[providers]]` row, or
+  names a row whose `base_url` or `api_key_env` is empty. See §4.4.
 
 ### 4.1 Shepherd review validation
 
@@ -150,6 +152,32 @@ runtime field. Covered today:
 | `[coder.hashline].enabled` | hashline edits stay off |
 
 Extend that table one field at a time. Do not add another config framework.
+
+## 4.4 Session profile provider
+
+An enabled `[[session_profiles]]` entry may name the backend that receives its model:
+
+```toml
+[[session_profiles]]
+name = "dogfood"
+model = "deepseek/deepseek-v4-flash"
+provider = "openrouter"   # a [[providers]] name
+```
+
+`provider` is optional. Omit it and the slug goes to `topology.provider` (the daemon default).
+The id is read from the profile on every turn. It is not copied onto the session grant, so an
+edit applies to sessions that already pinned `model`. Restart the daemon after changing
+`topology.toml`.
+
+Load fails for the cases in §4. Disabled profiles are drafts and skip the check.
+
+An unset API-key environment variable does not fail load. Validation does not read the process
+environment, and a missing key on the default provider already boots the daemon watch-only.
+Bootstrap warns. A turn on that profile fails and names the missing variable. The slug stays off
+the default backend.
+
+A profile that names a provider, including the daemon default, gets its own client when that key
+is set. Only an omitted `provider` shares the face client.
 
 ## 5. Where the Tunables Come From
 
