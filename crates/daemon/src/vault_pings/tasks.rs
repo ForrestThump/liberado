@@ -1,13 +1,16 @@
 use std::cmp::Ordering;
+use std::fs;
 use std::path::Path;
 
 use chrono::{NaiveDate, NaiveTime};
+use turbovault_core::{TaskItem, TaskPriority, TaskStatus};
+use turbovault_parser::parse_tasks;
+use turbovault_plugin_tasks::TasksConfig;
 
 use super::date::parse_ymd;
 use super::walk::markdown_notes;
 
-#[path = "task_dedupe.rs"]
-mod dedupe;
+const OBSIDIAN_TASKS_DATA_PATH: &str = ".obsidian/plugins/obsidian-tasks-plugin/data.json";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct OpenTask {
@@ -21,110 +24,181 @@ pub(crate) struct OpenTask {
     pub(crate) in_progress: bool,
     pub(crate) text: String,
     pub(crate) path: String,
-    /// `*(path)*` and `[[path]]` notes named on this line. Used only to collapse copies.
-    backrefs: Vec<String>,
 }
 
 pub(crate) fn task_ping_message(root: &Path, limit: u32, today: NaiveDate) -> String {
+    let config = load_tasks_config(root);
     let mut tasks = Vec::new();
     for (rel, text) in markdown_notes(root) {
-        collect_tasks(&rel, &text, today, &mut tasks);
+        collect_tasks(&rel, &text, today, &config, &mut tasks);
     }
-    // Review notes paste the same open line. Collapse those copies first, then rank and limit.
-    let mut tasks = dedupe::collapse_copies(tasks);
     tasks.sort_by(task_rank);
     render_tasks(&tasks, limit, today)
 }
 
-fn collect_tasks(rel: &str, text: &str, today: NaiveDate, out: &mut Vec<OpenTask>) {
-    for line in text.lines() {
-        let Some(mut task) = parse_task_line(line) else {
-            continue;
-        };
-        if !task_is_listed(&task, today) {
+fn collect_tasks(
+    rel: &str,
+    text: &str,
+    today: NaiveDate,
+    config: &TasksConfig,
+    out: &mut Vec<OpenTask>,
+) {
+    let source_lines = task_source_lines(text);
+    for (index, task) in parse_tasks_for_jobs(text).into_iter().enumerate() {
+        if !config.accepts(&task) || !task.status.is_open() {
             continue;
         }
-        task.path = rel.to_string();
-        task.backrefs = dedupe::note_backrefs(line);
-        out.push(task);
+        let text = config.display_text(&task);
+        if text.trim().is_empty() {
+            continue;
+        }
+        let start = task.start_date;
+        if matches!(start, Some(date) if date > today) {
+            continue;
+        }
+        let line = source_lines.get(index).copied().unwrap_or_default();
+        let due_at = clock_after(line, '📅');
+        let scheduled_at = clock_after(line, '⏳');
+        out.push(OpenTask {
+            priority: task_priority(task.priority),
+            due: task.due_date,
+            due_at,
+            scheduled: task.scheduled_date,
+            scheduled_at,
+            start,
+            recurrence: task.recurrence.clone(),
+            in_progress: task.status == TaskStatus::InProgress,
+            text,
+            path: rel.to_string(),
+        });
     }
 }
 
-pub(crate) fn parse_task_line(line: &str) -> Option<OpenTask> {
-    let rest = line.trim().strip_prefix("- [")?;
-    let (mark, body) = rest.split_once(']')?;
-    let state = match mark {
-        " " => false,
-        "/" => true,
-        _ => return None,
+pub(super) fn load_tasks_config(root: &Path) -> TasksConfig {
+    let path = root.join(OBSIDIAN_TASKS_DATA_PATH);
+    let Ok(bytes) = fs::read(path) else {
+        return TasksConfig::default();
     };
-    let body = body.trim();
-    if body.is_empty() {
+    TasksConfig::from_obsidian_data(&bytes).unwrap_or_default()
+}
+
+pub(super) fn parse_tasks_for_jobs(text: &str) -> Vec<TaskItem> {
+    let normalized = normalize_task_times_for_parser(text);
+    parse_tasks(&normalized)
+}
+
+fn normalize_task_times_for_parser(text: &str) -> String {
+    text.lines()
+        .map(|line| {
+            if is_task_line(line.trim_start()) {
+                normalize_task_line_for_parser(line)
+            } else {
+                line.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn normalize_task_line_for_parser(line: &str) -> String {
+    let mut out = Vec::new();
+    let parts: Vec<&str> = line.split_whitespace().collect();
+    let mut index = 0;
+    while index < parts.len() {
+        let token = parts[index];
+        out.push(token.to_string());
+        if is_date_marker(token)
+            && let Some((next, rest)) = date_with_optional_clock(&parts, index + 1)
+        {
+            out.push(next.to_string());
+            index = rest;
+            continue;
+        }
+        index += 1;
+    }
+    out.join(" ")
+}
+
+fn is_date_marker(token: &str) -> bool {
+    matches!(token, "📅" | "⏳" | "🛫" | "✅" | "❌" | "➕")
+}
+
+fn date_with_optional_clock<'a>(parts: &'a [&str], index: usize) -> Option<(&'a str, usize)> {
+    let date_token = *parts.get(index)?;
+    if let Some((date, clock)) = date_token.split_once('T')
+        && parse_ymd(date).is_some()
+        && parse_clock(clock).is_some()
+    {
+        return Some((date, index + 1));
+    }
+    if parse_ymd(date_token).is_none() {
         return None;
     }
-    let due = mark_after(body, '📅');
-    let scheduled = mark_after(body, '⏳');
-    Some(OpenTask {
-        priority: task_priority(body),
-        due: due.map(|mark| mark.date),
-        due_at: due.and_then(|mark| mark.clock),
-        scheduled: scheduled.map(|mark| mark.date),
-        scheduled_at: scheduled.and_then(|mark| mark.clock),
-        start: mark_after(body, '🛫').map(|mark| mark.date),
-        recurrence: recurrence_text(body),
-        in_progress: state,
-        text: body.to_string(),
-        path: String::new(),
-        backrefs: Vec::new(),
-    })
+    if let Some(clock) = parts.get(index + 1)
+        && parse_clock(clock).is_some()
+    {
+        return Some((date_token, index + 2));
+    }
+    Some((date_token, index + 1))
 }
 
-fn task_is_listed(task: &OpenTask, today: NaiveDate) -> bool {
-    !matches!(task.start, Some(start) if start > today)
+fn task_source_lines(text: &str) -> Vec<&str> {
+    text.lines()
+        .filter(|line| is_task_line(line.trim_start()))
+        .collect()
 }
 
-fn task_priority(line: &str) -> u8 {
-    if line.contains('🔺') {
-        4
-    } else if line.contains('⏫') {
-        3
-    } else if line.contains('🔼') {
-        2
-    } else if line.contains('🔽') {
-        0
-    } else {
-        1
+fn is_task_line(line: &str) -> bool {
+    line.starts_with("- [")
+        || line.starts_with("* [")
+        || line.starts_with("+ [")
+        || starts_with_ordered_task(line)
+}
+
+fn starts_with_ordered_task(line: &str) -> bool {
+    let mut chars = line.chars().peekable();
+    let mut saw_digit = false;
+    while matches!(chars.peek(), Some(ch) if ch.is_ascii_digit()) {
+        saw_digit = true;
+        chars.next();
+    }
+    if !saw_digit {
+        return false;
+    }
+    matches!(chars.next(), Some('.') | Some(')'))
+        && matches!(chars.next(), Some(' '))
+        && matches!(chars.next(), Some('['))
+}
+
+fn task_priority(priority: TaskPriority) -> u8 {
+    match priority {
+        TaskPriority::Highest => 5,
+        TaskPriority::High => 4,
+        TaskPriority::Medium => 3,
+        TaskPriority::Normal => 2,
+        TaskPriority::Low => 1,
+        TaskPriority::Lowest => 0,
     }
 }
 
-#[derive(Clone, Copy)]
-struct Mark {
-    date: NaiveDate,
-    clock: Option<NaiveTime>,
-}
-
-/// Date after `emoji`, plus a clock when the value is `YYYY-MM-DD HH:MM` or
+/// Clock after `emoji` when the value is `YYYY-MM-DD HH:MM` or
 /// `YYYY-MM-DDTHH:MM`. Seconds are ignored. A later word that is not a clock
 /// stays off the label.
-fn mark_after(line: &str, emoji: char) -> Option<Mark> {
+fn clock_after(line: &str, emoji: char) -> Option<NaiveTime> {
     let rest = line.split(emoji).nth(1)?;
     let mut parts = rest.split_whitespace();
     let token = parts.next()?;
-    if let Some(mark) = iso_mark(token) {
-        return Some(mark);
+    if let Some(clock) = iso_clock(token) {
+        return Some(clock);
     }
-    Some(Mark {
-        date: parse_ymd(token)?,
-        clock: parts.next().and_then(parse_clock),
-    })
+    let _date = parse_ymd(token)?;
+    parts.next().and_then(parse_clock)
 }
 
-fn iso_mark(token: &str) -> Option<Mark> {
+fn iso_clock(token: &str) -> Option<NaiveTime> {
     let (date, clock) = token.split_once('T')?;
-    Some(Mark {
-        date: parse_ymd(date)?,
-        clock: Some(parse_clock(clock)?),
-    })
+    let _date = parse_ymd(date)?;
+    parse_clock(clock)
 }
 
 fn parse_clock(value: &str) -> Option<NaiveTime> {
@@ -137,23 +211,6 @@ fn parse_clock(value: &str) -> Option<NaiveTime> {
         return None;
     }
     NaiveTime::from_hms_opt(hour.parse().ok()?, minute.parse().ok()?, 0)
-}
-
-fn recurrence_text(line: &str) -> Option<String> {
-    let rest = line.split('🔁').nth(1)?.trim();
-    if rest.is_empty() {
-        return None;
-    }
-    let end = rest.find(['📅', '⏳', '🛫', '✅', '❌', '➕', '⏫', '🔼', '🔽', '🔺']);
-    let text = match end {
-        Some(index) => rest[..index].trim(),
-        None => rest,
-    };
-    if text.is_empty() {
-        None
-    } else {
-        Some(text.to_string())
-    }
 }
 
 fn task_rank(left: &OpenTask, right: &OpenTask) -> Ordering {

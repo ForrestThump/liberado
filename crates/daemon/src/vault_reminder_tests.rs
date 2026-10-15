@@ -42,6 +42,14 @@ fn run(
     )
 }
 
+fn write_tasks_data(root: &Path, body: &str) {
+    let path = root.join(".obsidian/plugins/obsidian-tasks-plugin/data.json");
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).unwrap();
+    }
+    std::fs::write(path, body).unwrap();
+}
+
 #[test]
 fn remind_markers_accept_the_documented_forms_and_the_rightmost_wins() {
     assert!(remind_opt_in("#remind"));
@@ -113,6 +121,27 @@ fn due_wins_over_a_scheduled_time_and_a_date_only_due_does_not_fall_through() {
     let message = run(root.path(), at(22, 0), enabled(), &state).expect("due minute");
     assert!(message.contains("evening"), "{message}");
     assert!(!message.contains("digest"), "{message}");
+}
+
+#[test]
+fn tasks_global_filter_applies_to_the_minute_tick() {
+    let root = tempfile::tempdir().unwrap();
+    let state = root.path().join("fires.json");
+    write_tasks_data(
+        root.path(),
+        r##"{"globalFilter":"#task","removeGlobalFilter":false}"##,
+    );
+    std::fs::write(
+        root.path().join("Home.md"),
+        "\
+- [ ] with tag #task #remind 📅 2026-09-29 21:00
+- [ ] without tag #remind 📅 2026-09-29 21:00
+",
+    )
+    .unwrap();
+    let message = run(root.path(), at(21, 0), enabled(), &state).expect("fires");
+    assert!(message.contains("with tag"), "{message}");
+    assert!(!message.contains("without tag"), "{message}");
 }
 
 #[test]
