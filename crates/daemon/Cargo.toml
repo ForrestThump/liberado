@@ -15,6 +15,9 @@ glob = { workspace = true }
 liberado-config = { workspace = true }
 liberado-notify = { workspace = true }
 liberado-vault = { workspace = true }
+turbovault-core = { workspace = true }
+turbovault-parser = { workspace = true }
+turbovault-plugin-tasks = { workspace = true }
 liberado-dispatcher = { workspace = true }
 liberado-orchestrator = { workspace = true }
 liberado-session = { workspace = true }

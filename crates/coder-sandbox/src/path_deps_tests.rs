@@ -36,10 +36,11 @@ fn the_real_root_manifest_pins_forks_by_git_tag_not_path() {
         "turbovault/turbomcp must be git+tag, not path deps; got {roots:?}"
     );
     assert!(
-        manifest.contains("tag = \"liberado-2026-08-27\"")
+        manifest.contains("tag = \"liberado-2026-10-15\"")
+            && manifest.contains("tag = \"liberado-2026-08-27\"")
             && manifest.contains("https://github.com/ForrestThump/turbovault")
             && manifest.contains("https://github.com/ForrestThump/turbomcp"),
-        "root manifest must pin ForrestThump forks at liberado-2026-08-27"
+        "root manifest must pin turbovault at liberado-2026-10-15 and turbomcp at liberado-2026-08-27"
     );
 }
 

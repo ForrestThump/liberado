@@ -218,6 +218,9 @@ A task or event also needs its own `#remind` tag, or `remind` / `reminder` set t
 `true`, `yes`, `y`, `1`, or `on`. The rightmost marker wins. The tick matches a clock
 time in `topology.timezone`. A date with no time stays on `task-ping`. A habit such as
 tuesday-trash can retire once the vault task carries `#remind`.
+Task reminders use the same TurboVault `parse_tasks` + Obsidian Tasks global filter
+path as `task-ping`, so a remind-marked line without the required global-filter tag
+does not fire.
 
 The vault is the list. Add a task by writing an Obsidian Tasks line in a note:
 
@@ -229,9 +232,12 @@ The vault is the list. Add a task by writing an Obsidian Tasks line in a note:
 ```
 
 A weekly review or evening debrief often pastes that same open line, with a
-`*(path)*` or `[[path]]` back to the original note. `task-ping` lists the task
-once and keeps the original note (`Life/` or `Tasks/` ahead of `Briefs/` and
-`Journal/`).
+`*(path)*` or `[[path]]` back to the original note. `task-ping` follows the
+Obsidian Tasks global filter from
+`.obsidian/plugins/obsidian-tasks-plugin/data.json` through TurboVault parsing.
+With the common `globalFilter = "#task"` setup, only the one tagged source task
+is listed; copied lines without `#task` are ignored. If `data.json` is missing
+or unreadable, no global filter is applied.
 
 Add an event as a Full Calendar note, or as a titled note under `calendar/`:
 
