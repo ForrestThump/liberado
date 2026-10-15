@@ -633,10 +633,12 @@ pub fn Chat(
                     id: "chat-messages",
                     TranscriptScroll { follow: transcript_follow, messages, sending }
                     if messages.read().is_empty() && conv_id.is_none() && !sending() && ghost_session.read().is_none() {
+                        // Grok-style centered landing: a single prompt to focus the user. The
+                        // composer lives below this block (same textarea, same submit), so the
+                        // chrome stays unified and there is only one place to wire a send.
                         div {
-                            class: "empty-state",
-                            p { "Start a conversation with Liberado." }
-                            p { "It has access to your tools." }
+                            class: "grok-chat-empty",
+                            div { class: "grok-chat-empty-prompt", "What should we explore?" }
                         }
                     }
                     MessageList { messages }
@@ -832,20 +834,65 @@ pub fn Chat(
                             },
                         }
                     }
-                    if sending() {
+                    // Composer toolbar — Grok-style strip: attach / mode-picker on the left,
+                    // mic + voice on the right of the spacer, then send (or stop while sending).
+                    div {
+                        class: "input-toolbar",
                         button {
-                            class: "stop-btn",
+                            class: "toolbar-icon-btn",
                             r#type: "button",
-                            onclick: move |_| stop_stream(),
-                            title: "Stop generating",
-                            IconStop {}
+                            title: "Attach files",
+                            "aria-label": "Attach files",
+                            crate::icons::IconAttach {}
                         }
-                    }
-                    button {
-                        class: "send-btn",
-                        r#type: "submit",
-                        disabled: sending(),
-                        "Send"
+                        button {
+                            class: "toolbar-mode-btn",
+                            r#type: "button",
+                            title: "Choose model",
+                            "aria-label": "Choose model",
+                            onclick: move |evt: MouseEvent| {
+                                evt.prevent_default();
+                                model_browser_open.set(true);
+                            },
+                            "Auto "
+                            span { class: "toolbar-mode-caret", "▾" }
+                        }
+                        div { class: "toolbar-spacer" }
+                        button {
+                            class: "toolbar-icon-btn",
+                            r#type: "button",
+                            title: "Voice mode",
+                            "aria-label": "Voice mode",
+                            crate::icons::IconMic {}
+                        }
+                        button {
+                            class: "toolbar-icon-btn",
+                            r#type: "button",
+                            title: "Dictation",
+                            "aria-label": "Dictation",
+                            crate::icons::IconVoice {}
+                        }
+                        if sending() {
+                            button {
+                                class: "send-btn stop",
+                                r#type: "button",
+                                onclick: move |evt: MouseEvent| {
+                                    evt.prevent_default();
+                                    stop_stream();
+                                },
+                                title: "Stop generating",
+                                IconStop {}
+                            }
+                        } else {
+                            button {
+                                class: "send-btn",
+                                r#type: "submit",
+                                disabled: input.read().trim().is_empty(),
+                                title: "Send",
+                                "aria-label": "Send",
+                                "↑"
+                            }
+                        }
                     }
                     }
                 }

@@ -1,7 +1,6 @@
 // WIP Dioxus scaffold — many component helpers are wired into planned features but
 // not yet called from the render tree. Allow dead code crate-wide until wiring is complete.
 #![allow(dead_code)]
-use chat_client_contract::SurfaceMode;
 use dioxus::prelude::*;
 
 mod back_nav;
@@ -12,12 +11,10 @@ mod pwa;
 mod theme;
 
 use components::chat::Chat;
-use components::dashboard::Dashboard;
 use components::incognito::IncognitoToggle;
 use components::profile_browser::ProfileChip;
 use components::profile_surface::profile_chip_visible;
-use components::sidebar::Sidebar;
-use icons::IconMenu;
+use components::sidebar::{Route, Sidebar};
 
 /// Absolute base URL of the daemon's HTTP API.
 ///
@@ -80,9 +77,6 @@ pub(crate) fn is_narrow_viewport() -> bool {
 }
 
 /// Keep `narrow` in sync with the live viewport.
-///
-/// `use_signal(is_narrow_viewport)` only samples once. A desktop load then shrinking to 375px
-/// used to leave the sidebar expanded, covering the chat, with no layout that could recover.
 #[cfg(target_arch = "wasm32")]
 fn watch_viewport_width(mut narrow: Signal<bool>) {
     use wasm_bindgen::JsCast;
@@ -137,12 +131,50 @@ mod tests {
     }
 }
 
+// ── Grok-style top bar ─────────────────────────────────────────────────────
+
+/// Top-right region in Grok's screenshot: an "agent pill" (Grok Bot) on the left and a "Private"
+/// label on the right. We reuse the incognito concept to mean the same thing — the Libre pill on
+/// the right is a derived state of `incognito`, not a separate mode.
+#[component]
+fn HeaderRightSide(
+    api_base: String,
+    route: Signal<Route>,
+    incognito: Signal<bool>,
+    list_epoch: Signal<u64>,
+) -> Element {
+    let active_label = match route() {
+        Route::AgentSession => "Liberado Bot",
+        Route::Imagine => "Liberado Imagine",
+        _ => "Liberado Bot",
+    };
+    rsx! {
+        div {
+            class: "header-right-cluster",
+            button {
+                class: "agent-pill",
+                r#type: "button",
+                title: "Open agent picker",
+                "aria-label": "Open agent picker",
+                onclick: move |_| route.set(Route::Agents),
+                span {
+                    class: "agent-pill-dot",
+                    style: "background: var(--dot-accent);",
+                    "aria-hidden": "true"
+                }
+                span { class: "agent-pill-label", "{active_label}" }
+            }
+            IncognitoToggle { on: incognito }
+        }
+    }
+}
+
 /// Header profile control. `ProfileChip` stays in this file so the PWA test can find it.
 /// An Agent surface renders nothing — the chip is a Chats concept.
 #[component]
 fn HeaderProfileChip(
     active_profile: Signal<Option<String>>,
-    active_surface: Signal<Option<SurfaceMode>>,
+    active_surface: Signal<Option<chat_client_contract::SurfaceMode>>,
     on_open: EventHandler<()>,
 ) -> Element {
     if !profile_chip_visible(active_surface()) {
@@ -153,52 +185,33 @@ fn HeaderProfileChip(
     }
 }
 
+// ── App ────────────────────────────────────────────────────────────────────
+
 #[component]
 fn App() -> Element {
     let base = api_base();
-    let mut view = use_signal(|| "chat");
+    // Default to Chat — the screenshot says Chat is the open surface. Imagine / Library /
+    // Automations / Projects / Plugins are reachable via the sidebar.
+    let route = use_signal(|| Route::Chat);
     // The active theme name, restored from the last choice. Chat writes it when `/theme set` lands.
     let theme_name = use_signal(crate::theme::saved_theme_name);
     let active_conv_id = use_signal(|| None::<String>);
     // Incognito lives up here, not in `Chat`, because it is a mode the whole window is in: the
     // header shows it, the body is tinted for it, and it has to survive a trip through the Status
-    // view and back. It always starts **off** — a privacy mode you did not switch on yourself, out
-    // of a store you forgot was there, is a mode you cannot reason about.
+    // view and back.
     let incognito = use_signal(|| false);
-    // "New Chat" as an event rather than a state change — see the button in `sidebar.rs`. Owned here
-    // because the sidebar raises it and the chat acts on it.
     let new_chat_nonce = use_signal(|| 0u64);
-    // `create_agent` finishes on the Agent Creator session, so the open id does
-    // not change. This counter is what makes the Agents shelf fetch again.
     let list_epoch = use_signal(u64::default);
-    // The `/model` and `/theme` pickers. They are opened from inside `Chat`, but they live here with
-    // every other dismissible layer, because the Back gesture needs one place that knows what is
-    // open and in what order (see the block below and `back_nav.rs`).
+    // Pickers, kept here because Chat owns where they're opened from — they're owned here so the
+    // Back-gesture layer stack stays in one place.
     let model_browser_open = use_signal(|| false);
     let theme_browser_open = use_signal(|| false);
-    // The slash palette. `Chat` reports whether it is showing (openness depends on the input text,
-    // which only Chat has) and `App` sets `dismissed` to close it — the same two-signal split any
-    // layer whose visibility is derived would need.
-    let palette_visible = use_signal(|| false);
-    // The session-profile picker, and which profile the open chat runs under. Both live here for
-    // the same reason the other pickers do: `App` owns the Back-gesture layer stack.
-    let mut profile_browser_open = use_signal(|| false);
+    let profile_browser_open = use_signal(|| false);
     let active_profile = use_signal(|| None::<String>);
-    // None until a conversation is open. Agent hides the profile chip; Chat and empty keep it.
-    let mut active_surface = use_signal(|| None::<SurfaceMode>);
-    use_effect(move || {
-        if active_conv_id.read().is_none() && active_surface.read().is_some() {
-            active_surface.set(None);
-        }
-        if !profile_chip_visible(active_surface()) && profile_browser_open() {
-            profile_browser_open.set(false);
-        }
-    });
+    let active_surface = use_signal(|| None::<chat_client_contract::SurfaceMode>);
+    let palette_visible = use_signal(|| false);
     let palette_dismissed = use_signal(|| false);
-    // `mut` because the header's menu button toggles it (see below).
-    // Default collapsed on narrow (phone-width) viewports so the sidebar doesn't cover the chat
-    // on first load — expanded by default everywhere else, matching prior behavior.
-    // Tracked as a signal so a resize across the breakpoint is not a permanent layout.
+    // Sidebar state. Tracks viewport so crossing the breakpoint re-collapses (or re-opens) it.
     let is_narrow = use_signal(is_narrow_viewport);
     #[cfg(target_arch = "wasm32")]
     use_hook(move || watch_viewport_width(is_narrow));
@@ -219,14 +232,10 @@ fn App() -> Element {
     // Swipe-back on a phone should close whatever is on top, not leave the app. `back_nav` keeps one
     // history entry per open layer; these two blocks are the only place that says what a "layer" is,
     // so the count and the closer cannot disagree about it.
-    //
-    // The sidebar counts only where it is an overlay. On a wide screen it is a persistent panel that
-    // starts open, which would mean a guard entry from first paint and a Back press that collapses
-    // the conversation list for no reason — the same distinction `collapse_after_pick` draws.
     let sidebar_is_a_layer = move || !sidebar_collapsed() && is_narrow();
 
     use_hook(|| {
-        let mut view = view;
+        let mut route = route;
         let mut sidebar_collapsed = sidebar_collapsed;
         let mut model_browser_open = model_browser_open;
         let mut theme_browser_open = theme_browser_open;
@@ -245,8 +254,8 @@ fn App() -> Element {
                 profile_browser_open.set(false);
             } else if !sidebar_collapsed() && is_narrow() {
                 sidebar_collapsed.set(true);
-            } else if view() != "chat" {
-                view.set("chat");
+            } else if route() != Route::Chat {
+                route.set(Route::Chat);
             }
         });
     });
@@ -258,7 +267,7 @@ fn App() -> Element {
             theme_browser_open(),
             profile_browser_open(),
             sidebar_is_a_layer(),
-            view() != "chat",
+            route() != Route::Chat,
         ]
         .iter()
         .filter(|open| **open)
@@ -266,16 +275,8 @@ fn App() -> Element {
     });
     use_effect(move || back_nav::sync_depth(back_depth()));
 
-    let chat_cls = if view() == "chat" {
-        "nav-btn active"
-    } else {
-        "nav-btn"
-    };
-    let status_cls = if view() == "status" {
-        "nav-btn active"
-    } else {
-        "nav-btn"
-    };
+    // Top-right cluster is always present — the Grok layout puts a single row up there with the
+    // agent pill + private pill, and the open route is reflected through the sidebar's primary nav.
 
     rsx! {
         style { {crate::theme::theme_css_vars(&crate::theme::theme_by_name(&theme_name()))} }
@@ -284,50 +285,35 @@ fn App() -> Element {
         div {
             class: "app",
             header {
-                class: "app-header",
+                class: "app-header grok-header",
                 div {
-                    class: "app-header-inner",
-                    div {
-                        class: "brand-group",
-                        // The sidebar's only always-visible control. It lives here rather than in a
-                        // collapsed rail so that hiding the conversation list gives the full width
-                        // back to the chat.
-                        button {
-                            class: "menu-btn",
-                            onclick: move |_| {
-                                let now = sidebar_collapsed();
-                                sidebar_collapsed.set(!now);
-                            },
-                            title: if sidebar_collapsed() { "Show conversations" } else { "Hide conversations" },
-                            IconMenu {}
-                        }
-                        span { class: "brand", "Liberado" }
-                        // Profile chip sits here so it does not take a row out of the transcript.
-                        // Hidden on an Agent surface — the profile is fixed for that session.
-                        HeaderProfileChip {
-                            active_profile,
-                            active_surface,
-                            on_open: move |_| {
-                                // The picker is rendered inside `Chat`. Switching first means a
-                                // click from Status still opens it, rather than setting a flag on a
-                                // view that is not mounted.
-                                view.set("chat");
-                                profile_browser_open.set(true);
-                            },
-                        }
+                    class: "grok-header-inner",
+                    button {
+                        class: "menu-btn",
+                        onclick: move |_| {
+                            let now = sidebar_collapsed();
+                            sidebar_collapsed.set(!now);
+                        },
+                        title: if sidebar_collapsed() { "Show navigation" } else { "Hide navigation" },
+                        // Reuse the menu chrome glyph.
+                        crate::icons::IconMenu {}
                     }
-                    nav {
-                        class: "nav",
-                        IncognitoToggle { on: incognito }
-                        button { class: "{chat_cls}", onclick: move |_| view.set("chat"), "Chat" }
-                        button { class: "{status_cls}", onclick: move |_| view.set("status"), "Status" }
+                    // The brand glyph sits in the header too, since the sidebar may be collapsed.
+                    span { class: "brand grok-header-brand", "Liberado" }
+                    HeaderRightSide {
+                        api_base: base.clone(),
+                        route: route,
+                        incognito: incognito,
+                        list_epoch: list_epoch,
                     }
                 }
             }
+
             div {
-                class: "app-layout",
+                class: "app-layout grok-layout",
                 Sidebar {
                     api_base: base.clone(),
+                    route: route,
                     active_conv_id,
                     collapsed: sidebar_collapsed,
                     new_chat_nonce,
@@ -335,25 +321,31 @@ fn App() -> Element {
                     list_epoch,
                 }
                 main {
-                    class: "main-content",
-                    if view() == "chat" {
-                        Chat {
-                            api_base: base.clone(),
-                            active_conv_id,
-                            theme_name,
-                            incognito,
-                            new_chat_nonce,
-                            model_browser_open,
-                            theme_browser_open,
-                            palette_dismissed,
-                            palette_visible,
-                            profile_browser_open,
-                            active_profile,
-                            active_surface,
-                            list_epoch,
-                        }
-                    } else {
-                        Dashboard { api_base: base.clone() }
+                    class: "main-content grok-main",
+                    match route() {
+                        Route::Chat | Route::ChatSession | Route::AgentSession | Route::ProjectDetail => rsx! {
+                            Chat {
+                                api_base: base.clone(),
+                                active_conv_id,
+                                theme_name,
+                                incognito,
+                                new_chat_nonce,
+                                model_browser_open,
+                                theme_browser_open,
+                                palette_dismissed,
+                                palette_visible,
+                                profile_browser_open,
+                                active_profile,
+                                active_surface,
+                                list_epoch,
+                            }
+                        },
+                        Route::Imagine => rsx! { crate::components::imagine::Imagine { api_base: base.clone() } },
+                        Route::Library => rsx! { crate::components::library::Library { api_base: base.clone() } },
+                        Route::Automations => rsx! { crate::components::automations::Automations { api_base: base.clone() } },
+                        Route::Projects => rsx! { crate::components::projects::Projects { api_base: base.clone() } },
+                        Route::Plugins => rsx! { crate::components::plugins::Plugins { api_base: base.clone() } },
+                        Route::Agents => rsx! { crate::components::imagine::Imagine { api_base: base.clone() } },
                     }
                 }
             }

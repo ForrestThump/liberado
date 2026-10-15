@@ -2394,3 +2394,644 @@ body {
     color: var(--lib-tool-err);
     font-size: 0.75rem;
 }
+
+/* -- Grok-style redesign ---------------------------------------------------
+ *
+ * The pre-existing styles above were organised around the old dashboard header + chat layout.
+ * The redesign commits to a Grok-like vertical rail on the left and a centered chat canvas with
+ * a thin composer toolbar. The selectors below are deliberately namespaced under `.app-layout`
+ * and `.grok-*` so they cannot accidentally override an old rule that still matters for the chat
+ * transcript itself. New tokens (`--dot-*`, `--grok-*`) live alongside the old `--lib-*` palette.
+ */
+
+:root {
+    --dot-accent: #f5a623;
+    --dot-orange: #f47b53;
+    --dot-green: #4caf50;
+    --dot-cyan: #3aa6c0;
+    --dot-neutral: #8c8c8c;
+
+    --grok-rail-bg: #0a0a0a;
+    --grok-rail-text: #b0b0b8;
+    --grok-rail-text-muted: #6e6e76;
+    --grok-rail-hover: #181818;
+    --grok-rail-active: #1f1f1f;
+    --grok-rail-border: #1a1a1a;
+    --grok-row-gap: 0.25rem;
+    --grok-section-gap: 1.25rem;
+    --grok-page-bg: #0a0a0a;
+    --grok-prompt: #ededed;
+    --grok-subtitle: #7a7a82;
+    --grok-card-bg: #141414;
+    --grok-card-border: #1f1f1f;
+}
+
+/* -- Top header in Grok layout ---------------------------------------------- */
+
+.grok-header {
+    border-bottom: 1px solid var(--grok-rail-border);
+}
+
+.grok-header-inner {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    height: 3rem;
+    padding: 0 1rem;
+    width: 100%;
+}
+
+.grok-header-brand {
+    font-size: 1rem;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    color: var(--lib-chat-assistant-text, #ededed);
+    flex: 1;
+    margin-left: 0.5rem;
+}
+
+.header-right-cluster {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex-shrink: 0;
+}
+
+.agent-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.3rem 0.7rem;
+    border: 1px solid var(--grok-rail-border);
+    border-radius: 999px;
+    background: var(--grok-rail-active);
+    color: var(--grok-rail-text);
+    font-family: inherit;
+    font-size: 0.8125rem;
+    cursor: pointer;
+    transition: background 0.12s, border-color 0.12s;
+}
+
+.agent-pill:hover {
+    background: var(--grok-rail-hover);
+    border-color: var(--lib-accent, #f5a623);
+}
+
+.agent-pill-dot {
+    display: inline-block;
+    width: 0.5rem;
+    height: 0.5rem;
+    border-radius: 999px;
+    background: var(--dot-accent);
+}
+
+.agent-pill-label {
+    font-weight: 500;
+}
+
+/* -- Sidebar (vertical rail) ------------------------------------------------ */
+
+.grok-layout .sidebar {
+    width: 260px;
+    flex-shrink: 0;
+    background: var(--grok-rail-bg);
+    color: var(--grok-rail-text);
+    border-right: 1px solid var(--grok-rail-border);
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    overflow: hidden;
+    font-size: 0.8125rem;
+}
+
+.sidebar-brand {
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+    padding: 0.5rem 0.75rem;
+    border-bottom: 1px solid var(--grok-rail-border);
+    flex-shrink: 0;
+}
+
+.sidebar-brand-btn {
+    background: none;
+    border: none;
+    padding: 0.25rem;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 0.5rem;
+    color: var(--grok-rail-text);
+    transition: background 0.12s;
+}
+
+.sidebar-brand-btn:hover {
+    background: var(--grok-rail-hover);
+}
+
+.sidebar-brand-glyph {
+    width: 1.25rem;
+    height: 1.25rem;
+}
+
+.sidebar-icon-btn {
+    background: none;
+    border: none;
+    width: 2rem;
+    height: 2rem;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 0.5rem;
+    color: var(--grok-rail-text-muted);
+    transition: background 0.12s, color 0.12s;
+}
+
+.sidebar-icon-btn:hover {
+    background: var(--grok-rail-hover);
+    color: var(--grok-rail-text);
+}
+
+.sidebar-search {
+    padding: 0.5rem 0.75rem;
+    flex-shrink: 0;
+}
+
+.sidebar-search-input {
+    width: 100%;
+    padding: 0.4rem 0.6rem;
+    border: 1px solid var(--grok-rail-border);
+    border-radius: 0.5rem;
+    background: var(--grok-rail-active);
+    color: var(--grok-rail-text);
+    font-family: inherit;
+    font-size: 0.8125rem;
+    outline: none;
+}
+
+.sidebar-search-input:focus {
+    border-color: var(--lib-accent, #f5a623);
+}
+
+.sidebar-search-input::placeholder {
+    color: var(--grok-rail-text-muted);
+}
+
+/* -- Primary nav (Chat, Imagine, Library, Automations) ---------------------- */
+
+.sidebar-nav {
+    display: flex;
+    flex-direction: column;
+    gap: 0.125rem;
+    padding: 0.5rem 0.5rem;
+    border-bottom: 1px solid var(--grok-rail-border);
+    flex-shrink: 0;
+}
+
+.sidebar-nav-row {
+    display: flex;
+    align-items: center;
+    gap: 0.65rem;
+    width: 100%;
+    padding: 0.45rem 0.65rem;
+    border: none;
+    background: transparent;
+    color: var(--grok-rail-text);
+    font-family: inherit;
+    font-size: 0.8125rem;
+    text-align: left;
+    cursor: pointer;
+    border-radius: 0.5rem;
+    transition: background 0.12s, color 0.12s;
+}
+
+.sidebar-nav-row:hover {
+    background: var(--grok-rail-hover);
+}
+
+.sidebar-nav-row.active {
+    background: var(--grok-rail-active);
+    color: var(--grok-prompt);
+}
+
+.sidebar-nav-row .sidebar-icon {
+    flex-shrink: 0;
+    color: var(--grok-rail-text);
+}
+
+.sidebar-nav-row.active .sidebar-icon {
+    color: var(--grok-prompt);
+}
+
+.sidebar-nav-label {
+    flex: 1;
+    font-weight: 500;
+}
+
+/* -- Body scroll container ------------------------------------------------ */
+
+.sidebar-scroll {
+    flex: 1;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: var(--grok-section-gap);
+    padding: 0.75rem 0;
+}
+
+.sidebar-section {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+}
+
+.sidebar-section-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.25rem 0.75rem 0.25rem 0.75rem;
+    flex-shrink: 0;
+}
+
+.sidebar-section-toggle {
+    background: none;
+    border: none;
+    padding: 0;
+    cursor: pointer;
+    color: var(--grok-rail-text-muted);
+    font-family: inherit;
+    font-size: 0.6875rem;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+}
+
+.sidebar-section-toggle:hover {
+    color: var(--grok-rail-text);
+}
+
+.sidebar-section-label {
+    font-size: 0.6875rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--grok-rail-text-muted);
+}
+
+.sidebar-section-add {
+    background: transparent;
+    border: none;
+    color: var(--grok-rail-text-muted);
+    font-family: inherit;
+    font-size: 1.125rem;
+    line-height: 1;
+    cursor: pointer;
+    padding: 0 0.25rem;
+}
+
+.sidebar-section-add:hover {
+    color: var(--grok-rail-text);
+}
+
+.sidebar-subheader {
+    padding: 0.25rem 0.75rem 0.125rem 0.75rem;
+    color: var(--grok-rail-text-muted);
+    font-size: 0.6875rem;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+}
+
+.grok-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+}
+
+.grok-row {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.grok-row-btn {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.35rem 0.75rem;
+    border: none;
+    background: transparent;
+    color: var(--grok-rail-text);
+    font-family: inherit;
+    font-size: 0.8125rem;
+    cursor: pointer;
+    text-align: left;
+    border-radius: 0.5rem;
+    transition: background 0.12s, color 0.12s;
+}
+
+.grok-row-btn:hover {
+    background: var(--grok-rail-hover);
+    color: var(--grok-prompt);
+}
+
+.grok-row-active .grok-row-btn,
+.grok-row-active .grok-row-btn:hover {
+    background: var(--grok-rail-active);
+    color: var(--grok-prompt);
+}
+
+.grok-row-dot {
+    width: 0.45rem;
+    height: 0.45rem;
+    border-radius: 999px;
+    display: inline-block;
+    flex-shrink: 0;
+    box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.04);
+}
+
+.grok-row-title {
+    flex: 1;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.grok-row-time {
+    color: var(--grok-rail-text-muted);
+    font-size: 0.6875rem;
+    flex-shrink: 0;
+}
+
+.grok-row .sidebar-icon {
+    flex-shrink: 0;
+}
+
+/* -- Show more row (Agents catch-all) --------------------------------------- */
+
+.sidebar-show-more {
+    background: transparent;
+    border: none;
+    color: var(--grok-rail-text-muted);
+    font-family: inherit;
+    font-size: 0.75rem;
+    cursor: pointer;
+    padding: 0.25rem 0.75rem;
+    text-align: left;
+}
+
+.sidebar-show-more:hover {
+    color: var(--grok-rail-text);
+}
+
+/* -- Sidebar empty/error --------------------------------------------------- */
+
+.sidebar-empty {
+    padding: 0.25rem 0.75rem;
+    color: var(--grok-rail-text-muted);
+    font-size: 0.75rem;
+}
+
+.sidebar-error {
+    padding: 0.5rem 0.75rem;
+    border-top: 1px solid var(--grok-rail-border);
+    color: var(--grok-rail-text-muted);
+    font-size: 0.75rem;
+    flex-shrink: 0;
+}
+
+.sidebar-retry-btn {
+    margin-top: 0.4rem;
+    padding: 0.25rem 0.6rem;
+    border: 1px solid var(--grok-rail-border);
+    border-radius: 0.4rem;
+    background: transparent;
+    color: var(--grok-rail-text);
+    font-family: inherit;
+    font-size: 0.75rem;
+    cursor: pointer;
+}
+
+.sidebar-retry-btn:hover {
+    border-color: var(--lib-accent, #f5a623);
+    color: var(--grok-prompt);
+}
+
+/* On phone widths, the rail slides over the chat canvas rather than squeezing it. */
+
+@media (max-width: 768px) {
+    .grok-layout .sidebar {
+        position: absolute;
+        inset: 0;
+        z-index: 5;
+        width: 86%;
+        max-width: 320px;
+    }
+}
+
+/* -- Main canvas in Grok layout -------------------------------------------- */
+
+.grok-main {
+    flex: 1;
+    min-width: 0;
+    background: var(--grok-page-bg);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+/* Centered empty-chat landing. The prompt sits in the middle of the canvas, the composer below
+   the prompt — a calmer take than the old text-on-left layout. */
+
+.grok-chat-empty {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 1.5rem;
+    padding: 2rem;
+}
+
+.grok-chat-empty-prompt {
+    font-size: 1.5rem;
+    font-weight: 500;
+    color: var(--grok-prompt);
+    text-align: center;
+}
+
+/* The composer shell when empty. Treats the input as a big centered card, not a thin strip at the
+   bottom — the same control, just framed differently while the conversation is empty. The
+   rebalance is CSS-only; the actual input/text signals stay in `Chat`. */
+
+.grok-chat-empty-shell {
+    width: 100%;
+    max-width: 640px;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+/* -- Composer toolbar (Grok-style strip) ------------------------------------ */
+
+.input-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+    padding: 0.5rem 0.5rem 0.5rem 0.5rem;
+    margin-top: 0.25rem;
+}
+
+.toolbar-icon-btn {
+    background: transparent;
+    border: none;
+    color: var(--grok-rail-text);
+    width: 2rem;
+    height: 2rem;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 0.5rem;
+    cursor: pointer;
+    transition: background 0.12s, color 0.12s;
+}
+
+.toolbar-icon-btn:hover {
+    background: var(--grok-rail-hover);
+    color: var(--grok-prompt);
+}
+
+.toolbar-mode-btn,
+.toolbar-mode-btn-static {
+    background: transparent;
+    border: 1px solid var(--grok-rail-border);
+    color: var(--grok-rail-text);
+    font-family: inherit;
+    font-size: 0.8125rem;
+    font-weight: 500;
+    border-radius: 999px;
+    padding: 0.3rem 0.7rem;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+}
+
+.toolbar-mode-btn:hover {
+    border-color: var(--lib-accent, #f5a623);
+    color: var(--grok-prompt);
+}
+
+.toolbar-mode-caret {
+    font-size: 0.625rem;
+    line-height: 1;
+    color: var(--grok-rail-text-muted);
+}
+
+.toolbar-spacer {
+    flex: 1;
+}
+
+/* Send / Stop buttons share the rest of the toolbar's vertical baseline. The up-arrow is the
+   "send" glyph — lighter than the old word "Send", matches the icons around it. */
+
+.input-toolbar .send-btn {
+    width: 2.25rem;
+    height: 2.25rem;
+    border-radius: 999px;
+    border: none;
+    background: var(--lib-accent, #f5a623);
+    color: var(--lib-app-bg, #0a0a0a);
+    font-family: inherit;
+    font-size: 0.9375rem;
+    font-weight: 700;
+    line-height: 1;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 0.12s, opacity 0.12s;
+}
+
+.input-toolbar .send-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+
+.input-toolbar .send-btn.stop {
+    background: transparent;
+    border: 1px solid var(--grok-rail-border);
+    color: var(--grok-rail-text);
+}
+
+/* -- Generic page surfaces (Imagine, Library, Automations, Projects, Plugins) -- */
+
+.grok-page {
+    flex: 1;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+}
+
+.grok-page-empty {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    padding: 3rem 2rem;
+    gap: 0.75rem;
+}
+
+.grok-page-eyebrow {
+    color: var(--grok-rail-text-muted);
+    font-size: 0.6875rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+}
+
+.grok-page-title {
+    font-size: 1.5rem;
+    font-weight: 500;
+    color: var(--grok-prompt);
+    margin: 0;
+}
+
+.grok-page-subtitle {
+    font-size: 0.875rem;
+    color: var(--grok-subtitle);
+    max-width: 480px;
+    line-height: 1.5;
+}
+
+.grok-page-meta {
+    margin-top: 1rem;
+    font-size: 0.6875rem;
+    color: var(--grok-rail-text-muted);
+    font-family: ui-monospace, monospace;
+}
+
+.grok-page-header {
+    padding: 2rem 2rem 1rem;
+    border-bottom: 1px solid var(--grok-rail-border);
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+.grok-page-body {
+    padding: 1rem 2rem;
+    flex: 1;
+    overflow: auto;
+}
