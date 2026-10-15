@@ -40,20 +40,12 @@ pub(super) fn MessageRow(msg: ChatMsg) -> Element {
     // Streaming keeps `<think>` in assistant `content` until the close tag, and history
     // can store the same words on `reasoning`. Fold before render so the disclosure and
     // the reply do not show that text twice. User text is copied as typed.
-    let (content, reasoning_text) = if msg.role == "assistant" {
-        fold_thinking(&msg.content, msg.reasoning.as_deref())
-    } else {
-        (msg.content.clone(), None)
-    };
+    let (content, reasoning_text) = visible_reply(&msg);
     let has_reasoning = reasoning_text.is_some();
     let show = show_answer(content.is_empty(), has_steps, has_reasoning);
     let reasoning = reasoning_text.unwrap_or_default();
     let offers_copy = message_offers_copy(msg.role);
-    let copy_text = if content.is_empty() {
-        reasoning.clone()
-    } else {
-        content.clone()
-    };
+    let copy_text = copy_payload(&content, &reasoning);
     let mut copied = use_signal(|| false);
     let mut copy_nonce = use_signal(|| 0u32);
 
@@ -113,6 +105,26 @@ pub(super) fn MessageRow(msg: ChatMsg) -> Element {
                 }
             }
         }
+    }
+}
+
+/// Assistant rows fold a streamed `<think>` block out of `content`. Other roles keep the
+/// typed text and have no thinking disclosure.
+fn visible_reply(msg: &ChatMsg) -> (String, Option<String>) {
+    if msg.role == "assistant" {
+        fold_thinking(&msg.content, msg.reasoning.as_deref())
+    } else {
+        (msg.content.clone(), None)
+    }
+}
+
+/// Text the Copy control writes. An empty reply falls back to the thinking disclosure so a
+/// think-only turn still has something to copy.
+fn copy_payload(content: &str, reasoning: &str) -> String {
+    if content.is_empty() {
+        reasoning.to_string()
+    } else {
+        content.to_string()
     }
 }
 
@@ -197,11 +209,18 @@ fn selection_is_collapsed() -> bool {
 /// a tap used to do nothing. The textarea fallback runs in that case, inside the same gesture.
 #[cfg(target_arch = "wasm32")]
 pub(super) fn copy_to_clipboard(text: &str) -> bool {
-    let Some(window) = web_sys::window() else {
+    write_clipboard(web_sys::window().as_ref(), text)
+}
+
+/// Secure contexts use `navigator.clipboard`. Plain `http` uses the textarea fallback.
+/// A missing window cannot write anything.
+#[cfg(target_arch = "wasm32")]
+fn write_clipboard(window: Option<&web_sys::Window>, text: &str) -> bool {
+    let Some(window) = window else {
         return false;
     };
     if clipboard_needs_exec_command(window.is_secure_context()) {
-        return copy_via_textarea(&window, text);
+        return copy_via_textarea(window, text);
     }
     let clipboard = window.navigator().clipboard();
     // The promise resolves later. A rejection here is a permission denial, not the
