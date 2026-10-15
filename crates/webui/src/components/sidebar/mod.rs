@@ -1,8 +1,8 @@
 //! Left sidebar rail.
 //!
-//! Grok-style vertical layout with a permanent icon rail when collapsed and a full-width
-//! panel when expanded. The rail exposes the same brand/logo as the full sidebar so the user
-//! always has something to click to bring it back.
+//! Grok-style vertical layout with an icon rail when collapsed and a full panel when expanded.
+//! On a phone the collapsed rail is hidden (the header menu opens the panel as an overlay).
+//! On a desk the rail's brand mark brings the panel back. On a phone the header menu does.
 //!
 //! Sections rendered when expanded: Chat / Library / Automations primary nav, Agents (Pinned +
 //! labelled categories + Show more), Chats (recent), Projects (with `+` opening a modal), and
@@ -228,7 +228,7 @@ pub fn Sidebar(
         // expanding the panel. The top button is an expand-sidebar chevron. The rest mirror the
         // primary nav so the user can hop routes without needing 260px of canvas.
         return rsx! {
-            aside { class: "sidebar sidebar-collapsed",
+            aside { id: "sidebar", class: "sidebar sidebar-collapsed",
                 button {
                     class: "sidebar-rail-brand",
                     r#type: "button",
@@ -303,7 +303,7 @@ pub fn Sidebar(
     }
 
     rsx! {
-        aside { class: "sidebar",
+        aside { id: "sidebar", class: "sidebar",
             div {
                 class: "sidebar-brand",
                 button {

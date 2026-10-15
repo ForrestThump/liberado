@@ -16,6 +16,7 @@ use components::incognito::IncognitoToggle;
 use components::profile_browser::ProfileChip;
 use components::profile_surface::profile_chip_visible;
 use components::sidebar::{Route, Sidebar};
+use icons::IconMenu;
 
 /// Absolute base URL of the daemon's HTTP API.
 ///
@@ -54,6 +55,20 @@ fn api_base() -> String {
     }
 }
 
+/// Same cutoff as `@media (max-width: 768px)` in `styles/main.css`.
+///
+/// Inclusive on purpose: the CSS query matches a viewport of exactly 768px, and the drawer
+/// signal has to agree or the rail stays in the document while the stylesheet treats it as a phone.
+pub(crate) const NARROW_LAYOUT_MAX_PX: f64 = 768.0;
+
+/// `matchMedia` query kept beside [`NARROW_LAYOUT_MAX_PX`].
+pub(crate) const NARROW_LAYOUT_MEDIA_QUERY: &str = "(max-width: 768px)";
+
+/// `width_px` is phone-width when it is inside the CSS phone query.
+pub(crate) fn viewport_is_narrow(width_px: f64) -> bool {
+    width_px <= NARROW_LAYOUT_MAX_PX
+}
+
 /// Whether the viewport is phone-width, at the same breakpoint `main.css` uses for its layout
 /// media query. Kept in one place because two behaviours key off it: the sidebar starts collapsed
 /// here, and it re-collapses itself after you pick a conversation — but only where it is an
@@ -64,16 +79,32 @@ fn api_base() -> String {
 pub(crate) fn is_narrow_viewport() -> bool {
     #[cfg(target_arch = "wasm32")]
     {
-        const NARROW_MAX_PX: f64 = 768.0;
         web_sys::window()
             .and_then(|w| w.inner_width().ok())
             .and_then(|v| v.as_f64())
-            .map(|width| width < NARROW_MAX_PX)
+            .map(viewport_is_narrow)
             .unwrap_or(false)
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
         false
+    }
+}
+
+/// Phone drawer is open only while the viewport is narrow and the sidebar panel is expanded.
+///
+/// Desktop collapse is an in-flow icon rail, so this stays false there even when the panel is open.
+pub(crate) fn sidebar_drawer_open(narrow: bool, collapsed: bool) -> bool {
+    narrow && !collapsed
+}
+
+/// Layout class for the sidebar + chat row. `drawer-open` is the stylesheet's signal that the
+/// phone panel is a fixed overlay instead of a column.
+pub(crate) fn app_layout_class(drawer_open: bool) -> &'static str {
+    if drawer_open {
+        "app-layout grok-layout drawer-open"
+    } else {
+        "app-layout grok-layout"
     }
 }
 
@@ -92,7 +123,7 @@ fn watch_viewport_width(mut narrow: Signal<bool>) {
             narrow.set(now);
         }
     });
-    if let Ok(Some(mql)) = window.match_media("(max-width: 767px)") {
+    if let Ok(Some(mql)) = window.match_media(NARROW_LAYOUT_MEDIA_QUERY) {
         let _ = mql.add_event_listener_with_callback("change", handler.as_ref().unchecked_ref());
     } else {
         let _ = window.add_event_listener_with_callback("resize", handler.as_ref().unchecked_ref());
@@ -129,6 +160,32 @@ mod tests {
     #[test]
     fn host_viewport_is_never_narrow() {
         assert!(!is_narrow_viewport());
+    }
+
+    /// 768px is inside `@media (max-width: 768px)`. One pixel wider is the desktop rail.
+    #[test]
+    fn viewport_breakpoint_matches_the_phone_media_query() {
+        assert_eq!(NARROW_LAYOUT_MEDIA_QUERY, "(max-width: 768px)");
+        assert!(viewport_is_narrow(0.0));
+        assert!(viewport_is_narrow(390.0));
+        assert!(viewport_is_narrow(NARROW_LAYOUT_MAX_PX));
+        assert!(!viewport_is_narrow(NARROW_LAYOUT_MAX_PX + 1.0));
+    }
+
+    /// The drawer covers the chat only on a phone, and only while the panel is expanded.
+    /// A collapsed phone and any desktop width stay closed so the chat keeps the full row.
+    #[test]
+    fn drawer_opens_only_for_an_expanded_phone_sidebar() {
+        assert!(sidebar_drawer_open(true, false));
+        assert!(!sidebar_drawer_open(true, true));
+        assert!(!sidebar_drawer_open(false, false));
+        assert!(!sidebar_drawer_open(false, true));
+    }
+
+    #[test]
+    fn layout_class_marks_the_open_drawer() {
+        assert_eq!(app_layout_class(false), "app-layout grok-layout");
+        assert_eq!(app_layout_class(true), "app-layout grok-layout drawer-open");
     }
 }
 
@@ -289,9 +346,18 @@ fn App() -> Element {
                 class: "app-header grok-header",
                 div {
                     class: "grok-header-inner",
-                    // The brand wordmark sits at the very left of the top bar. The sidebar has
-                    // its own collapse control. The chip and Tools stay here so profile routing
-                    // and the grants list remain reachable without the old Chat/Status nav.
+                    // Phone-only. CSS hides it from 769px up, where the icon rail is the control.
+                    // Toggles the same collapsed signal the rail uses, so a chat pick still closes it.
+                    button {
+                        class: "sidebar-menu-btn",
+                        r#type: "button",
+                        title: if sidebar_drawer_open(is_narrow(), sidebar_collapsed()) { "Close sidebar" } else { "Open sidebar" },
+                        "aria-label": if sidebar_drawer_open(is_narrow(), sidebar_collapsed()) { "Close sidebar" } else { "Open sidebar" },
+                        "aria-expanded": "{sidebar_drawer_open(is_narrow(), sidebar_collapsed())}",
+                        "aria-controls": "sidebar",
+                        onclick: move |_| sidebar_collapsed.set(!sidebar_collapsed()),
+                        IconMenu {}
+                    }
                     span { class: "brand grok-header-brand", "Liberado" }
                     HeaderProfileChip {
                         active_profile,
@@ -313,7 +379,15 @@ fn App() -> Element {
             }
 
             div {
-                class: "app-layout grok-layout",
+                class: "{app_layout_class(sidebar_drawer_open(is_narrow(), sidebar_collapsed()))}",
+                if sidebar_drawer_open(is_narrow(), sidebar_collapsed()) {
+                    button {
+                        class: "sidebar-backdrop",
+                        r#type: "button",
+                        "aria-label": "Close sidebar",
+                        onclick: move |_| sidebar_collapsed.set(true),
+                    }
+                }
                 Sidebar {
                     api_base: base.clone(),
                     route: route,
