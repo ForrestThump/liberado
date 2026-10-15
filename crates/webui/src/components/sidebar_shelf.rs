@@ -36,8 +36,8 @@ impl Shelf {
         }
     }
 
-    /// What the compact + control does. Chats starts a fresh chat. Agents focuses
-    /// the singleton Agent Creator and does not bump the chat nonce.
+    /// What the compact + control does. Chats starts a fresh chat. Agents opens a
+    /// new Agent Creator session and does not bump the chat nonce.
     pub(super) fn create_action(self) -> ShelfCreate {
         match self {
             Shelf::Chats => ShelfCreate::FreshChat,
@@ -85,7 +85,7 @@ pub(super) enum ShelfCreate {
     /// Bump `new_chat_nonce` and clear the active conversation.
     /// Does not open the Agent Creator.
     FreshChat,
-    /// Focus the singleton Agent Creator session. Does not start a fresh Chats-shelf chat.
+    /// Open a new Agent Creator session. Does not start a fresh Chats-shelf chat.
     AgentCreator,
 }
 

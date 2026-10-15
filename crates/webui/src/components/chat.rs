@@ -10,11 +10,9 @@ use crate::components::chat_submission::{bubble_role, profile_switched_note, sub
 use crate::components::model_browser::ModelBrowser;
 use crate::components::picker::Picker;
 use crate::components::profile_browser::ProfileBrowser;
-use crate::components::profile_surface::show_profile_browser;
 #[cfg(target_arch = "wasm32")]
-use crate::components::profile_surface::{
-    handle_slash_for_surface, maybe_open_profile_browser, set_surface,
-};
+use crate::components::profile_surface::{handle_slash_for_surface, maybe_open_profile_browser};
+use crate::components::profile_surface::{profile_for_new_chat, set_surface, show_profile_browser};
 use crate::components::slash_palette::SlashPalette;
 use crate::icons::{IconGlasses, IconStop};
 
@@ -332,8 +330,8 @@ pub fn Chat(
                 approvals.set(Vec::new());
                 session.set(None);
                 // A new chat starts on the default grant; leaving a stale chip up would claim
-                // otherwise.
-                active_profile.set(None);
+                // otherwise. Same value Chats + and `/new` assign.
+                active_profile.set(profile_for_new_chat());
                 set_surface(active_surface, None);
             }
             // No conversation id. An incognito chat never has one (it is not in the sidebar, so
@@ -393,6 +391,13 @@ pub fn Chat(
             messages.set(Vec::new());
             approvals.set(Vec::new());
             session.set(None);
+            // Do not read `active_profile` here: a read would re-run this effect when the
+            // chip changes and would wipe a profile the history load just applied.
+            active_profile.set(profile_for_new_chat());
+            set_surface(
+                active_surface,
+                Some(chat_client_contract::SurfaceMode::Chat),
+            );
             if active_conv_id.read().is_some() {
                 active_conv_id.set(None);
             }
@@ -495,6 +500,11 @@ pub fn Chat(
                             approvals.set(Vec::new());
                             session.set(None);
                             active_conv_id.set(None);
+                            active_profile.set(profile_for_new_chat());
+                            set_surface(
+                                active_surface,
+                                Some(chat_client_contract::SurfaceMode::Chat),
+                            );
                         }
                         CommandResult::ChatCleared => {
                             messages.set(Vec::new());

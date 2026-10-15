@@ -150,6 +150,10 @@ pub fn Sidebar(
     // Agents + failure. Separate from row `action_error` so a delete error stays on the row.
     #[cfg_attr(not(target_arch = "wasm32"), allow(unused_mut))]
     let mut create_error = use_signal(Option::<String>::default);
+    // Distinguishes each Agents + click. The daemon mints a new conversation per request;
+    // the stamp keeps the shelf titles from colliding.
+    #[cfg_attr(not(target_arch = "wasm32"), allow(unused_mut))]
+    let mut creator_seq = use_signal(|| 0u64);
     let expand_all = use_signal(bool::default);
     #[cfg_attr(not(target_arch = "wasm32"), allow(unused_mut))]
     let mut action_error = use_signal(|| None::<String>);
@@ -446,10 +450,12 @@ pub fn Sidebar(
                                 title: "New agent",
                                 "aria-label": "New agent",
                                 onclick: move |_: Event<MouseData>| {
+                                    creator_seq += 1;
+                                    let stamp = creator_seq().to_string();
                                     let base = api_base.clone();
                                     #[cfg(target_arch = "wasm32")]
                                     wasm_bindgen_futures::spawn_local(async move {
-                                        match open_agent_creator_session(&base).await {
+                                        match open_agent_creator_session(&base, &stamp).await {
                                             Ok(header) => {
                                                 active_conv_id.set(Some(header.id));
                                                 active_surface.set(Some(SurfaceMode::Agent));
@@ -465,7 +471,7 @@ pub fn Sidebar(
                                     });
                                     #[cfg(not(target_arch = "wasm32"))]
                                     {
-                                        let _ = base;
+                                        let _ = (base, stamp);
                                     }
                                 },
                                 "+"

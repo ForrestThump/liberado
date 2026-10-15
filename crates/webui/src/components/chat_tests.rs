@@ -5,6 +5,7 @@ use super::super::message_row::{
 };
 use super::stream_url;
 use super::*;
+use crate::components::profile_surface::profile_for_new_chat;
 
 const BASE: &str = "http://d";
 
@@ -66,6 +67,17 @@ fn a_model_survives_incognito_and_a_profile() {
 fn no_model_means_no_parameter() {
     assert!(!url(Some("01ABC"), None).contains("model="));
     assert!(!url(Some("01ABC"), Some("")).contains("model="));
+}
+
+/// A new chat assigns `profile_for_new_chat` (unset). The create request must not carry
+/// `operator` or any other profile from the chat that was just left.
+#[test]
+fn a_new_chat_request_omits_the_previous_profile() {
+    let profile = profile_for_new_chat();
+    assert!(profile.is_none());
+    let u = stream_url(BASE, "hi", None, false, profile.as_deref(), None);
+    assert!(!u.contains("profile="), "{u}");
+    assert!(!u.contains("operator"), "{u}");
 }
 
 /// `session` names an existing conversation; `incognito` and `profile` describe how to open a new
