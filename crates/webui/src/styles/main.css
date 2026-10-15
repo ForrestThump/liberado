@@ -3253,6 +3253,32 @@ body {
     overflow: auto;
 }
 
+/* Plugins: the server list is the page scrollport. It takes the space under the
+   header and scrolls only when the rows do not fit. Other pages keep the shared
+   body scroll above. */
+.plugins-page {
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+}
+
+.plugins-page .grok-page-header {
+    flex-shrink: 0;
+}
+
+.plugins-page .grok-page-body {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    overflow: hidden;
+}
+
+.plugins-page .plugin-list {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+}
+
 .project-list,
 .plugin-list {
     list-style: none;

@@ -170,4 +170,39 @@ mod tests {
         assert_eq!(tool_line(&["add".into(), "list".into()]), "add, list");
         assert_eq!(tool_line(&[]), "");
     }
+
+    /// The list used to sit in a short nested scroller. It now fills the page under
+    /// the header and scrolls only when the servers do not fit.
+    #[test]
+    fn the_server_list_fills_the_page_and_scrolls_only_on_overflow() {
+        let css = include_str!("../styles/main.css");
+        let page = css_block(css, ".plugins-page");
+        assert!(page.contains("flex: 1"), "{page}");
+        assert!(page.contains("min-height: 0"), "{page}");
+        assert!(page.contains("overflow: hidden"), "{page}");
+        let body = css_block(css, ".plugins-page .grok-page-body");
+        assert!(body.contains("min-height: 0"), "{body}");
+        assert!(body.contains("overflow: hidden"), "{body}");
+        let list = css_block(css, ".plugins-page .plugin-list");
+        assert!(list.contains("flex: 1"), "{list}");
+        assert!(list.contains("min-height: 0"), "{list}");
+        assert!(list.contains("overflow-y: auto"), "{list}");
+        assert!(
+            !list.contains("max-height"),
+            "a max-height brings back the short scroll box: {list}"
+        );
+    }
+
+    fn css_block<'a>(css: &'a str, selector: &str) -> &'a str {
+        let needle = format!("{selector} {{");
+        let start = css
+            .find(&needle)
+            .unwrap_or_else(|| panic!("missing CSS rule {selector}"))
+            + needle.len();
+        let rest = &css[start..];
+        let end = rest
+            .find('}')
+            .unwrap_or_else(|| panic!("unterminated CSS rule {selector}"));
+        &rest[..end]
+    }
 }
