@@ -2484,19 +2484,10 @@ body {
     --dot-cyan: #3aa6c0;
     --dot-neutral: #8c8c8c;
 
-    --grok-rail-bg: #0a0a0a;
-    --grok-rail-text: #b0b0b8;
-    --grok-rail-text-muted: #6e6e76;
-    --grok-rail-hover: #181818;
-    --grok-rail-active: #1f1f1f;
-    --grok-rail-border: #1a1a1a;
+    /* Shell colors (`--grok-rail-*`, `--grok-page-bg`, `--grok-card-*`) come from the
+       theme style block so Light and Nord are not pinned to the dark shell. */
     --grok-row-gap: 0.25rem;
     --grok-section-gap: 1.25rem;
-    --grok-page-bg: #0a0a0a;
-    --grok-prompt: #ededed;
-    --grok-subtitle: #7a7a82;
-    --grok-card-bg: #141414;
-    --grok-card-border: #1f1f1f;
 }
 
 /* -- Top header in Grok layout ---------------------------------------------- */
@@ -2518,7 +2509,7 @@ body {
     font-size: 1rem;
     font-weight: 600;
     letter-spacing: -0.01em;
-    color: var(--lib-chat-assistant-text, #ededed);
+    color: var(--lib-chat-assistant-text);
     flex: 1;
     min-width: 0;
     overflow: hidden;
@@ -2838,7 +2829,7 @@ body {
     border-radius: 999px;
     display: inline-block;
     flex-shrink: 0;
-    box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.04);
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--grok-rail-text) 12%, transparent);
 }
 
 .grok-row-title {
@@ -2942,15 +2933,15 @@ body {
         border: none;
         border-radius: 0.5rem;
         background: transparent;
-        color: var(--grok-rail-text, #b0b0b8);
+        color: var(--grok-rail-text);
         cursor: pointer;
         touch-action: manipulation;
     }
 
     .sidebar-menu-btn:hover,
     .sidebar-menu-btn:focus-visible {
-        background: var(--grok-rail-hover, #181818);
-        color: var(--grok-prompt, #ededed);
+        background: var(--grok-rail-hover);
+        color: var(--grok-prompt);
     }
 
     .grok-layout .sidebar.sidebar-collapsed {
@@ -3167,7 +3158,7 @@ body {
     border-radius: 999px;
     border: none;
     background: var(--lib-accent, #f5a623);
-    color: var(--lib-app-bg, #0a0a0a);
+    color: var(--lib-app-bg);
     font-family: inherit;
     font-size: 0.9375rem;
     font-weight: 700;
@@ -3381,7 +3372,7 @@ body {
     min-width: 12rem;
     padding: 0.35rem;
     background: var(--grok-rail-active);
-    border: 1px solid var(--grok-card-border, #1f1f1f);
+    border: 1px solid var(--grok-card-border);
     border-radius: 0.5rem;
     box-shadow: 0 4px 18px rgba(0, 0, 0, 0.35);
     display: flex;
@@ -3420,7 +3411,7 @@ body {
     border-radius: 999px;
     display: inline-block;
     flex-shrink: 0;
-    box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.05);
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--grok-rail-text) 16%, transparent);
 }
 
 .theme-swatch-name {
@@ -3462,8 +3453,8 @@ body {
 .projects-dialog-card {
     width: 100%;
     max-width: 26rem;
-    background: var(--grok-card-bg, #141414);
-    border: 1px solid var(--grok-card-border, #1f1f1f);
+    background: var(--grok-card-bg);
+    border: 1px solid var(--grok-card-border);
     border-radius: 0.75rem;
     box-shadow: 0 12px 40px rgba(0, 0, 0, 0.55);
     overflow: hidden;
@@ -3481,7 +3472,7 @@ body {
 .projects-dialog-title {
     font-size: 1.1rem;
     font-weight: 600;
-    color: var(--grok-prompt, #ededed);
+    color: var(--grok-prompt);
     margin: 0;
 }
 
@@ -3498,7 +3489,7 @@ body {
 }
 
 .projects-dialog-close:hover {
-    background: rgba(255, 255, 255, 0.05);
+    background: var(--grok-rail-hover);
     color: var(--grok-prompt);
 }
 
@@ -3510,7 +3501,7 @@ body {
 }
 
 .projects-dialog-label {
-    color: var(--grok-rail-text, #b0b0b8);
+    color: var(--grok-rail-text);
     font-size: 0.85rem;
 }
 
@@ -3519,8 +3510,8 @@ body {
     padding: 0.6rem 0.7rem;
     border: 1px solid var(--lib-accent, #3aa6c0);
     border-radius: 0.4rem;
-    background: rgba(255, 255, 255, 0.05);
-    color: var(--grok-prompt, #ededed);
+    background: var(--lib-input-bg);
+    color: var(--grok-prompt);
     font-family: inherit;
     font-size: 0.95rem;
     outline: none;
@@ -3546,15 +3537,15 @@ body {
     justify-content: space-between;
     align-items: center;
     padding: 0.75rem 1rem 1rem;
-    border-top: 1px solid var(--grok-rail-border, #1a1a1a);
+    border-top: 1px solid var(--grok-rail-border);
     margin-top: auto;
     gap: 0.5rem;
 }
 
 .projects-dialog-add {
     background: transparent;
-    border: 1px solid var(--grok-rail-border, #1a1a1a);
-    color: var(--grok-rail-text, #b0b0b8);
+    border: 1px solid var(--grok-rail-border);
+    color: var(--grok-rail-text);
     font-family: inherit;
     font-size: 0.85rem;
     cursor: pointer;
@@ -3567,7 +3558,7 @@ body {
 
 .projects-dialog-add:hover {
     border-color: var(--lib-accent, #3aa6c0);
-    color: var(--grok-prompt, #ededed);
+    color: var(--grok-prompt);
 }
 
 .projects-dialog-plus {
@@ -3576,9 +3567,9 @@ body {
 }
 
 .projects-dialog-create {
-    background: #ededed;
+    background: var(--grok-prompt);
     border: none;
-    color: #141414;
+    color: var(--grok-page-bg);
     font-family: inherit;
     font-size: 0.85rem;
     font-weight: 600;
@@ -3588,5 +3579,5 @@ body {
 }
 
 .projects-dialog-create:hover {
-    background: #ffffff;
+    background: color-mix(in srgb, var(--grok-prompt) 88%, var(--grok-page-bg));
 }

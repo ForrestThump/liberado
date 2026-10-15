@@ -224,6 +224,16 @@ pub fn theme_css_vars(t: &Theme) -> String {
     // --lib-surface-2: code-block / tool-chip background  (code_block_bg)
     let surface = sidebar_item_bg.clone();
     let surface2 = code_block_bg.clone();
+    let grok = grok_surface_vars(GrokPaint {
+        name: &t.name,
+        app_bg: &app_bg,
+        sidebar_bg: &sidebar_item_bg,
+        sidebar_text: &sidebar_text,
+        muted: &status_bar_text,
+        border: &border,
+        prompt: &chat_user_text,
+        card_bg: &input_bg,
+    });
 
     format!(
         r#":root {{
@@ -290,7 +300,69 @@ pub fn theme_css_vars(t: &Theme) -> String {
   --lib-md-bullet: {md_bullet};
   --lib-md-heading: {md_heading};
   --lib-md-rule: {md_rule};
-}}"#
+
+  /* ── Grok shell (sidebar, page, composer, popovers) ── */
+{grok}}}"#
+    )
+}
+
+/// Sidebar, page, composer, and popover colors for the Grok shell.
+///
+/// The built-in dark theme keeps the shell values the stylesheet used before
+/// themes reached this layout. Every other theme derives them from its own
+/// tokens, so Light and Nord are not stuck on that near-black shell.
+struct GrokPaint<'a> {
+    name: &'a str,
+    app_bg: &'a str,
+    sidebar_bg: &'a str,
+    sidebar_text: &'a str,
+    muted: &'a str,
+    border: &'a str,
+    prompt: &'a str,
+    card_bg: &'a str,
+}
+
+fn grok_surface_vars(paint: GrokPaint<'_>) -> String {
+    let GrokPaint {
+        name,
+        app_bg,
+        sidebar_bg,
+        sidebar_text,
+        muted,
+        border,
+        prompt,
+        card_bg,
+    } = paint;
+    if name == "dark" {
+        return "\
+  --grok-rail-bg: #0a0a0a;
+  --grok-rail-text: #b0b0b8;
+  --grok-rail-text-muted: #6e6e76;
+  --grok-rail-hover: #181818;
+  --grok-rail-active: #1f1f1f;
+  --grok-rail-border: #1a1a1a;
+  --grok-page-bg: #0a0a0a;
+  --grok-prompt: #ededed;
+  --grok-subtitle: #7a7a82;
+  --grok-card-bg: #141414;
+  --grok-card-border: #1f1f1f;
+"
+        .to_string();
+    }
+    format!(
+        "\
+  --grok-rail-bg: {sidebar_bg};
+  --grok-rail-text: {sidebar_text};
+  --grok-rail-text-muted: {muted};
+  --grok-rail-hover: color-mix(in srgb, {sidebar_text} 10%, {sidebar_bg});
+  --grok-rail-active: color-mix(in srgb, {sidebar_text} 16%, {sidebar_bg});
+  --grok-rail-border: {border};
+  --grok-page-bg: {app_bg};
+  --grok-prompt: {prompt};
+  --grok-subtitle: {muted};
+  --grok-card-bg: {card_bg};
+  --grok-card-border: {border};
+"
     )
 }
 
@@ -445,10 +517,12 @@ mod tests {
             name: "bare".into(),
             ..Default::default()
         };
+        let bare_css = theme_css_vars(&bare);
+        let dark_css = theme_css_vars(&Theme::default_dark());
         assert_eq!(
-            theme_css_vars(&bare),
-            theme_css_vars(&Theme::default_dark()),
-            "all-None theme must equal default dark"
+            css_without_grok(&bare_css),
+            css_without_grok(&dark_css),
+            "all-None theme must equal default dark on --lib-* tokens"
         );
     }
 
@@ -466,5 +540,38 @@ mod tests {
         let css = theme_css_vars(&t);
         assert!(css.contains("--lib-surface: #010101;"), "{css}");
         assert!(css.contains("--lib-surface-2: #020202;"), "{css}");
+    }
+
+    /// The Grok shell used fixed near-black colors, so Light and Nord kept a dark
+    /// sidebar and page. Dark keeps those exact colors. Other themes follow their tokens.
+    #[test]
+    fn grok_shell_follows_the_theme_except_builtin_dark() {
+        let dark = theme_css_vars(&Theme::default_dark());
+        assert!(dark.contains("--grok-page-bg: #0a0a0a;"), "{dark}");
+        assert!(dark.contains("--grok-rail-bg: #0a0a0a;"), "{dark}");
+        assert!(dark.contains("--grok-card-bg: #141414;"), "{dark}");
+        assert!(dark.contains("--grok-prompt: #ededed;"), "{dark}");
+
+        let light = theme_css_vars(&Theme::default_light());
+        assert!(light.contains("--grok-page-bg: #ffffff;"), "{light}");
+        assert!(light.contains("--grok-rail-bg: #f0f0f0;"), "{light}");
+        assert!(light.contains("--grok-prompt: #1a1a1a;"), "{light}");
+        assert!(
+            !light.contains("--grok-page-bg: #0a0a0a;"),
+            "light page must not stay on the dark shell: {light}"
+        );
+
+        let nord = theme_css_vars(&Theme::default_nord());
+        assert!(nord.contains("--grok-page-bg: #2e3440;"), "{nord}");
+        assert!(nord.contains("--grok-rail-bg: #2e3440;"), "{nord}");
+        assert!(nord.contains("--grok-prompt: #eceff4;"), "{nord}");
+        assert!(nord.contains("--grok-rail-text: #d8dee9;"), "{nord}");
+    }
+
+    fn css_without_grok(css: &str) -> String {
+        css.lines()
+            .filter(|line| !line.contains("--grok-"))
+            .collect::<Vec<_>>()
+            .join("\n")
     }
 }
