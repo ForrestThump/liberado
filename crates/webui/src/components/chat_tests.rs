@@ -317,6 +317,52 @@ fn copy_button_label_confirms_then_resets() {
     assert_eq!(copy_feedback_label(true), "Copied");
 }
 
+/// Attach, model, mic, voice, and send sit on a row under the text box, on phone
+/// and desk widths. The textarea uses the full pill.
+#[test]
+fn composer_actions_sit_under_the_full_width_text_box() {
+    let css = include_str!("../styles/main.css");
+    let bar = css_block(css, ".input-bar");
+    assert!(bar.contains("flex-direction: column"), "{bar}");
+    assert!(bar.contains("align-items: stretch"), "{bar}");
+    assert!(
+        !bar.contains("flex-end"),
+        "flex-end was the side-by-side toolbar: {bar}"
+    );
+    let wrap = css_block(css, ".input-wrap");
+    assert!(wrap.contains("width: 100%"), "{wrap}");
+    let field = css_block(css, ".input-wrap .input");
+    assert!(field.contains("width: 100%"), "{field}");
+    let toolbar = css_block(css, ".input-toolbar");
+    assert!(toolbar.contains("width: 100%"), "{toolbar}");
+    let chat = include_str!("chat.rs");
+    let form = chat
+        .split("class: \"input-bar\"")
+        .nth(1)
+        .expect("input-bar");
+    let form = form
+        .split("class: \"input-toolbar\"")
+        .next()
+        .expect("toolbar");
+    assert!(
+        form.contains("id: \"chat-input\""),
+        "the text box must come before the action row"
+    );
+}
+
+fn css_block<'a>(css: &'a str, selector: &str) -> &'a str {
+    let needle = format!("{selector} {{");
+    let start = css
+        .find(&needle)
+        .unwrap_or_else(|| panic!("missing CSS rule {selector}"))
+        + needle.len();
+    let rest = &css[start..];
+    let end = rest
+        .find('}')
+        .unwrap_or_else(|| panic!("unterminated CSS rule {selector}"));
+    &rest[..end]
+}
+
 #[test]
 fn copy_button_is_offered_for_user_and_assistant_only() {
     assert!(message_offers_copy("user"));

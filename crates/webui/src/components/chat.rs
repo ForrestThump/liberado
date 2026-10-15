@@ -855,8 +855,8 @@ pub fn Chat(
                             },
                         }
                     }
-                    // Composer toolbar — Grok-style strip: attach / mode-picker on the left,
-                    // mic + voice on the right of the spacer, then send (or stop while sending).
+                    // Action row under the text box. Attach, model, mic, voice, and send
+                    // share this row so the textarea spans the pill.
                     div {
                         class: "input-toolbar",
                         button {

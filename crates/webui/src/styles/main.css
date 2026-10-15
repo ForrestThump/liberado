@@ -1152,9 +1152,10 @@ body {
 
 .input-bar {
     display: flex;
-    align-items: flex-end;
-    gap: 0.5rem;
-    padding: 0.4rem 0.4rem 0.4rem 0.85rem;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.15rem;
+    padding: 0.45rem 0.55rem 0.35rem;
     border: 1px solid var(--lib-border);
     border-radius: 1.5rem;
     background: color-mix(in srgb, var(--lib-app-bg) 82%, var(--lib-surface));
@@ -1198,13 +1199,16 @@ body {
 
 .input-wrap {
     position: relative;
-    flex: 1;
+    flex: none;
     display: flex;
+    width: 100%;
     min-width: 0;
 }
 
 .input-wrap .input {
-    /* Transparent so the mirror behind it shows through; the pill `.input-bar` is the surface. */
+    /* Transparent so the mirror behind it shows through; the pill `.input-bar` is the surface.
+       Full width: the action row sits under this box, not beside it. */
+    width: 100%;
     background: transparent;
     border-color: transparent;
     position: relative;
@@ -3095,14 +3099,16 @@ body {
     gap: 0.5rem;
 }
 
-/* -- Composer toolbar (Grok-style strip) ------------------------------------ */
+/* -- Composer action row (under the text box) ------------------------------ */
 
 .input-toolbar {
     display: flex;
     align-items: center;
     gap: 0.25rem;
-    padding: 0.5rem 0.5rem 0.5rem 0.5rem;
-    margin-top: 0.25rem;
+    width: 100%;
+    min-width: 0;
+    padding: 0;
+    margin-top: 0;
 }
 
 .toolbar-icon-btn {
@@ -3138,6 +3144,14 @@ body {
     display: inline-flex;
     align-items: center;
     gap: 0.25rem;
+}
+
+/* The model chip shares the action row with the icon buttons. It may shrink so
+   the row stays one line on a phone. Icon buttons keep their 2.5rem hit target. */
+.input-toolbar .toolbar-mode-btn,
+.input-toolbar .toolbar-mode-btn-static {
+    min-width: 0;
+    flex-shrink: 1;
 }
 
 .toolbar-mode-btn:hover {
