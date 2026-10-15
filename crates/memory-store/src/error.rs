@@ -9,7 +9,7 @@ pub enum MemoryError {
     #[error("note has no YAML frontmatter")]
     MissingFrontmatter,
     #[error("malformed memory note frontmatter: {0}")]
-    Yaml(#[from] serde_yaml::Error),
+    Yaml(#[from] serde_norway::Error),
     #[error("memory not found: {0}")]
     NotFound(String),
     #[error("invalid memory id: {0}")]

@@ -1,5 +1,5 @@
 use regex::Regex;
-use serde_yaml::Value;
+use serde_norway::Value;
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 #[derive(Clone, Debug)]
 struct Document {
     path: String,
-    meta: Option<serde_yaml::Mapping>,
+    meta: Option<serde_norway::Mapping>,
     body: String,
 }
 
@@ -22,7 +22,7 @@ fn read_text(path: &Path) -> Result<String, Box<dyn std::error::Error>> {
     Ok(String::from_utf8_lossy(bytes.strip_prefix(&[0xef, 0xbb, 0xbf]).unwrap_or(&bytes)).into())
 }
 
-fn split_frontmatter(text: &str) -> (Option<serde_yaml::Mapping>, String) {
+fn split_frontmatter(text: &str) -> (Option<serde_norway::Mapping>, String) {
     let normalized = text.replace("\r\n", "\n");
     if !normalized.starts_with("---\n") {
         return (None, normalized);
@@ -32,7 +32,7 @@ fn split_frontmatter(text: &str) -> (Option<serde_yaml::Mapping>, String) {
     };
     let yaml = &normalized[4..4 + end];
     let body = normalized[4 + end + 5..].to_owned();
-    let meta = serde_yaml::from_str::<Value>(yaml)
+    let meta = serde_norway::from_str::<Value>(yaml)
         .ok()
         .and_then(|v| v.as_mapping().cloned());
     (meta, body)
@@ -81,23 +81,23 @@ fn is_root_future_work(path: &str) -> bool {
         (Some("docs"), Some("future-work"), Some(name), None) if name.ends_with(".md") && name != "README.md")
 }
 
-fn is_managed(path: &str, meta: &Option<serde_yaml::Mapping>) -> bool {
+fn is_managed(path: &str, meta: &Option<serde_norway::Mapping>) -> bool {
     path.starts_with("docs/")
         && path.ends_with(".md")
         && (is_root_future_work(path) || meta.is_some())
 }
 
-fn meta_str<'a>(meta: &'a serde_yaml::Mapping, name: &str) -> Option<&'a str> {
+fn meta_str<'a>(meta: &'a serde_norway::Mapping, name: &str) -> Option<&'a str> {
     meta.get(Value::String(name.to_owned()))
         .and_then(Value::as_str)
 }
 
-fn meta_bool(meta: &serde_yaml::Mapping, name: &str) -> Option<bool> {
+fn meta_bool(meta: &serde_norway::Mapping, name: &str) -> Option<bool> {
     meta.get(Value::String(name.to_owned()))
         .and_then(Value::as_bool)
 }
 
-fn display_meta(meta: &serde_yaml::Mapping, name: &str) -> String {
+fn display_meta(meta: &serde_norway::Mapping, name: &str) -> String {
     meta_str(meta, name).unwrap_or("—").to_owned()
 }
 
@@ -388,7 +388,7 @@ fn lint_doc(
 }
 
 /// The kind/status/authority fields every managed document must carry.
-fn lint_required_fields(doc: &Document, meta: &serde_yaml::Mapping) -> Vec<Issue> {
+fn lint_required_fields(doc: &Document, meta: &serde_norway::Mapping) -> Vec<Issue> {
     let mut issues = Vec::new();
     for field in ["kind", "status", "authority"] {
         if !meta.contains_key(Value::String(field.into())) {
@@ -402,7 +402,7 @@ fn lint_required_fields(doc: &Document, meta: &serde_yaml::Mapping) -> Vec<Issue
 }
 
 /// Vocabulary and cross-field rules for a managed document's metadata.
-fn lint_meta_rules(doc: &Document, meta: &serde_yaml::Mapping) -> Vec<Issue> {
+fn lint_meta_rules(doc: &Document, meta: &serde_norway::Mapping) -> Vec<Issue> {
     let kind = meta_str(meta, "kind").unwrap_or("");
     let status = meta_str(meta, "status").unwrap_or("");
     let authority = meta_str(meta, "authority").unwrap_or("");
@@ -472,7 +472,7 @@ fn lint_meta_rules(doc: &Document, meta: &serde_yaml::Mapping) -> Vec<Issue> {
 /// A finished plan must not stay in the active future-work index.
 fn lint_finished_plan_in_index(
     doc: &Document,
-    meta: &serde_yaml::Mapping,
+    meta: &serde_norway::Mapping,
     active: &HashSet<String>,
 ) -> Option<Issue> {
     let kind = meta_str(meta, "kind").unwrap_or("");
@@ -491,7 +491,7 @@ fn lint_finished_plan_in_index(
 /// Two active documents must not claim the same canonical_for.
 fn lint_canonical_for(
     doc: &Document,
-    meta: &serde_yaml::Mapping,
+    meta: &serde_norway::Mapping,
     canonical: &mut HashMap<String, String>,
 ) -> Option<Issue> {
     let status = meta_str(meta, "status").unwrap_or("");
@@ -513,7 +513,7 @@ fn lint_canonical_for(
 /// A normative document must not link to an archive path as content.
 fn lint_normative_archive(
     doc: &Document,
-    meta: &serde_yaml::Mapping,
+    meta: &serde_norway::Mapping,
     archive_link: &Regex,
 ) -> Option<Issue> {
     let authority = meta_str(meta, "authority").unwrap_or("");
@@ -719,7 +719,7 @@ fn lint_documents_for_test(docs: Vec<Document>) -> Result<Vec<Issue>, Box<dyn st
         let path = temp.path().join(&doc.path);
         fs::create_dir_all(path.parent().expect("document has parent"))?;
         let text = match &doc.meta {
-            Some(meta) => format!("---\n{}---\n{}", serde_yaml::to_string(meta)?, doc.body),
+            Some(meta) => format!("---\n{}---\n{}", serde_norway::to_string(meta)?, doc.body),
             None => doc.body.clone(),
         };
         fs::write(path, text)?;
@@ -797,6 +797,10 @@ fn run_check_stale_rs(root: &Path) -> Result<(), Box<dyn std::error::Error>> {
         Err(format!("stale-rs-paths: FAILED ({} issue(s))", issues.len()).into())
     }
 }
+
+#[cfg(test)]
+#[path = "docs_meta_cmd/yaml_inputs.rs"]
+mod yaml_inputs;
 
 #[cfg(test)]
 mod tests {
@@ -942,8 +946,8 @@ mod tests {
         );
     }
 
-    fn yaml_map(text: &str) -> serde_yaml::Mapping {
-        let value: serde_yaml::Value = serde_yaml::from_str(text).unwrap();
+    fn yaml_map(text: &str) -> serde_norway::Mapping {
+        let value: serde_norway::Value = serde_norway::from_str(text).unwrap();
         value.as_mapping().cloned().unwrap()
     }
 }

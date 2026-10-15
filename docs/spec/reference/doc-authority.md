@@ -5,7 +5,7 @@ authority: normative
 domain: docs
 canonical_for: document-authority
 open_items: false
-last_verified: 2026-09-22
+last_verified: 2026-10-12
 ---
 
 # Document authority and metadata
@@ -80,7 +80,7 @@ and required fields are enforced on **all** managed documents, not only root pla
 1. `docs-audit.toml` binds implementation sources to their current reference document and required vocabulary in both directions. `[[impact]]` rows are the change-impact half of that policy. A new or edited impact row is a documentation-policy change and must land with this document. Current impact bindings include module health (`code-metrics/module-health.toml` and `code-metrics/module-health-baseline.json`), configuration, dependency security, local readiness (`code-metrics/function-complexity.toml` / `code-metrics/function-complexity-baseline.json`, plus `crates/cli/src/ci_cmd/dispatch.rs` and the readiness and complexity commands), and managed Cargo targets (`crates/coder-sandbox/src/cargo_targets.rs` → [`cargo-targets.md`](cargo-targets.md)).
 2. Pull-request CI compares the branch with its base. `just ci` and `just ready` derive the merge base from `origin/main`, with `HEAD^` as an isolated-repository fallback. Local audits compare that base with the full working tree, including untracked files, so an uncommitted source and document pair is checked accurately. Contract-bearing source changes require a mapped documentation change or a narrow reviewed waiver.
 3. Active documents cannot use vocabulary listed as obsolete in `docs-audit.toml`.
-4. Fenced `toml check`, `json check`, and `yaml check` examples must parse. Ordinary illustrative fragments remain unchecked.
+4. Fenced `toml check`, `json check`, and `yaml check` examples must parse. Ordinary illustrative fragments remain unchecked. YAML frontmatter and `yaml check` fences are parsed with `serde_norway`. [dependency-security.md](dependency-security.md) records why that crate replaced deprecated `serde_yaml`.
 
 The audit reads its policy and generated evidence as structured data. A missing, unreadable, or
 invalid file is an error; the audit does not replace it with an empty result.

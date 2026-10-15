@@ -279,31 +279,31 @@ mod tests {
             via
         );
         assert_eq!(
-            serde_yaml::from_str::<ApprovalOrigin>("telegram").unwrap(),
+            serde_norway::from_str::<ApprovalOrigin>("telegram").unwrap(),
             origin
         );
         assert_eq!(
-            serde_yaml::from_str::<DecisionVia>("telegram").unwrap(),
+            serde_norway::from_str::<DecisionVia>("telegram").unwrap(),
             via
         );
         assert_eq!(
-            serde_yaml::from_str::<ApprovalOrigin>("web").unwrap(),
+            serde_norway::from_str::<ApprovalOrigin>("web").unwrap(),
             ApprovalOrigin::Web
         );
         assert_eq!(
-            serde_yaml::from_str::<ApprovalOrigin>("background").unwrap(),
+            serde_norway::from_str::<ApprovalOrigin>("background").unwrap(),
             ApprovalOrigin::Background
         );
         assert_eq!(
-            serde_yaml::from_str::<DecisionVia>("webui").unwrap(),
+            serde_norway::from_str::<DecisionVia>("webui").unwrap(),
             DecisionVia::Webui
         );
         assert_eq!(
-            serde_yaml::from_str::<ApprovalOrigin>("matrix").unwrap(),
+            serde_norway::from_str::<ApprovalOrigin>("matrix").unwrap(),
             ApprovalOrigin::Channel(ChannelKind::Matrix)
         );
         assert_eq!(
-            serde_yaml::from_str::<DecisionVia>("matrix").unwrap(),
+            serde_norway::from_str::<DecisionVia>("matrix").unwrap(),
             DecisionVia::Channel(ChannelKind::Matrix)
         );
 

@@ -158,9 +158,10 @@ pub struct Proposal {
     /// privilege escalation, so it must be as tamper-evident as `pool`.
     ///
     /// Serialized as a JSON string: `Capability::Write(Zone::Vault(..))` is a nested externally-tagged
-    /// enum, which `serde_yaml` (the proposal note format) panics on — routing it through serde_json
-    /// (which handles nested enums) sidesteps that without changing `Capability`'s own representation
-    /// used everywhere else (policy.toml, the HMAC below).
+    /// enum, which `serde_norway` rejects (`serializing nested enums in YAML is not supported yet`).
+    /// `render_note` expects YAML serialization to succeed, so a raw nested enum still panics there.
+    /// Routing the grant through serde_json sidesteps that without changing `Capability`'s own
+    /// representation used everywhere else (policy.toml, the HMAC below).
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
@@ -271,7 +272,7 @@ impl Proposal {
     pub fn from_note(content: &str) -> Result<Proposal, ProposalNoteError> {
         let frontmatter = crate::frontmatter::extract_frontmatter(content)
             .ok_or(ProposalNoteError::MissingFrontmatter)?;
-        Ok(serde_yaml::from_str(frontmatter)?)
+        Ok(serde_norway::from_str(frontmatter)?)
     }
 }
 
@@ -385,7 +386,7 @@ impl ProposalSigner {
 }
 
 /// Serde adapter: represent `Option<Capability>` as an `Option<String>` of its serde_json encoding.
-/// See [`Proposal::requested_grant`] for why (serde_yaml panics on the nested externally-tagged enum).
+/// See [`Proposal::requested_grant`] for why (`serde_norway` errors on the nested externally-tagged enum).
 mod capability_json_string {
     use super::Capability;
     use serde::{Deserialize, Deserializer, Serializer};
@@ -458,7 +459,7 @@ pub enum ProposalNoteError {
     #[error("proposal note has no YAML frontmatter")]
     MissingFrontmatter,
     #[error("malformed proposal frontmatter: {0}")]
-    Yaml(#[from] serde_yaml::Error),
+    Yaml(#[from] serde_norway::Error),
 }
 
 /// A pending proposal with canned values, for use by tests that need a valid `Proposal` without
@@ -475,6 +476,10 @@ pub fn sample_proposal() -> Proposal {
         "rationale",
     )
 }
+
+#[cfg(test)]
+#[path = "proposal_yaml_inputs.rs"]
+mod proposal_yaml_inputs;
 
 #[cfg(test)]
 mod tests {
@@ -782,11 +787,11 @@ mod proptest_tests {
         })
     }
 
-    /// Only non-nested Capability variants (no Zone-applied Read/Write/ReadSummary) to avoid
-    /// `serde_yaml` panic on nested externally-tagged enums in `frontmatter.rs`.
-    /// ⚠️ Known defect: `Write(Zone)` panics `serde_yaml`. The `capability_json_string`
-    /// adapter (doc'd on `requested_grant`) sidesteps this only in `from_note` — the
-    /// frontmatter path still routes through raw `serde_yaml`.
+    /// Only non-nested Capability variants (no Zone-applied Read/Write/ReadSummary).
+    /// `serde_norway` returns an error for a nested externally-tagged enum, and
+    /// `render_note` turns that error into a panic. The `capability_json_string`
+    /// adapter (doc'd on `requested_grant`) sidesteps this for the grant field. A raw
+    /// `Write(Zone)` in other frontmatter still goes through `serde_norway`.
     fn arb_cap() -> impl Strategy<Value = Capability> {
         prop_oneof![
             ".{1,20}".prop_map(Capability::ExecuteMcp),
@@ -795,9 +800,8 @@ mod proptest_tests {
         ]
     }
 
-    /// Generate ASCII-only rationales to avoid `frontmatter.rs:19` byte-index panic
-    /// on multi-byte UTF-8 characters. ⚠️ Known defect: generating non-ASCII rationales
-    /// crashes `from_note`. See `docs/future-work/archive/property-testing-plan.md` §Tier 2 item #7.
+    /// ASCII rationales keep this strategy stable. `serde_norway` round-trips non-ASCII
+    /// text; the old `serde_yaml` emitter panicked on some multibyte strings.
     fn arb_proposal() -> impl Strategy<Value = Proposal> {
         (
             "[a-zA-Z0-9]{26}",
