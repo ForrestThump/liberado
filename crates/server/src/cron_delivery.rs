@@ -1,6 +1,8 @@
-//! Chat-aware cron delivery: fold a finished cron brief into the sticky Telegram conversation, held
+//! Chat-aware cron delivery: fold a finished cron brief into the bound channel conversation, held
 //! until the human is between messages, so a reply carries the brief in context and a brief never
 //! barges into an active chat. Design: `docs/future-work/ideas/cron-delivery-timing-idea.md`.
+//!
+//! Telegram is one binding. The brief lands in that binding's session.
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -10,9 +12,9 @@ use liberado_main_agent::ChatSessions;
 use liberado_notify::{Notifier, NotifyError};
 use tokio::sync::Mutex;
 
-use crate::sticky::StickySession;
+use crate::bindings::{BindingKey, ChannelBindings};
 
-/// A [`Notifier`] whose `deliver_cron` folds the brief into the sticky Telegram chat session and
+/// A [`Notifier`] whose `deliver_cron` folds the brief into the bound channel chat session and
 /// defers the send around the human's activity. Plain and proposal notifications pass straight
 /// through to `inner`, immediate and unchanged — only scheduled briefs get the append + defer.
 pub struct ChatDeliveringNotifier {
@@ -20,11 +22,12 @@ pub struct ChatDeliveringNotifier {
     /// unchanged `notify`/`notify_proposal` paths.
     inner: Arc<dyn Notifier>,
     /// The face-agent session store — used to `append_note` the brief and to lazily create the
-    /// sticky Telegram session if none exists yet.
+    /// bound session if none exists yet.
     chat: Arc<ChatSessions>,
-    /// Shared with [`crate::telegram::TelegramChatBridge`]: the conversation a brief appends into and
+    /// Shared with [`crate::telegram::TextChatBridge`]: the conversation a brief appends into and
     /// a reply continues. Persisted across restarts; one lock guards lazy creation from either side.
-    sticky: StickySession,
+    bindings: ChannelBindings,
+    key: BindingKey,
     /// Shared with the `ApprovalBot`: `Some(t)` = last inbound message at `t`; `None` = never active
     /// (deliver immediately — the common case where a brief fires and nobody is chatting).
     last_activity: Arc<Mutex<Option<Instant>>>,
@@ -36,7 +39,8 @@ impl ChatDeliveringNotifier {
     pub fn new(
         inner: Arc<dyn Notifier>,
         chat: Arc<ChatSessions>,
-        sticky: StickySession,
+        bindings: ChannelBindings,
+        key: BindingKey,
         last_activity: Arc<Mutex<Option<Instant>>>,
         quiet_delay: Duration,
         deliver_by: Duration,
@@ -44,7 +48,8 @@ impl ChatDeliveringNotifier {
         Self {
             inner,
             chat,
-            sticky,
+            bindings,
+            key,
             last_activity,
             quiet_delay,
             deliver_by,
@@ -92,25 +97,28 @@ impl ChatDeliveringNotifier {
         }
     }
 
-    /// Resolve the sticky Telegram session (creating it if none exists yet — the same lazy-create the
+    /// Resolve the bound session (creating it if none exists yet — the same lazy-create the
     /// bridge does on a first message), then append the brief as an assistant-role note so a later
-    /// reply rehydrates it as context. Best-effort: a failure here still lets the Telegram push go
+    /// reply rehydrates it as context. Best-effort: a failure here still lets the channel push go
     /// out, it just won't be in the conversation history.
-    async fn append_to_sticky(&self, message: &str) {
+    async fn append_to_binding(&self, message: &str) {
         let chat = self.chat.clone();
+        let label = self.key.channel.label();
         let id = match self
-            .sticky
-            .get_or_create(move || async move { chat.create(Some("Telegram".into())).await })
+            .bindings
+            .get_or_create(&self.key, move || async move {
+                chat.create(Some(label.into())).await
+            })
             .await
         {
             Ok(id) => id,
             Err(e) => {
-                tracing::warn!(error = %e, "cron delivery: could not create sticky Telegram session");
+                tracing::warn!(error = %e, "cron delivery: could not create the bound channel session");
                 return;
             }
         };
         if let Err(e) = self.chat.append_note(id, message).await {
-            tracing::warn!(error = %e, "cron delivery: append_note to sticky session failed");
+            tracing::warn!(error = %e, "cron delivery: append_note to the bound session failed");
         }
     }
 }
@@ -130,7 +138,7 @@ impl Notifier for ChatDeliveringNotifier {
     /// the order you see it — no message silently injected mid-conversation.
     async fn deliver_cron(&self, message: &str) -> Result<(), NotifyError> {
         self.wait_for_quiet().await;
-        self.append_to_sticky(message).await;
+        self.append_to_binding(message).await;
         self.inner.notify(message).await
     }
 }

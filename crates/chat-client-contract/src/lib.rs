@@ -5,6 +5,7 @@
 //!
 //! # Module layout
 //!
+//! - **`grants`** — read-only `GET /api/conversations/{id}/grants` view.
 //! - **`surface_mode`** — `SurfaceMode` (`chat` | `agent`) shelf stamp; kept as its own
 //!   module so `wire.rs` stays at its function baseline.
 //! - **`wire`** — All wire DTOs (`DaemonStatus`, `ReactionEvent`, `SessionEvent`, etc.).
@@ -23,6 +24,7 @@
 //! The top-level `pub use wire::*` makes all wire types available at the crate root,
 //! matching the old flat layout for existing import paths.
 
+pub mod grants;
 pub mod session_kind;
 pub mod surface_mode;
 pub mod wire;
@@ -31,6 +33,7 @@ pub mod wire;
 pub mod native;
 
 // Re-export all wire types at the crate root for backward-compatible import paths.
+pub use grants::{AuthorityGrants, ConversationGrantsResponse, GrantSource, ZoneGrant};
 pub use session_kind::{
     DomainWire, GoalHeaderResult, GoalHeaderSpec, SessionKind, SessionSummary, VisibilityWire,
 };

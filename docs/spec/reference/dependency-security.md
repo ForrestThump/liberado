@@ -19,6 +19,13 @@ cargo-vet before any job may compile a build script or procedural macro.
    entries, and the cargo-vet exemptions together.
 4. Run `just dependency-security` and request the CODEOWNER review.
 
+`deny.toml` allows the build script `rustls@0.23.46`. The vet exemption
+in `supply-chain/config.toml` names the same version. 0.23.46 is the
+2026-10-14 security release. It replaces 0.23.45, which cargo-deny
+rejects for the unauthenticated ServerHello key-exchange downgrade.
+The build script is the same file as in 0.23.45. The exemption is
+still debt, not an audit.
+
 GitHub Actions use full commit SHAs. Dependabot proposes Action SHA changes.
 `turbovault*` and `turbomcp*` are git+tag pins on the public ForrestThump forks
 (`tag = "liberado-2026-08-27"`). `Cargo.lock` records the resolved commit SHA.
@@ -46,6 +53,14 @@ crate and the upstream that should drop it.
 
 - `RUSTSEC-2024-0436` (`paste`) is transitive through fastembed/tokenizers and ratatui.
 - `RUSTSEC-2026-0192` (`ttf-parser`) is transitive through eframe's Linux window stack.
-- `RUSTSEC-2024-0449` (`unsafe-libyaml`) is transitive through deprecated
-  `serde_yaml` 0.9, used by liberado-common and liberado-cli. Revisit when
-  migrating off `serde_yaml`.
+
+## YAML
+
+Proposal notes, memory notes, and docs frontmatter use `serde_norway` 0.9.
+`serde_yaml` 0.9 is deprecated and depends on unmaintained `unsafe-libyaml`
+(`RUSTSEC-2024-0449`). `serde_yml` is unsound and unmaintained
+(`RUSTSEC-2025-0068`), so cargo-deny rejects it. `serde_norway` is the
+maintained hard fork of the `serde_yaml` 0.9 API. It depends on
+`unsafe-libyaml-norway` instead of `unsafe-libyaml`, so that advisory is not
+in the graph. The callers are `liberado-common`, `liberado-cli`, and
+`liberado-memory-store`.

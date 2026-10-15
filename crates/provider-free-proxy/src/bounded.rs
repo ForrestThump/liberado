@@ -26,7 +26,7 @@ pub(crate) async fn read_capped(
     while let Some(chunk) = response
         .chunk()
         .await
-        .map_err(|e| format!("{what} transport: {e}"))?
+        .map_err(|e| format!("{what} transport: {}", crate::redact_http::transport(e)))?
     {
         if out.len().saturating_add(chunk.len()) > cap {
             return Err(format!("{what} body exceeded the {cap}-byte cap"));

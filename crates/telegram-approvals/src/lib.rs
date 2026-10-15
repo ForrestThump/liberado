@@ -19,7 +19,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use liberado_common::{
-    DecisionVia, GrantScope, PROPOSALS_DIR, Proposal, ProposalSigner, ProposalStatus,
+    ChannelKind, DecisionVia, GrantScope, PROPOSALS_DIR, Proposal, ProposalSigner, ProposalStatus,
     ProposedAction, WriteProvenance,
 };
 use liberado_config_loader::TelegramApprovalsTuning;
@@ -29,6 +29,7 @@ use liberado_provider::{CompletionRequest, Message, Provider, complete_json};
 use liberado_vault::Vault;
 use tokio::sync::Mutex;
 
+mod bot_surface;
 mod resolve;
 
 #[cfg(test)]
@@ -87,6 +88,8 @@ pub struct ApprovalBot {
     /// reply whose sequence is no longer the latest gets an explicit "re: …" marker, because two
     /// unlabelled answers in the wrong order are worse than a slow one.
     latest_seq: Arc<std::sync::atomic::AtomicU64>,
+    /// Channel written on a decision. Telegram unless [`Self::with_decision_channel`] says otherwise.
+    decision_channel: ChannelKind,
 }
 
 impl ApprovalBot {
@@ -113,6 +116,7 @@ impl ApprovalBot {
             chat: None,
             last_activity: None,
             command_menu: Vec::new(),
+            decision_channel: ChannelKind::Telegram,
         }
     }
 
@@ -200,11 +204,14 @@ impl ApprovalBot {
                 channel = self.channel.name(),
                 "registered slash-command menu"
             ),
-            Err(e) => tracing::warn!(
-                error = %e,
-                channel = self.channel.name(),
-                "register_commands failed"
-            ),
+            Err(e) => {
+                let error = liberado_common::redact_secrets(&e.to_string());
+                tracing::warn!(
+                    %error,
+                    channel = self.channel.name(),
+                    "register_commands failed"
+                );
+            }
         }
     }
 
@@ -305,13 +312,15 @@ impl ApprovalBot {
 
     async fn ack(&self, event_id: &str, text: &str) {
         if let Err(e) = self.channel.acknowledge(event_id, text).await {
-            tracing::warn!(error = %e, "acknowledge failed");
+            let error = liberado_common::redact_secrets(&e.to_string());
+            tracing::warn!(%error, "acknowledge failed");
         }
     }
 
     async fn send_text(&self, text: &str) {
         if let Err(e) = self.channel.send_text(text).await {
-            tracing::warn!(error = %e, channel = self.channel.name(), "send_text failed");
+            let error = liberado_common::redact_secrets(&e.to_string());
+            tracing::warn!(%error, channel = self.channel.name(), "send_text failed");
         }
     }
 
@@ -322,7 +331,8 @@ impl ApprovalBot {
         match message_ref {
             Some(mref) => {
                 if let Err(e) = self.channel.edit_message(mref, body).await {
-                    tracing::warn!(error = %e, "approval-bot: edit_message receipt failed; sending plain text");
+                    let error = liberado_common::redact_secrets(&e.to_string());
+                    tracing::warn!(%error, "approval-bot: edit_message receipt failed; sending plain text");
                     self.send_text(body).await;
                 }
             }
@@ -355,7 +365,7 @@ impl ApprovalBot {
         let action = resolve::permission_scope_action(scope);
         let outcome = self
             .resolver
-            .resolve(stem, action, DecisionVia::Telegram)
+            .resolve(stem, action, DecisionVia::Channel(self.decision_channel))
             .await;
         let reply = resolve::permission_scope_reply(action, &outcome);
         if let Some(text) = reply.ack {
@@ -378,7 +388,9 @@ impl ApprovalBot {
             _ => None,
         };
         if let Some(decision) = decision
-            && let Err(e) = ledger.record(&proposal.id, decision, "telegram").await
+            && let Err(e) = ledger
+                .record(&proposal.id, decision, self.decision_channel.as_str())
+                .await
         {
             tracing::error!(stem, error = %e, "approval-bot: failed to record the decision");
             self.ack(event_id, "Failed to record your decision — try again.")
@@ -578,7 +590,7 @@ impl ApprovalBot {
             return;
         };
 
-        if text == "/start" || text == "/help" {
+        if self.show_canned_greeting(text) {
             self.send_text(
                 "Liberado is online. Send a normal message to chat. \
                  Proposal Approve/Revise/Reject buttons still work as before.",
@@ -657,8 +669,9 @@ impl ApprovalBot {
                 }
             }
             Err(e) => {
-                tracing::warn!(error = %e, seq, "chat turn failed");
-                self.send_text(&label(&format!("Sorry — that turn failed: {e}")))
+                let error = liberado_common::redact_secrets(&e);
+                tracing::warn!(%error, seq, "chat turn failed");
+                self.send_text(&label(&format!("Sorry — that turn failed: {error}")))
                     .await;
             }
         }
@@ -769,7 +782,8 @@ impl ApprovalBot {
             )
             .await
         {
-            tracing::warn!(error = %e, "approval-bot: failed to send revised proposal buttons");
+            let error = liberado_common::redact_secrets(&e.to_string());
+            tracing::warn!(%error, "approval-bot: failed to send revised proposal buttons");
         }
     }
 }
@@ -785,8 +799,9 @@ async fn receive_and_dispatch(this: &Arc<ApprovalBot>, cursor: &mut String) {
             }
         }
         Err(e) => {
+            let error = liberado_common::redact_secrets(&e.to_string());
             tracing::warn!(
-                error = %e,
+                %error,
                 channel = this.channel.name(),
                 "messaging receive error"
             );
@@ -1844,3 +1859,7 @@ id: prop-1
 #[cfg(test)]
 #[path = "telegram_approvals_survivor_tests.rs"]
 mod survivor_tests;
+
+#[cfg(test)]
+#[path = "matrix_decision_tests.rs"]
+mod matrix_decision_tests;

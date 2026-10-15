@@ -86,6 +86,9 @@ pub enum MarkdownLine {
     Blank,
 }
 
+mod html;
+pub use html::{escape_html, markdown_to_html};
+
 /// Parse markdown text into a vector of abstract `MarkdownLine`s.
 pub fn markdown_to_lines(text: &str) -> Vec<MarkdownLine> {
     let mut result = Vec::new();

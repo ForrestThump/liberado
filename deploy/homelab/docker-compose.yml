@@ -13,6 +13,10 @@ services:
       - homelab
     ports:
       - "4201:4201"
+    # The homeserver on the homelab network calls the application service here.
+    # Do not publish 4202 with `ports:`. The host does not need this port.
+    expose:
+      - "4202"
     env_file:
       - .env
     environment:

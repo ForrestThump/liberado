@@ -24,7 +24,10 @@ repository = "https://github.com/shilohmangus/liberado"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 fs4 = "0.13"
-serde_yaml = "0.9"
+# serde_norway is the maintained hard fork of serde_yaml 0.9. serde_yaml is
+# deprecated and pulls in unmaintained unsafe-libyaml (RUSTSEC-2024-0449).
+# serde_yml is unsound and unmaintained (RUSTSEC-2025-0068).
+serde_norway = "0.9"
 chrono = { version = "0.4", features = ["serde"] }
 chrono-tz = "0.10"
 thiserror = "2"
@@ -80,12 +83,14 @@ liberado-notify = { path = "crates/notify" }
 liberado-messaging = { path = "crates/messaging" }
 liberado-mcp = { path = "crates/mcp" }
 liberado-orchestrator = { path = "crates/orchestrator" }
+liberado-policy = { path = "crates/policy" }
 liberado-main-agent = { path = "crates/main-agent" }
 liberado-daemon = { path = "crates/daemon" }
 liberado-server = { path = "crates/server" }
 liberado-theme = { path = "crates/theme" }
 chat-client-contract = { path = "crates/chat-client-contract" }
 liberado-markdown = { path = "crates/markdown" }
+liberado-matrix = { path = "crates/matrix" }
 liberado-commands = { path = "crates/liberado-commands" }
 liberado-test-support = { path = "crates/test-support" }
 liberado-tool-runtime = { path = "crates/tool-runtime" }

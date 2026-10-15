@@ -106,7 +106,7 @@ fn split_frontmatter(text: &str) -> (Map<String, Value>, String) {
     };
     let yaml = &text[4..4 + end];
     let body = text[4 + end + 5..].to_owned();
-    let meta = serde_yaml::from_str::<serde_yaml::Value>(yaml)
+    let meta = serde_norway::from_str::<serde_norway::Value>(yaml)
         .ok()
         .and_then(|value| serde_json::to_value(value).ok())
         .and_then(|value| value.as_object().cloned())
@@ -367,6 +367,43 @@ mod tests {
         assert_eq!(meta["kind"], "plan");
         assert_eq!(meta["open_items"], true);
         assert_eq!(body, "# Hello\n");
+    }
+
+    #[test]
+    fn split_frontmatter_keeps_lists_bools_and_dates() {
+        let text = "\
+---
+kind: policy
+status: active
+open_items: false
+last_verified: 2026-09-22
+supersedes:
+  - old-plan.md
+  - older-plan.md
+domain: \"\"
+---
+# Title
+";
+        let (meta, body) = split_frontmatter(text);
+        assert_eq!(meta["kind"], "policy");
+        assert_eq!(meta["status"], "active");
+        assert_eq!(meta["open_items"], false);
+        assert_eq!(meta["last_verified"], "2026-09-22");
+        assert_eq!(meta["domain"], "");
+        assert_eq!(
+            meta["supersedes"],
+            serde_json::json!(["old-plan.md", "older-plan.md"])
+        );
+        assert_eq!(body, "# Title\n");
+    }
+
+    #[test]
+    fn invalid_yaml_and_non_maps_yield_an_empty_meta_map() {
+        let (broken, body) = split_frontmatter("---\nkind: [\n---\n# Kept\n");
+        assert!(broken.is_empty());
+        assert_eq!(body, "# Kept\n");
+        let (list, _) = split_frontmatter("---\n- just\n- a\n- list\n---\nbody\n");
+        assert!(list.is_empty());
     }
 
     #[test]

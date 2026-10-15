@@ -22,6 +22,9 @@
 //!   the incoherence this rule guards against; it is simply an unanswered question. See
 //!   [`ChatSessions::persist_user_message`].
 //!
+//!   **A failed turn also writes one short error note.** The note is not an assistant tool tail.
+//!   Its text is a fixed sentence, so a reload can show the failure without the raw provider error.
+//!
 //! We depend on the [`ConversationStore`] *trait*, never a concrete store: the composition root
 //! injects the engine (JSONL today, SQLite/Postgres later) so it stays swappable.
 //!
@@ -57,23 +60,26 @@ use std::sync::{Arc, Mutex};
 
 use liberado_agent_workspace::WorkspaceSettings;
 use liberado_common::{
-    Capability, CapabilityCatalog, CapabilitySet, Consequence, DEFAULT_POOL, DispatchAction,
-    McpDescriptor, ProposalSigner, RiskWaiverSet, UserTimezone, WriteClass, mcp_of,
+    Capability, CapabilityCatalog, CapabilitySet, Consequence, DispatchAction, McpDescriptor,
+    ProposalSigner, RiskWaiverSet, UserTimezone, WriteClass, mcp_of,
 };
 use liberado_conversation_store::{
     AgentProfiles, Author, ConversationHeader, ConversationStore, MessageNode, NewNode, StoreError,
     Ulid,
 };
 use liberado_dispatcher::{DispatchRequest, Dispatcher};
-use liberado_executor::{
-    AgentEvent, DecoratingRuntime, ExecError, Executor, RiskGatedToolRuntime, ToolRuntime,
-};
+#[cfg(doc)]
+use liberado_executor::RiskGatedToolRuntime;
+use liberado_executor::{AgentEvent, DecoratingRuntime, ExecError, Executor, ToolRuntime};
 use liberado_mcp::ScopedRuntime;
 use liberado_provider::{Message, Provider, Role};
 use liberado_session::{DomainHint, GoalSessionHub, GoalSpec, SessionGrant, SessionOrigin};
 
+#[path = "sessions/agent_hooks.rs"]
+mod agent_hooks;
 #[path = "sessions/agent_profiles.rs"]
 mod agent_profiles;
+pub use agent_hooks::is_agent_dm_session;
 #[path = "sessions/agent_spawn.rs"]
 mod agent_spawn;
 #[path = "sessions/approval.rs"]
@@ -85,6 +91,9 @@ mod reasoning_stamp;
 mod surface_mode;
 #[path = "sessions/turn_clock.rs"]
 mod turn_clock;
+#[path = "sessions/turn_failure.rs"]
+mod turn_failure;
+pub use turn_failure::{TURN_ERROR_AUTHOR, public_turn_failure};
 #[path = "sessions_waivers.rs"]
 mod waivers;
 #[path = "sessions/workspace.rs"]
@@ -277,7 +286,9 @@ pub struct ChatSessions {
     /// Declarative risk waivers from `policy.toml`. Passed through to the dispatcher pre-flight
     /// magnitude guard and every runtime gate built here.
     risk_waivers: RiskWaiverSet,
-    /// Capability grants for RiskGatedToolRuntime capability checking.
+    /// Process-wide capability grant. An unprofiled session inherits it
+    /// ([`Self::default_turn_settings`]). A profiled session's risk gate uses that
+    /// session's grant ([`Self::gate_with_session_grant`]), not this field.
     capabilities: CapabilitySet,
     /// The vault's `proposals/` directory — a `proposals/` subdirectory under this holds proposal
     /// files (matches the daemon's own `PROPOSALS_DIR` convention, see `RiskGatedToolRuntime`'s
@@ -323,6 +334,8 @@ pub struct ChatSessions {
     user_timezone: Option<UserTimezone>,
     /// Sticky Telegram id and the scope-button sender. Filled after this value is inside an `Arc`.
     approval_hooks: approval::ApprovalHooks,
+    /// Runs after an agent is created, renamed, or deleted. Empty unless Matrix is on.
+    matrix_hook: Mutex<Option<agent_hooks::MatrixHook>>,
 }
 
 /// The moving parts of automatic compaction: the tunables, plus the provider used for the one
@@ -387,6 +400,7 @@ impl ChatSessions {
             agent_workspace: None,
             user_timezone: None,
             approval_hooks: approval::ApprovalHooks::new(),
+            matrix_hook: Mutex::new(None),
         }
     }
 
@@ -784,9 +798,10 @@ impl ChatSessions {
                 // Derived from the runtime the executor is about to be handed, never from a list built
                 // beside it — see `Conversation::apply_available_tools`.
                 self.state_tool_surface(&mut convo, session, &settings, turn_runtime.as_ref());
-                let reply = convo
+                let ran = convo
                     .turn(&executor, turn_runtime.as_ref(), &framed_user)
-                    .await?;
+                    .await;
+                let reply = turn_failure::keep_or_record(self, session, ran).await?;
                 // Gap 2: if a `delegate` this turn deferred to the human out-of-band (an interactive
                 // proposal/permission notification already landed on this surface), collapse the face
                 // agent's now-redundant reply to a tiny pointer at that notification.
@@ -810,9 +825,10 @@ impl ChatSessions {
                             &settings,
                             turn_runtime.as_ref(),
                         );
-                        convo
+                        let ran = convo
                             .turn(&executor, turn_runtime.as_ref(), &framed_user)
-                            .await?
+                            .await;
+                        turn_failure::keep_or_record(self, session, ran).await?
                     }
                 }
             };
@@ -906,9 +922,10 @@ impl ChatSessions {
                     settings.profile.as_deref(),
                 );
                 self.state_tool_surface(&mut convo, session, &settings, turn_runtime.as_ref());
-                convo
+                let ran = convo
                     .turn_stream(&executor, turn_runtime.as_ref(), &framed_user, events)
-                    .await?;
+                    .await;
+                turn_failure::keep_or_record(self, session, ran).await?;
             } else {
                 match self.dispatch_turn(user, settings.delegation).await {
                     DispatchOutcome::Answered(reply) => {
@@ -930,9 +947,10 @@ impl ChatSessions {
                             &settings,
                             turn_runtime.as_ref(),
                         );
-                        convo
+                        let ran = convo
                             .turn_stream(&executor, turn_runtime.as_ref(), &framed_user, events)
-                            .await?;
+                            .await;
+                        turn_failure::keep_or_record(self, session, ran).await?
                     }
                 }
             }
@@ -1237,10 +1255,7 @@ impl ChatSessions {
 
             let terminal = match result {
                 Ok(()) => AgentEvent::Done,
-                Err(e) => {
-                    tracing::warn!(error = %e, session = %session, "chat turn failed");
-                    AgentEvent::Error(e.to_string())
-                }
+                Err(e) => turn_failure::failure_event(session, &e),
             };
             entry.publish(terminal);
             // Retired last: while this key is present, `start_or_attach` will attach rather than
@@ -1350,6 +1365,9 @@ impl ChatSessions {
     /// Built with `from_capabilities`, which enforces per **tool** and fails closed. The MCP-name
     /// constructor could not express a partial grant, and its empty-list-means-everything default
     /// would turn a restrictive profile into an unrestricted one.
+    ///
+    /// The risk gate uses this same set. Gating on the process grant would show a session-only
+    /// tool and then refuse the call.
     fn scoped_extras_runtime(
         &self,
         user: &str,
@@ -1368,37 +1386,13 @@ impl ChatSessions {
         if !self.risk_gate_enabled() {
             return scoped;
         }
-        let mut gated = RiskGatedToolRuntime::new(
-            scoped,
-            self.capabilities.clone(),
-            self.consequences.clone(),
-            self.zone_catalog.clone(),
-            self.zone_write_classes.clone(),
-            self.proposals_dir.clone(),
-            user.to_string(),
-            session.to_string(),
-            self.signer.clone(),
-            DEFAULT_POOL,
-        )
-        .with_risk_waivers(self.risk_waivers.clone());
-        if let Some(cat) = &self.live_catalog {
-            gated = gated.with_live_catalog(cat.clone());
-        }
-        Arc::new(self.stamp_approval(session, gated))
+        Arc::new(self.gate_with_session_grant(scoped, capabilities, user, session))
     }
 
     /// Every conversation header, newest first — the sidebar listing.
     ///
     /// Lazy backfill: if a header still has no title but history has a user message, persist the
     /// first-line default once so the sidebar is scannable without waiting for another turn.
-    /// Permanently delete a conversation. Thin passthrough: the store owns the semantics (see
-    /// [`ConversationStore::delete`]) and there is no cached conversation state here to invalidate —
-    /// every turn rehydrates from the store.
-    pub async fn delete(&self, id: Ulid) -> SessionResult<()> {
-        self.store.delete(id).await?;
-        Ok(())
-    }
-
     pub async fn list(&self) -> SessionResult<Vec<ConversationHeader>> {
         let mut headers = self.store.list().await?;
         for h in &mut headers {
@@ -1447,7 +1441,8 @@ impl ChatSessions {
     ///
     /// True when the transcript ends on the human's message and nothing is running for it. The
     /// honest reading of that state is "a turn was started and did not finish" — the daemon was
-    /// restarted mid-inference, the turn was cancelled, or it failed before persisting anything.
+    /// restarted mid-inference, or the turn was cancelled. A failed turn writes an error note,
+    /// so this stays false after a provider error.
     ///
     /// Derived rather than recorded, because the alternative is a durable "turn in flight" flag that
     /// has to be cleared on every exit path including the ones that do not run (a killed process
@@ -1474,15 +1469,6 @@ impl ChatSessions {
             // decorate a conversation we could not read.
             Err(_) => false,
         }
-    }
-
-    /// Set the title of a conversation. Idempotent — subsequent calls overwrite the same field.
-    ///
-    /// Intended writers: first-line default seed, future flash-title agent, HTTP `PATCH`,
-    /// future `/title` slash command. Always overwrites; never blocked by the default seed
-    /// (seed only runs when the current title is `None`).
-    pub async fn set_title(&self, session: Ulid, title: String) -> SessionResult<()> {
-        Ok(self.store.set_title(session, title).await?)
     }
 
     // ── private helpers ──────────────────────────────────────────────────────
@@ -1688,30 +1674,13 @@ impl ChatSessions {
             scope,
         ));
 
-        // Wrap in RiskGatedToolRuntime for safety guards (capability / consequence / magnitude).
-        // Chat isn't one of the daemon's named pools (it has its own separate "main-agent"
-        // capability scope) — tagged "default" so an approved chat-originated proposal executes
-        // via the daemon's "default" pool orchestrator on approval, exactly matching today's
-        // pre-pool behavior (one orchestrator handled every approval, regardless of origin).
-        let mut gated = RiskGatedToolRuntime::new(
-            inner,
-            // The same set that scoped the surface above. Gating on the process grant while scoping
-            // on the session's would surface a profile's tool and then refuse the call.
-            capabilities.clone(),
-            self.consequences.clone(),
-            self.zone_catalog.clone(),
-            self.zone_write_classes.clone(),
-            self.proposals_dir.clone(),
-            user.to_string(),
-            session.to_string(),
-            self.signer.clone(),
-            DEFAULT_POOL,
+        // Gate on the session grant, not the narrowed `scope` and not the process grant.
+        // Narrowing only hides tools. Dropping Write and the other non-execute capabilities
+        // here would shrink the gate. See the filter above.
+        self.attach_workspace(
+            session,
+            Box::new(self.gate_with_session_grant(inner, capabilities.clone(), user, session)),
         )
-        .with_risk_waivers(self.risk_waivers.clone());
-        if let Some(cat) = &self.live_catalog {
-            gated = gated.with_live_catalog(cat.clone());
-        }
-        self.attach_workspace(session, Box::new(self.stamp_approval(session, gated)))
     }
 
     /// Get-or-insert the per-session turn lock, so two turns on the same conversation serialize

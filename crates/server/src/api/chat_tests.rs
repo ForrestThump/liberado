@@ -300,6 +300,34 @@ fn chat_message_from_node_carries_the_store_model_stamp() {
     assert_eq!(wire.reasoning, None);
 }
 
+#[test]
+fn chat_message_from_node_maps_a_turn_failure_to_the_error_role() {
+    use liberado_conversation_store::{Author, MessageNode, Ulid};
+    use liberado_provider::{Message, Role};
+
+    let node = MessageNode {
+        id: Ulid::new(),
+        parent_id: None,
+        conversation_id: Ulid::new(),
+        author: Author::Named(liberado_main_agent::TURN_ERROR_AUTHOR.into()),
+        created_at: chrono::Utc::now(),
+        message: Message {
+            role: Role::Assistant,
+            content: "The model provider failed before it could reply.".into(),
+            tool_calls: Vec::new(),
+            tool_call_id: None,
+        },
+        model: None,
+        reasoning: None,
+    };
+    let wire = chat_message_from_node(node);
+    assert_eq!(wire.role, "error");
+    assert_eq!(
+        wire.content,
+        "The model provider failed before it could reply."
+    );
+}
+
 /// An old session can still have `<think>` in the stored assistant text. The
 /// history read keeps the interior as thinking and the answer as content. A
 /// user who quoted the tag keeps it, with no thinking step.

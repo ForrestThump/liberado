@@ -13,11 +13,23 @@ use axum::{
     http::StatusCode,
     response::IntoResponse,
 };
-use chat_client_contract::{ApprovalListResponse, ApprovalResolveRequest, ApprovalResolveResponse};
+use chat_client_contract::{
+    ApprovalListResponse, ApprovalResolveRequest, ApprovalResolveResponse,
+    PendingApprovalListResponse,
+};
 use liberado_common::DecisionVia;
 use liberado_telegram_approvals::ResolveOutcome;
 
 use crate::state::AppState;
+
+/// `GET /api/approvals/pending` — open permission requests. Read-only.
+///
+/// Rows are id, conversation, tool, zone, and created time. This route does not
+/// decide a request. `POST /api/approvals/{id}/resolve` remains the only writer.
+pub async fn list_pending_approvals(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let approvals = crate::approvals::pending_approval_rows(&state.approval_hub).await;
+    Json(PendingApprovalListResponse { approvals })
+}
 
 /// `GET /api/conversations/{id}/approvals` — cards for one chat. Read-only.
 pub async fn list_approvals(
@@ -111,3 +123,7 @@ fn reply(
 #[cfg(test)]
 #[path = "approvals_http_tests.rs"]
 mod http_tests;
+
+#[cfg(test)]
+#[path = "approvals_resolve_http_tests.rs"]
+mod resolve_http_tests;

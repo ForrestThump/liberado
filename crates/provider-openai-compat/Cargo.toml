@@ -9,6 +9,7 @@ authors.workspace = true
 repository.workspace = true
 
 [dependencies]
+liberado-common = { workspace = true }
 liberado-provider = { workspace = true }
 async-trait = { workspace = true }
 reqwest = { workspace = true }

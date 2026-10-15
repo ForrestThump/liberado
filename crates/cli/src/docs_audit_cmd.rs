@@ -266,7 +266,7 @@ fn parse_example(language: &str, body: &str) -> Result<(), Box<dyn std::error::E
             serde_json::from_str::<serde_json::Value>(body)?;
         }
         "yaml" => {
-            serde_yaml::from_str::<serde_yaml::Value>(body)?;
+            serde_norway::from_str::<serde_norway::Value>(body)?;
         }
         _ => unreachable!("checked_fences returns supported languages"),
     }
@@ -339,6 +339,10 @@ fn read_text(path: &Path) -> std::io::Result<String> {
 #[cfg(test)]
 #[path = "docs_audit_cmd/regression_tests.rs"]
 mod regression_tests;
+
+#[cfg(test)]
+#[path = "docs_audit_cmd/yaml_inputs.rs"]
+mod yaml_inputs;
 
 #[cfg(test)]
 mod tests {
