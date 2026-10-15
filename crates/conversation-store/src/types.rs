@@ -307,6 +307,24 @@ pub struct ConversationHeader {
     /// byte-identical until a creator row is written. Not copied on fork.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub agent_creator: bool,
+    /// Coding project this chat is attached to. A name from `GET /api/projects`.
+    ///
+    /// Absent on logs written before the field. `None` means the chat is not attached.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<String>,
+    /// Model the next turn should run on. The turn stamps it onto the user message
+    /// and clears this field. Absent on older logs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pending_model: Option<String>,
+}
+
+/// A partial update of the chat-lens fields that are not the title or the grant.
+///
+/// `None` leaves the stored value. `Some(None)` clears it. `Some(Some(value))` sets it.
+#[derive(Debug, Clone, Default)]
+pub struct ChatMetaUpdate {
+    pub project: Option<Option<String>>,
+    pub pending_model: Option<Option<String>>,
 }
 
 /// The input to [`create`](crate::ConversationStore::create): the caller supplies only intent, not

@@ -358,6 +358,14 @@ impl ConversationStore for FailOnceContentStore {
         self.inner.set_title(conversation, title).await
     }
 
+    async fn set_chat_meta(
+        &self,
+        conversation: Ulid,
+        update: liberado_conversation_store::ChatMetaUpdate,
+    ) -> liberado_conversation_store::StoreResult<()> {
+        self.inner.set_chat_meta(conversation, update).await
+    }
+
     async fn set_grant(
         &self,
         conversation: Ulid,

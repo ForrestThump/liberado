@@ -37,7 +37,7 @@ thing as a conversation that is not a session.
 (`liberado_config::sessions_dir()`), one append-only JSONL log **per session**:
 
 ```
-line 0   header   the SessionHeader (rewritten on title change; replay takes the last one)
+line 0   header   the SessionHeader (rewritten on title, project, or pending-model change; replay takes the last one)
          node     a MessageNode  — a provider-replayable turn, carrying parent_id (the DAG)
          event    a SessionEvent — an observation from a pack (tool started, awaiting input, …)
          status / finish        — lifecycle transitions, for goal-bearing sessions

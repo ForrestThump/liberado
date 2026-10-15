@@ -87,6 +87,13 @@ pub struct SessionHeader {
     /// [`ConversationHeader::agent_creator`](liberado_conversation_store::ConversationHeader::agent_creator).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub agent_creator: bool,
+
+    /// Coding project attached to this chat. See [`ConversationHeader::project`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<String>,
+    /// Model pick for the next turn. See [`ConversationHeader::pending_model`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pending_model: Option<String>,
 }
 
 fn pending() -> SessionStatus {
@@ -117,6 +124,8 @@ impl SessionHeader {
             // class upgrades it on the chat lens — see `to_conversation_header`.
             surface_mode: SurfaceMode::default(),
             agent_creator: false,
+            project: None,
+            pending_model: None,
         }
     }
 
@@ -191,6 +200,8 @@ impl SessionHeader {
             grant: self.grant.clone(),
             surface_mode: self.projected_surface_mode(profiles),
             agent_creator: self.agent_creator,
+            project: self.project.clone(),
+            pending_model: self.pending_model.clone(),
         }
     }
 
@@ -236,6 +247,9 @@ pub struct NewSession {
     /// Singleton Agent Creator marker. Default false. Forks pass false even
     /// when the source is the creator — a branch is not a second creator.
     pub agent_creator: bool,
+    /// Coding project to stamp on the new session. Default none. A fork copies
+    /// the source project; it does not copy `pending_model`.
+    pub project: Option<String>,
 }
 
 #[cfg(test)]
@@ -297,6 +311,17 @@ mod surface_mode_tests {
             header.to_conversation_header().surface_mode,
             SurfaceMode::Chat
         );
+    }
+
+    #[test]
+    fn a_header_written_before_project_and_pending_model_still_loads() {
+        let raw = r#"{"id":"01ARZ3NDEKTSV4RRFFQ69G5FAV","created_at":"2026-01-01T00:00:00Z"}"#;
+        let header: SessionHeader = serde_json::from_str(raw).unwrap();
+        assert!(header.project.is_none());
+        assert!(header.pending_model.is_none());
+        let chat = header.to_conversation_header();
+        assert!(chat.project.is_none());
+        assert!(chat.pending_model.is_none());
     }
 
     /// A deployment that lists `coding` in its `[chat] agent_profiles`
