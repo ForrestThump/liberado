@@ -9,6 +9,8 @@
 //! Plugins. Imagine is intentionally absent — the file `components/imagine.rs` and `Route::Imagine`
 //! survive so the surface can be re-introduced later without re-shaping the rail.
 
+use std::collections::HashMap;
+
 use dioxus::prelude::*;
 
 use chat_client_contract::{
@@ -24,9 +26,12 @@ use crate::components::sidebar_shelf::{Shelf, search_results_on_shelf, surface_f
 use crate::icons::IconSearch;
 
 mod agents;
+mod profile_api;
 mod projects;
 mod rail;
 mod row_menu;
+
+use self::profile_api::{profile_from_page, use_profile_actions};
 
 use self::agents::{
     AgentTailList, CategoryList, ChatList, PinnedList, SearchResultList, ShowMoreRow, group_agents,
@@ -69,14 +74,15 @@ impl Route {
 
 // ── Sidebar fetchers ────────────────────────────────────────────────────────
 
-/// Headers from `GET /api/conversations`, plus the built-in creator ids.
+/// Headers from `GET /api/conversations`, plus fields that are not on [`ConvHeader`].
 ///
-/// `agent_creator` is on the wire and is not a field of [`ConvHeader`]. The
-/// sidebar needs it so Delete can stay off for that one row.
+/// `agent_creator` marks the built-in Agent Creator. `profiles` maps a conversation
+/// id to `grant.profile`, which is the live name `PATCH /api/profiles/{name}` uses.
 #[derive(Clone, Debug, Default)]
 pub(super) struct ConversationPage {
     pub(super) headers: Vec<ConvHeader>,
     pub(super) creator_ids: Vec<String>,
+    pub(super) profiles: HashMap<String, String>,
 }
 
 pub(super) fn page_from_list(value: &serde_json::Value) -> Result<ConversationPage, String> {
@@ -85,6 +91,7 @@ pub(super) fn page_from_list(value: &serde_json::Value) -> Result<ConversationPa
         .ok_or_else(|| "Bad response: expected a list".to_string())?;
     let mut headers = Vec::with_capacity(items.len());
     let mut creator_ids = Vec::new();
+    let mut profiles = HashMap::new();
     for item in items {
         let header: ConvHeader =
             serde_json::from_value(item.clone()).map_err(|e| format!("Bad response: {e}"))?;
@@ -95,12 +102,29 @@ pub(super) fn page_from_list(value: &serde_json::Value) -> Result<ConversationPa
         {
             creator_ids.push(header.id.clone());
         }
+        if let Some(name) = profile_name_from_item(item) {
+            profiles.insert(header.id.clone(), name);
+        }
         headers.push(header);
     }
     Ok(ConversationPage {
         headers,
         creator_ids,
+        profiles,
     })
+}
+
+fn profile_name_from_item(item: &serde_json::Value) -> Option<String> {
+    let name = item
+        .get("grant")
+        .and_then(|grant| grant.get("profile"))
+        .and_then(|profile| profile.as_str())
+        .map(str::trim)?;
+    if name.is_empty() {
+        None
+    } else {
+        Some(name.to_string())
+    }
 }
 
 fn loaded_page(loaded: Option<&Result<ConversationPage, String>>) -> ConversationPage {
@@ -310,9 +334,19 @@ pub fn Sidebar(
         })
     };
 
+    let (rename_profile, delete_profile) = use_profile_actions(
+        api_base.clone(),
+        menu_for,
+        action_error,
+        use_callback(move |()| {
+            conversations.restart();
+            search_results.restart();
+        }),
+        move |id: String| profile_from_page(&loaded_page(conversations.read().as_ref()), &id),
+    );
+
     let page = loaded_page(conversations.read().as_ref());
     let headers = page.headers;
-    let creator_ids = page.creator_ids;
     let chat_rows: Vec<&ConvHeader> = headers
         .iter()
         .filter(|c| c.surface_mode == SurfaceMode::Chat)
@@ -505,9 +539,14 @@ pub fn Sidebar(
                                     .collect(),
                                 menu_for,
                                 action_error,
+                                agents_shelf: shelf() == Shelf::Agents,
+                                profiles: page.profiles.clone(),
                                 on_delete: move |id: String| delete_conv.call(id),
                                 on_rename: move |pair: (String, String)| rename_conv.call(pair),
-                                protected_ids: creator_ids.clone(),
+                                on_delete_profile: move |id: String| delete_profile.call(id),
+                                on_rename_profile: move |pair: (String, String)| {
+                                    rename_profile.call(pair)
+                                },
                                 on_pick: move |id: String| {
                                     let mode = conversations
                                         .read()
@@ -600,8 +639,8 @@ pub fn Sidebar(
                             items: grouped.pinned.iter().map(|c| (*c).clone()).collect(),
                             active: active_conv_id,
                             menu_for,
-                            protected_ids: creator_ids.clone(),
-                            on_rename: move |pair: (String, String)| rename_conv.call(pair),
+                            profiles: page.profiles.clone(),
+                            on_rename: move |pair: (String, String)| rename_profile.call(pair),
                             on_pick: move |id: String| {
                                 active_conv_id.set(Some(id));
                                 active_surface.set(Some(SurfaceMode::Agent));
@@ -610,7 +649,7 @@ pub fn Sidebar(
                                     collapsed.set(true);
                                 }
                             },
-                            on_delete: move |id: String| delete_conv.call(id),
+                            on_delete: move |id: String| delete_profile.call(id),
                             action_error,
                         }
 
@@ -620,8 +659,8 @@ pub fn Sidebar(
                                 members: members.iter().map(|c| (*c).clone()).collect(),
                                 active: active_conv_id,
                                 menu_for,
-                                protected_ids: creator_ids.clone(),
-                                on_rename: move |pair: (String, String)| rename_conv.call(pair),
+                                profiles: page.profiles.clone(),
+                                on_rename: move |pair: (String, String)| rename_profile.call(pair),
                                 on_pick: move |id: String| {
                                     active_conv_id.set(Some(id));
                                     active_surface.set(Some(SurfaceMode::Agent));
@@ -630,7 +669,7 @@ pub fn Sidebar(
                                         collapsed.set(true);
                                     }
                                 },
-                                on_delete: move |id: String| delete_conv.call(id),
+                                on_delete: move |id: String| delete_profile.call(id),
                                 action_error,
                             }
                         }
@@ -645,8 +684,8 @@ pub fn Sidebar(
                                     items: grouped.others.iter().map(|c| (*c).clone()).collect(),
                                     active: active_conv_id,
                                     menu_for,
-                                    protected_ids: creator_ids.clone(),
-                                    on_rename: move |pair: (String, String)| rename_conv.call(pair),
+                                    profiles: page.profiles.clone(),
+                                    on_rename: move |pair: (String, String)| rename_profile.call(pair),
                                     on_pick: move |id: String| {
                                         active_conv_id.set(Some(id));
                                         active_surface.set(Some(SurfaceMode::Agent));
@@ -655,7 +694,7 @@ pub fn Sidebar(
                                             collapsed.set(true);
                                         }
                                     },
-                                    on_delete: move |id: String| delete_conv.call(id),
+                                    on_delete: move |id: String| delete_profile.call(id),
                                     action_error,
                                 }
                             }

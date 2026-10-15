@@ -450,8 +450,9 @@ impl TextChatBridge {
         // chose — a typo'd `/spawn` should be a correction, not a silent mis-scoped run.
         let resolved = self
             .state
-            .config
-            .resolve_session_profile(profile.as_deref(), domain_fallback);
+            .surfaces
+            .profiles
+            .resolve(profile.as_deref(), domain_fallback);
         let resolved = match resolved {
             Ok(resolved) => resolved,
             Err(e) => {

@@ -108,6 +108,21 @@ impl ChatSessions {
         }
     }
 
+    /// Keep a profile's provider when the profile is renamed. A missing route stays missing.
+    pub fn rename_profile_route(&self, from: &str, to: &str) {
+        if from == to {
+            return;
+        }
+        let mut routes = self
+            .profile_providers
+            .routes
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(id) = routes.remove(from) {
+            routes.insert(to.to_string(), id);
+        }
+    }
+
     /// The executor for this turn: the profile's provider when the live table names
     /// one, otherwise the shared default. The model override is applied after the
     /// swap so a pinned slug still wins over the backend's own default.

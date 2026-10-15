@@ -162,7 +162,35 @@ conversation does not exist, `503` if chat is disabled. There is no revoke on th
 consequence,tool_count,tool_names,visible_to_main_agent,visible_to_dispatcher}]}`) — the same
 `Arc<CapabilityCatalog>` the dispatcher routes against, not an independent snapshot.
 `tool_count`/`tool_names` are populated from the connected chat runtime's tools, grouped by MCP
-name. Visibility flags reflect `policy.toml` grants for `"main-agent"` vs `"dispatcher"`.
+name. `visible_to_dispatcher` is the `policy.toml` grant for `"dispatcher"`.
+`visible_to_main_agent` is the `"main-agent"` grant, narrowed by the chat-access ledger below.
+The ledger cannot grant a server policy did not grant.
+
+**`PUT /api/plugins/{id}`** body `{"enabled": true|false}`. `{id}` is an MCP server name from
+`GET /api/catalog`. `enabled: false` hides that server from the chat face (catalog flag and the
+chat runtime). `enabled: true` restores it only when policy already grants it to `main-agent`;
+otherwise `409`. Unknown id → `404`. Response:
+`{"name","enabled","visible_to_main_agent"}`. The mask is process-wide for the chat face, stored
+in `{data_dir}/plugin-chat-access.json`. It does not edit `topology.toml` and does not change the
+dispatcher grant.
+
+**`GET /api/profiles`** lists enabled `[[session_profiles]]` under their live names.
+`agent_eligible` follows the name in `topology.toml` (what `[chat] agent_profiles` lists), not a
+renamed display name.
+
+**`PATCH /api/profiles/{name}`** body `{"name":"new-name"}`. Renames one enabled profile.
+`200` `{"name","renamed_to","conversations"}`. The same name is a no-op (`conversations: 0`).
+Names are trimmed, non-empty, at most 64 characters, and ASCII letters, digits, `.`, `_`, `-`.
+A bad name is `400`. A name already in use is `409`. An unknown name is `404`. `chat-default`
+and the Agent Creator profile (`operator`) are `403`, whether they are the current name or the
+requested name. Conversations that used the old name are kept; their stored grant is copied onto
+the new name. The ledger is `{data_dir}/session-profile-ledger.json`. `topology.toml` is not
+rewritten.
+
+**`DELETE /api/profiles/{name}`** removes that live name. `200`
+`{"name","deleted":true,"conversations_kept","fallback":"default"}`. Conversations are kept.
+Their profile is cleared, so the next turn uses the process default grant. Unknown → `404`.
+`chat-default` and `operator` → `403`.
 
 ## Models (live catalog + hot-swap)
 
@@ -300,7 +328,9 @@ What is reachable today, given spider-mcp fetches with `GET`:
 | `GET /api/conversations/search?q=` | Grep across every stored chat |
 | `GET /api/status`, `/api/catalog` | Model, MCP fleet, capability grants |
 
-So the live exposure is **disclosure, not escalation**: no `GET` mutates anything. An incognito chat
+So the live exposure through spider-mcp is **disclosure, not escalation**: no `GET` mutates
+anything. `PATCH /api/profiles/{name}`, `DELETE /api/profiles/{name}`, and `PUT /api/plugins/{id}`
+are not `GET` and are not agent tools. An incognito chat
 is not listed and has no file, so it cannot be found by listing or search — but it *is* readable at
 `GET /api/conversations/{id}` by anyone holding the id.
 

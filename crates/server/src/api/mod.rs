@@ -5,6 +5,8 @@ mod chat;
 mod chat_create;
 mod goals;
 mod grants;
+mod plugins;
+mod profiles;
 mod search;
 mod sessions;
 mod status;
@@ -21,6 +23,8 @@ pub use goals::{
     goals_rewind, goals_start, goals_stream, list_projects,
 };
 pub use grants::{conversation_grants, get_header_grant};
+pub use plugins::set_plugin_enabled;
+pub use profiles::{delete_profile, rename_profile};
 pub use search::search_conversations;
 pub use sessions::{session_fork, sessions_list};
 pub use status::{catalog, models, reactions, reload_mcp_peers, select_model, status, vault};

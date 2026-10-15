@@ -1,21 +1,15 @@
 //! Plugins view — MCP servers from `GET /api/catalog`.
 //!
-//! The catalog reports whether chat can call each server. It does not accept a change.
-//! `POST /api/mcp/reload` re-reads topology from disk; it does not flip one server.
-//! The switches are disabled and say so, including on a phone where a tooltip is easy to miss.
+//! The switch calls `PUT /api/plugins/{id}` with `{"enabled": bool}`. It can turn
+//! chat access off, and back on only when policy already grants the server. The
+//! error text is on the row, so a phone does not need a tooltip.
 
 use dioxus::prelude::*;
 
 use chat_client_contract::{CatalogResponse, McpInfo};
 
-/// Visible without a hover. The switch tooltip repeats it.
-pub(crate) const PLUGIN_TOGGLE_GAP: &str = "The daemon has no plugin toggle. This switch shows whether chat can call the server. \
-     Change access in topology and policy, then reload MCP peers.";
-
-/// There is no write API for one server, so the control cannot be turned on.
-pub(crate) const fn plugin_switch_disabled() -> bool {
-    true
-}
+/// Shown under the page title. The switch itself does not depend on a hover.
+pub(crate) const PLUGIN_TOGGLE_NOTE: &str = "This switch turns chat access to a server on or off. It cannot grant a server that policy does not already grant.";
 
 pub(crate) fn plugin_meta(mcp: &McpInfo) -> String {
     let access = if mcp.visible_to_main_agent {
@@ -34,6 +28,21 @@ pub(crate) fn tool_line(names: &[String]) -> String {
     names.join(", ")
 }
 
+pub(crate) fn plugin_error(status: u16, body: &str) -> String {
+    let detail = serde_json::from_str::<serde_json::Value>(body)
+        .ok()
+        .and_then(|value| {
+            value
+                .get("error")
+                .and_then(|error| error.as_str())
+                .map(str::to_string)
+        });
+    match detail {
+        Some(text) => text,
+        None => format!("Plugin update failed: HTTP {status}"),
+    }
+}
+
 async fn fetch_catalog(api_base: String) -> Result<CatalogResponse, String> {
     let url = format!("{api_base}/api/catalog");
     let resp = reqwest::get(&url)
@@ -46,9 +55,50 @@ async fn fetch_catalog(api_base: String) -> Result<CatalogResponse, String> {
     resp.json().await.map_err(|e| format!("Bad response: {e}"))
 }
 
+async fn put_plugin_enabled(api_base: &str, name: &str, enabled: bool) -> Result<(), String> {
+    let url = format!("{api_base}/api/plugins/{name}");
+    let resp = reqwest::Client::new()
+        .put(&url)
+        .json(&serde_json::json!({ "enabled": enabled }))
+        .send()
+        .await
+        .map_err(|e| format!("Failed to reach daemon: {e}"))?;
+    let status = resp.status().as_u16();
+    if (200..300).contains(&status) {
+        Ok(())
+    } else {
+        let body = resp.text().await.unwrap_or_default();
+        Err(plugin_error(status, &body))
+    }
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), allow(unused_mut))]
+fn start_plugin_toggle(
+    api_base: String,
+    name: String,
+    enabled: bool,
+    mut error: Signal<Option<String>>,
+    on_saved: EventHandler<()>,
+) {
+    #[cfg(target_arch = "wasm32")]
+    wasm_bindgen_futures::spawn_local(async move {
+        match put_plugin_enabled(&api_base, &name, enabled).await {
+            Ok(()) => {
+                error.set(None);
+                on_saved.call(());
+            }
+            Err(message) => error.set(Some(message)),
+        }
+    });
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let _ = (api_base, name, enabled, error, on_saved);
+    }
+}
+
 #[component]
 pub fn Plugins(api_base: String) -> Element {
-    let catalog = use_resource({
+    let mut catalog = use_resource({
         let base = api_base.clone();
         move || fetch_catalog(base.clone())
     });
@@ -60,7 +110,7 @@ pub fn Plugins(api_base: String) -> Element {
                 class: "grok-page-header",
                 div { class: "grok-page-eyebrow", "Plugins" }
                 h1 { class: "grok-page-title", "Connected MCP servers" }
-                p { class: "grok-page-subtitle", "{PLUGIN_TOGGLE_GAP}" }
+                p { class: "grok-page-subtitle", "{PLUGIN_TOGGLE_NOTE}" }
             }
             div {
                 class: "grok-page-body",
@@ -74,7 +124,11 @@ pub fn Plugins(api_base: String) -> Element {
                         ul {
                             class: "plugin-list",
                             for mcp in body.mcps.iter() {
-                                PluginRow { mcp: mcp.clone() }
+                                PluginRow {
+                                    mcp: mcp.clone(),
+                                    api_base: api_base.clone(),
+                                    on_saved: move |_| catalog.restart(),
+                                }
                             }
                         }
                     },
@@ -85,7 +139,8 @@ pub fn Plugins(api_base: String) -> Element {
 }
 
 #[component]
-fn PluginRow(mcp: McpInfo) -> Element {
+fn PluginRow(mcp: McpInfo, api_base: String, on_saved: EventHandler<()>) -> Element {
+    let error = use_signal(|| None::<String>);
     let on = mcp.visible_to_main_agent;
     let class = if on {
         "plugin-switch on"
@@ -96,6 +151,8 @@ fn PluginRow(mcp: McpInfo) -> Element {
     let meta = plugin_meta(&mcp);
     let tools = tool_line(&mcp.tool_names);
     let label = format!("Chat access for {}", mcp.name);
+    let name = mcp.name.clone();
+    let next = !on;
 
     rsx! {
         li {
@@ -107,13 +164,24 @@ fn PluginRow(mcp: McpInfo) -> Element {
                     class: "{class}",
                     r#type: "button",
                     role: "switch",
-                    disabled: plugin_switch_disabled(),
-                    title: PLUGIN_TOGGLE_GAP,
+                    title: PLUGIN_TOGGLE_NOTE,
                     "aria-label": "{label}",
                     "aria-checked": "{checked}",
+                    onclick: move |_| {
+                        start_plugin_toggle(
+                            api_base.clone(),
+                            name.clone(),
+                            next,
+                            error,
+                            on_saved,
+                        );
+                    },
                 }
             }
             p { class: "plugin-meta", "{meta}" }
+            if let Some(message) = error() {
+                p { class: "plugin-status", "{message}" }
+            }
             if !tools.is_empty() {
                 p { class: "plugin-tools", "{tools}" }
             }
@@ -139,20 +207,23 @@ mod tests {
     }
 
     #[test]
-    fn the_switch_cannot_be_toggled_and_says_why() {
-        assert!(plugin_switch_disabled());
-        assert!(PLUGIN_TOGGLE_GAP.contains("no plugin toggle"));
-        assert!(PLUGIN_TOGGLE_GAP.contains("topology"));
+    fn the_switch_calls_put_and_shows_a_refusal_without_a_hover() {
+        assert!(PLUGIN_TOGGLE_NOTE.contains("cannot grant"));
         let src = include_str!("plugins.rs");
         let page = src.split("mod tests").next().unwrap_or(src);
-        assert!(
-            page.contains("disabled: plugin_switch_disabled()"),
-            "the control must use the disabled flag, not a click handler that pretends to toggle"
+        assert!(page.contains("/api/plugins/{name}"));
+        assert!(page.contains("\"enabled\": enabled"));
+        assert!(page.contains("onclick"));
+        assert!(!page.contains("disabled:"));
+        assert!(page.contains("plugin-status"));
+        let css = include_str!("../styles/main.css");
+        let switch = css_block(css, ".plugin-switch");
+        assert!(switch.contains("cursor: pointer"), "{switch}");
+        let refusal = plugin_error(
+            409,
+            r#"{"error":"policy does not grant 'tasks' to chat; this switch cannot widen access"}"#,
         );
-        assert!(
-            !page.contains("onclick"),
-            "a click handler would look like a working toggle"
-        );
+        assert!(refusal.contains("cannot widen"), "{refusal}");
     }
 
     #[test]

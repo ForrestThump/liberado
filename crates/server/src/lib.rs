@@ -32,6 +32,7 @@ mod pr_review_publish_flow;
 mod profile_providers;
 mod shutdown;
 mod state;
+mod surfaces;
 mod telegram;
 mod workspace_surface;
 
@@ -143,6 +144,8 @@ pub async fn run(vault_path: String) -> Result<(), Box<dyn std::error::Error>> {
     )
     .await;
 
+    let surfaces =
+        crate::surfaces::LiveSurfaces::open(Arc::new(config.clone()), &liberado_config::data_dir());
     let (chat, chat_tools, chat_tool_names) = build_chat(
         &providers,
         mcp_registry.clone(),
@@ -153,6 +156,7 @@ pub async fn run(vault_path: String) -> Result<(), Box<dyn std::error::Error>> {
         SessionEngine {
             store: sessions.clone(),
             goals: goals.clone(),
+            surfaces: surfaces.clone(),
         },
     )
     .await;
@@ -223,6 +227,7 @@ pub async fn run(vault_path: String) -> Result<(), Box<dyn std::error::Error>> {
         main_agent_capabilities,
         dispatcher_capabilities,
         config: Arc::new(config.clone()),
+        surfaces,
         model_name,
         provider: provider.clone(),
         hooks: resolved_hooks,
@@ -405,6 +410,14 @@ fn build_app_router(state: &Arc<AppState>) -> Router {
             axum::routing::post(api::cancel_conversation_turn),
         )
         .route("/api/profiles", axum::routing::get(api::list_profiles))
+        .route(
+            "/api/profiles/{name}",
+            axum::routing::patch(api::rename_profile).delete(api::delete_profile),
+        )
+        .route(
+            "/api/plugins/{id}",
+            axum::routing::put(api::set_plugin_enabled),
+        )
         .route(
             "/api/hooks/{name}",
             axum::routing::post(hooks::trigger_hook),
@@ -737,6 +750,8 @@ struct SessionEngine {
     store: Arc<SessionStore>,
     /// Goal sessions — including `delegate` — run here, not in a second inline orchestrator.
     goals: Arc<liberado_session::GoalSessionHub>,
+    /// Live profile names and the chat plugin mask. Not an extra `build_chat` argument.
+    surfaces: crate::surfaces::LiveSurfaces,
 }
 
 async fn build_chat(
@@ -748,7 +763,11 @@ async fn build_chat(
     guidance: Option<Arc<dyn liberado_common::ToolGuidanceSource>>,
     engine: SessionEngine,
 ) -> (Option<Arc<ChatSessions>>, usize, Vec<String>) {
-    let SessionEngine { store, goals } = engine;
+    let SessionEngine {
+        store,
+        goals,
+        surfaces,
+    } = engine;
     // The chat face runs on the `main_agent` role provider; its `delegate` classifier uses the
     // `dispatcher` role provider (falling back to the face provider if somehow unset).
     let Some(face_provider) = providers.face.clone() else {
@@ -772,7 +791,8 @@ async fn build_chat(
 
     // Face-agent tool surface: live registry (refresh on peer-set change). Specialist work goes
     // through `delegate` → hub → dispatch pack, not the face agent's own tool list.
-    let runtime = connect_chat_runtime(mcp);
+    let runtime =
+        crate::surfaces::mask_chat_runtime(connect_chat_runtime(mcp), surfaces.plugins.clone());
 
     let workspace = liberado_main_agent::WorkspaceSettings::resolve(
         config.tuning.agent_workspace.max_bytes,
@@ -878,7 +898,7 @@ async fn build_chat(
     );
     sessions = sessions.with_dispatch(dispatcher, catalog);
 
-    let sessions = chat_agent_spawn::install(sessions, config);
+    let sessions = chat_agent_spawn::install(sessions, surfaces.profiles.clone());
     (Some(sessions), tool_count, tool_names)
 }
 
