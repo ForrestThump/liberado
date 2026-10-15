@@ -110,8 +110,9 @@ pub async fn goals_start(
     // A named profile that resolves to nothing is refused, not silently downgraded to the domain
     // grant — that would run the session with authority the caller never asked for.
     let resolved = match state
-        .config
-        .resolve_session_profile(goal.profile.as_deref(), goal.domain.as_str())
+        .surfaces
+        .profiles
+        .resolve(goal.profile.as_deref(), goal.domain.as_str())
     {
         Ok(resolved) => resolved,
         Err(e) => {

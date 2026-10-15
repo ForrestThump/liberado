@@ -171,6 +171,10 @@ edit applies to sessions that already pinned `model`. Restart the daemon after c
 
 Load fails for the cases in §4. Disabled profiles are drafts and skip the check.
 
+`Config::resolve_session_profile` returns `ResolvedProfile`, re-exported from `liberado-config`.
+The WebUI rename ledger does not rewrite this file. A reader that only loads `topology.toml`
+still sees the operator's names.
+
 An unset API-key environment variable does not fail load. Validation does not read the process
 environment, and a missing key on the default provider already boots the daemon watch-only.
 Bootstrap warns. A turn on that profile fails and names the missing variable. The slug stays off

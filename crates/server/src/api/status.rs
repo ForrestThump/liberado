@@ -269,7 +269,10 @@ pub async fn catalog(State(state): State<Arc<AppState>>) -> impl IntoResponse {
                 tool_count: tool_names.len(),
                 tool_names,
                 provenance: d.provenance.clone(),
-                visible_to_main_agent: state.main_agent_capabilities.grants_mcp(&d.name),
+                visible_to_main_agent: state
+                    .surfaces
+                    .plugins
+                    .chat_visible(&d.name, state.main_agent_capabilities.grants_mcp(&d.name)),
                 visible_to_dispatcher: state.dispatcher_capabilities.grants_mcp(&d.name),
             }
         })

@@ -600,8 +600,10 @@ fn pick_chat_creation_prefers_incognito_then_background_then_grant() {
 
 #[test]
 fn resolve_chat_grant_returns_none_for_no_profile() {
-    let config = liberado_bootstrap::Config::default();
-    assert!(resolve_chat_grant(&config, None).unwrap().is_none());
+    let profiles = crate::surfaces::ProfileCatalog::memory(std::sync::Arc::new(
+        liberado_bootstrap::Config::default(),
+    ));
+    assert!(resolve_chat_grant(&profiles, None).unwrap().is_none());
 }
 
 #[test]
@@ -620,13 +622,14 @@ capabilities = []
 "#,
     )
     .unwrap();
+    let profiles = crate::surfaces::ProfileCatalog::memory(std::sync::Arc::new(config));
     // A named enabled profile resolves to a grant carrying its name.
-    let Some(grant) = resolve_chat_grant(&config, Some("research")).unwrap() else {
+    let Some(grant) = resolve_chat_grant(&profiles, Some("research")).unwrap() else {
         panic!("enabled profile must resolve");
     };
     assert_eq!(grant.profile.as_deref(), Some("research"));
     // Unknown name fails closed, naming the profile rather than silently downgrading.
-    let err = resolve_chat_grant(&config, Some("nosuch")).unwrap_err();
+    let err = resolve_chat_grant(&profiles, Some("nosuch")).unwrap_err();
     assert!(err.contains("nosuch"), "error must name the profile: {err}");
 }
 

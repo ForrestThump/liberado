@@ -179,6 +179,7 @@ fn rewind_app() -> (Router, Arc<GoalSessionHub>, Arc<GoalSessionStore>) {
         main_agent_capabilities: CapabilitySet::empty(),
         dispatcher_capabilities: CapabilitySet::empty(),
         config: Arc::new(liberado_bootstrap::Config::default()),
+        surfaces: crate::surfaces::LiveSurfaces::inert(),
         sessions: Arc::new(Default::default()),
         model_name: None,
         provider: None,

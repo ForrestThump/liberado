@@ -131,7 +131,7 @@ async fn create_standard_conversation(
             // disabled / serialization failure — all fail closed). `Ok(None)` is structurally
             // unreachable for this input. If you ever generalize `resolve_chat_grant` to return
             // `Ok(None)` for any `Some(name)` case, this site is the one that must change.
-            let grant = match resolve_chat_grant(state.config.as_ref(), Some(name)) {
+            let grant = match resolve_chat_grant(&state.surfaces.profiles, Some(name)) {
                 Ok(Some(grant)) => grant,
                 Ok(None) => unreachable!(
                     "resolve_chat_grant(Some(name)) cannot return Ok(None) — only Ok(Some(grant)) \

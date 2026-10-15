@@ -46,10 +46,12 @@ pub(crate) fn apply_user_timezone(sessions: ChatSessions, config: &Config) -> Ch
 /// not silently downgrade the child to default overrides (which would be wider
 /// than the named profile specified). The resolver returns the error and the
 /// caller refuses the create — same fail-closed shape as an unknown profile name.
-pub(crate) fn install(sessions: ChatSessions, config: &Config) -> Arc<ChatSessions> {
-    let config_for_resolve = config.clone();
+pub(crate) fn install(
+    sessions: ChatSessions,
+    profiles: crate::surfaces::ProfileCatalog,
+) -> Arc<ChatSessions> {
     let sessions = sessions.with_profile_resolver(Arc::new(move |name: &str| {
-        match config_for_resolve.resolve_session_profile(Some(name), "") {
+        match profiles.resolve(Some(name), "") {
             Ok(resolved) => {
                 let parts = resolved.grant_parts();
                 let overrides = serde_json::to_value(&resolved.overrides)
