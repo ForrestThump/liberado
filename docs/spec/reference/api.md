@@ -8,7 +8,7 @@ share everything.
 ```
               ┌──────────── liberado-server (HTTP + SSE) ──────────────────┐
               │  /api/status   /api/models (+ POST select)   /api/catalog   │
-              │  /api/reactions   /api/vault   /api/chat (+ stream)         │
+              │  /api/reactions   /api/vault   /api/library   /api/chat    │
               │  /api/conversations   /api/conversations/{id} (GET/PATCH)   │
               │  GET /api/conversations/{id}/grant                           │
               │  GET /api/conversations/{id}/grants (read-only)              │
@@ -175,6 +175,46 @@ name. Visibility flags reflect `policy.toml` grants for `"main-agent"` vs `"disp
 
 TUI: `/model` opens a full-screen searchable browser over `GET /api/models`; Enter calls
 `POST /api/models/select`.
+
+## Projects (read-only)
+
+`GET /api/projects` returns the enabled `[[projects]]` rows from `topology.toml`:
+`{ "projects": [{ "name", "root", "write_class" }] }`. There is no create, update, or delete
+route. A project is declared in that file. The WebUI lists the rows and can remember a choice
+in the browser. It does not write the topology.
+
+## Library (vault files, v1)
+
+`GET /api/library?limit=50` returns `items`. One row looks like this:
+
+```json
+{
+  "id": "attachments/a.png",
+  "kind": "png",
+  "title": "a.png",
+  "path_or_url": "attachments/a.png",
+  "created_at": "2026-10-15T12:00:00Z",
+  "source": "vault"
+}
+```
+
+v1 is a read-only capped scan of vault folders the default profile may read. The default
+profile is the enabled `chat-default` session profile. When that profile is missing or
+disabled, the scan uses the `main-agent` grant. A folder is included only when that grant
+has `Read` on a **vault** zone and the zone name is one of `attachments`, `media`, `images`,
+`files`, `exports`, or `artifacts` (ASCII case-insensitive). Other readable zones, such as
+`tasks` or `decisions`, are not library items.
+
+`source` is always `"vault"`. Session artifacts and executor offload are not listed. There is
+no upload and no delete.
+
+`limit` defaults to 50 and is clamped to 1..=200. `created_at` is the file's last modification
+time in UTC (`YYYY-MM-DDTHH:MM:SSZ`). Birth time is not portable, so v1 does not use it. The
+scan stops after 2000 files and 8 directory levels under each folder, then keeps the newest
+`limit` rows. A missing vault or an empty folder is `200` with `{ "items": [] }`.
+
+`id` and `path_or_url` are the vault-relative path with `/` separators. `kind` is the
+lowercased extension, or `"file"` when the name has none. `title` is the file name.
 
 Structured events are **JSON-encoded** (not bare strings) so a multi-line preview can't split across
 SSE `data:` lines, and so the fields stay typed. `args_preview`/`result_preview` are truncated

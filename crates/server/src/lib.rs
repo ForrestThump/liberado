@@ -349,6 +349,7 @@ fn build_app_router(state: &Arc<AppState>) -> Router {
         )
         .route("/api/reactions", axum::routing::get(api::reactions))
         .route("/api/vault", axum::routing::get(api::vault))
+        .route("/api/library", axum::routing::get(api::list_library))
         .route(
             "/api/conversations",
             axum::routing::get(api::list_conversations).post(api::create_conversation),
@@ -635,6 +636,7 @@ fn log_endpoint_summary() {
         "API endpoints:\n  GET /api/status  — daemon status\n  GET /api/models  — live provider \
          model catalog\n  POST /api/models/select  — hot-swap active model\n  \
          GET /api/reactions?limit=20  — recent reactions\n  GET /api/vault  — vault info\n  \
+         GET /api/library?limit=50  — vault files the default profile may read\n  \
          GET /api/goals  — list goal sessions; POST /api/goals starts one (drain-gated)\n  \
          GET /api/goals/{{id}}/stream  — SSE goal session events\n  /  — static frontend (build \
          with `dx build` from crates/webui/)"

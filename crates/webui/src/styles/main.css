@@ -3349,6 +3349,31 @@ body {
     gap: 0.5rem;
 }
 
+.library-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(16rem, 1fr));
+    gap: 0.75rem;
+}
+
+.library-row {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    padding: 0.75rem 0.9rem;
+    border: 1px solid var(--grok-rail-border);
+    border-radius: 0.75rem;
+    min-width: 0;
+}
+
+.library-title {
+    font-weight: 500;
+    color: var(--grok-prompt);
+    overflow-wrap: anywhere;
+}
+
 .project-select {
     width: 100%;
     display: flex;
@@ -3381,6 +3406,8 @@ body {
 
 .project-root,
 .project-status,
+.library-status,
+.library-meta,
 .plugin-status,
 .plugin-meta,
 .plugin-tools {
@@ -3634,153 +3661,3 @@ body {
     }
 }
 
-/* ── Create Project modal ───────────────────────────────────────────────── */
-
-.projects-dialog-backdrop {
-    position: fixed;
-    inset: 0;
-    background: rgba(0, 0, 0, 0.55);
-    display: flex;
-    align-items: flex-end;
-    justify-content: center;
-    z-index: 50;
-    padding: 1.5rem;
-}
-
-@media (min-width: 640px) {
-    .projects-dialog-backdrop {
-        align-items: center;
-    }
-}
-
-.projects-dialog-card {
-    width: 100%;
-    max-width: 26rem;
-    background: var(--grok-card-bg);
-    border: 1px solid var(--grok-card-border);
-    border-radius: 0.75rem;
-    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.55);
-    overflow: hidden;
-    display: flex;
-    flex-direction: column;
-}
-
-.projects-dialog-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 1rem 1rem 0.5rem;
-}
-
-.projects-dialog-title {
-    font-size: 1.1rem;
-    font-weight: 600;
-    color: var(--grok-prompt);
-    margin: 0;
-}
-
-.projects-dialog-close {
-    background: transparent;
-    border: none;
-    color: var(--grok-rail-text);
-    font-family: inherit;
-    font-size: 1.5rem;
-    line-height: 1;
-    cursor: pointer;
-    padding: 0.25rem 0.5rem;
-    border-radius: 0.4rem;
-}
-
-.projects-dialog-close:hover {
-    background: var(--grok-rail-hover);
-    color: var(--grok-prompt);
-}
-
-.projects-dialog-body {
-    padding: 0.5rem 1rem 1rem;
-    display: flex;
-    flex-direction: column;
-    gap: 0.4rem;
-}
-
-.projects-dialog-label {
-    color: var(--grok-rail-text);
-    font-size: 0.85rem;
-}
-
-.projects-dialog-input {
-    width: 100%;
-    padding: 0.6rem 0.7rem;
-    border: 1px solid var(--lib-accent, #3aa6c0);
-    border-radius: 0.4rem;
-    background: var(--lib-input-bg);
-    color: var(--grok-prompt);
-    font-family: inherit;
-    font-size: 0.95rem;
-    outline: none;
-}
-
-.projects-dialog-input:focus {
-    border-color: var(--lib-accent, #3aa6c0);
-    box-shadow: 0 0 0 2px rgba(58, 166, 192, 0.25);
-}
-
-.projects-dialog-input.error {
-    border-color: var(--lib-tool-err, #e85a5a);
-}
-
-.projects-dialog-error {
-    color: var(--lib-tool-err, #e85a5a);
-    font-size: 0.75rem;
-    margin: 0;
-}
-
-.projects-dialog-footer {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    padding: 0.75rem 1rem 1rem;
-    border-top: 1px solid var(--grok-rail-border);
-    margin-top: auto;
-    gap: 0.5rem;
-}
-
-.projects-dialog-add {
-    background: transparent;
-    border: 1px solid var(--grok-rail-border);
-    color: var(--grok-rail-text);
-    font-family: inherit;
-    font-size: 0.85rem;
-    cursor: pointer;
-    padding: 0.4rem 0.85rem;
-    border-radius: 999px;
-    display: inline-flex;
-    align-items: center;
-    gap: 0.35rem;
-}
-
-.projects-dialog-add:hover {
-    border-color: var(--lib-accent, #3aa6c0);
-    color: var(--grok-prompt);
-}
-
-.projects-dialog-plus {
-    font-size: 0.9rem;
-    line-height: 1;
-}
-
-.projects-dialog-create {
-    background: var(--grok-prompt);
-    border: none;
-    color: var(--grok-page-bg);
-    font-family: inherit;
-    font-size: 0.85rem;
-    font-weight: 600;
-    cursor: pointer;
-    padding: 0.45rem 1rem;
-    border-radius: 999px;
-}
-
-.projects-dialog-create:hover {
-    background: color-mix(in srgb, var(--grok-prompt) 88%, var(--grok-page-bg));
-}
