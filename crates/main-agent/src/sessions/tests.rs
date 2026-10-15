@@ -34,6 +34,9 @@ mod compaction;
 #[path = "compaction_models.rs"]
 mod compaction_models;
 
+#[path = "pending_model_tests.rs"]
+mod pending_model_tests;
+
 #[path = "compaction_history.rs"]
 mod compaction_history;
 

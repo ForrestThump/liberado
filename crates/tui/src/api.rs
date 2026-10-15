@@ -558,6 +558,7 @@ mod tests {
             parent_conversation: Some("c0".into()),
             spawned_by: Some("msg-5".into()),
             surface_mode: SurfaceMode::default(),
+            ..Default::default()
         };
         let json = serde_json::to_value(&header).unwrap();
         let back: ConvHeader = serde_json::from_value(json).unwrap();

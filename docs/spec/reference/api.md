@@ -139,10 +139,15 @@ can continue it. Conversation history is rehydrated from the store each turn and
 `{"reply","session"}`, so a client learns the id there too.
 
 Two read endpoints back the conversation sidebar: **`GET /api/conversations`** lists every
-conversation header (`[{id,title,created_at}]`, newest first), and **`GET /api/conversations/{id}`**
-returns one conversation's full message history (`{"messages":[…]}`; `404` if it doesn't exist).
-**`PATCH /api/conversations/{id}`** with `{"title": "..."}` renames a conversation (`200` on success,
-`404` if it doesn't exist, `503` if chat is disabled).
+conversation header (`[{id,title,created_at,project?,pending_model?}]`, newest first), and
+**`GET /api/conversations/{id}`** returns one conversation's full message history
+(`{"messages":[…],project?,pending_model?}`; `404` if it doesn't exist).
+**`PATCH /api/conversations/{id}`** updates a conversation (`200` on success, `404` if it doesn't
+exist, `400` for an unknown project or an empty body, `503` if chat is disabled). The body may
+include any of `title`, `project`, and `pending_model`. A missing field is left unchanged. `null`
+clears `project` or `pending_model`. `project` must be an enabled name from `GET /api/projects`.
+`pending_model` is the model id for the next turn. That turn stamps the same string on the message
+and clears the field. It does not substitute a different model. `{"title":"..."}` still renames.
 
 **`GET /api/conversations/{id}/grants`** is read-only. It returns the effective tool, MCP, and zone
 grants for that conversation's agent and session. `agent` is the process `main-agent` grant.
@@ -169,7 +174,7 @@ name. Visibility flags reflect `policy.toml` grants for `"main-agent"` vs `"disp
 | Method | Path | Notes |
 |---|---|---|
 | GET | `/api/models` | Live catalog from the provider's OpenAI-compatible `GET /models`, plus `current`. Soft-fails: always **200** with optional `error` so clients can still show `current`. Shape: `{"models":["…"],"current"?:"…","error"?:"…"}`. |
-| POST | `/api/models/select` | Body `{"model":"…"}`. Hot-swaps the active model for **subsequent** completions (same base URL / API key; only the `model` field of chat-completions requests changes). No daemon restart. Response: same `ModelsResponse` shape with updated `current`. Empty model → `400`; no provider → `503`. |
+| POST | `/api/models/select` | Body `{"model":"…"}` hot-swaps the daemon-wide model. Body `{"model":"…","conversation":"<ulid>"}` records an in-memory pick for that chat's next turn. The durable per-chat pick is `pending_model` on `PATCH /api/conversations/{id}`. The turn uses the in-memory pick when one is set, otherwise the stored `pending_model`, and stamps that exact string. Empty model → `400`; no provider on the daemon-wide form → `503`. |
 
 `GET /api/status` reports `model_name` from the live provider (so it tracks hot-swap, not only boot-time config). In-flight turns keep whatever model they already started with.
 
