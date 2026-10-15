@@ -133,37 +133,16 @@ mod tests {
 
 // ── Grok-style top bar ─────────────────────────────────────────────────────
 
-/// Top-right region in Grok's screenshot: an "agent pill" (Grok Bot) on the left and a "Private"
-/// label on the right. We reuse the incognito concept to mean the same thing — the Libre pill on
-/// the right is a derived state of `incognito`, not a separate mode.
+/// Top-right region: just the incognito pill. The "agent pill" from the first draft was an
+/// extraneous waypoint for the user — selecting an agent happens through the Agents shelf in the
+/// sidebar, where the rows are already categorised and pinned.
 #[component]
 fn HeaderRightSide(
-    api_base: String,
-    route: Signal<Route>,
     incognito: Signal<bool>,
-    list_epoch: Signal<u64>,
 ) -> Element {
-    let active_label = match route() {
-        Route::AgentSession => "Liberado Bot",
-        Route::Imagine => "Liberado Imagine",
-        _ => "Liberado Bot",
-    };
     rsx! {
         div {
             class: "header-right-cluster",
-            button {
-                class: "agent-pill",
-                r#type: "button",
-                title: "Open agent picker",
-                "aria-label": "Open agent picker",
-                onclick: move |_| route.set(Route::Agents),
-                span {
-                    class: "agent-pill-dot",
-                    style: "background: var(--dot-accent);",
-                    "aria-hidden": "true"
-                }
-                span { class: "agent-pill-label", "{active_label}" }
-            }
             IncognitoToggle { on: incognito }
         }
     }
@@ -193,8 +172,16 @@ fn App() -> Element {
     // Default to Chat — the screenshot says Chat is the open surface. Imagine / Library /
     // Automations / Projects / Plugins are reachable via the sidebar.
     let route = use_signal(|| Route::Chat);
-    // The active theme name, restored from the last choice. Chat writes it when `/theme set` lands.
-    let theme_name = use_signal(crate::theme::saved_theme_name);
+    // The active theme name, restored from the last choice. Chat writes it when `/theme set` lands,
+    // and the sidebar's theme swatch writes it through `save_theme_name`. The `theme_epoch`
+    // counter below is the bridge: a write through either path bumps it, and the effect re-reads
+    // localStorage into `theme_name` so the CSS variables block at the top of the rsx re-paints.
+    let mut theme_name = use_signal(crate::theme::saved_theme_name);
+    let theme_epoch = use_signal(u64::default);
+    use_effect(move || {
+        let _ = theme_epoch();
+        theme_name.set(crate::theme::saved_theme_name());
+    });
     let active_conv_id = use_signal(|| None::<String>);
     // Incognito lives up here, not in `Chat`, because it is a mode the whole window is in: the
     // header shows it, the body is tinted for it, and it has to survive a trip through the Status
@@ -288,23 +275,12 @@ fn App() -> Element {
                 class: "app-header grok-header",
                 div {
                     class: "grok-header-inner",
-                    button {
-                        class: "menu-btn",
-                        onclick: move |_| {
-                            let now = sidebar_collapsed();
-                            sidebar_collapsed.set(!now);
-                        },
-                        title: if sidebar_collapsed() { "Show navigation" } else { "Hide navigation" },
-                        // Reuse the menu chrome glyph.
-                        crate::icons::IconMenu {}
-                    }
-                    // The brand glyph sits in the header too, since the sidebar may be collapsed.
+                    // The brand wordmark sits at the very left of the top bar. The sidebar has
+                    // its own collapse control baked into its header row, so the chrome here is
+                    // deliberately minimal — just the brand and the incognito pill.
                     span { class: "brand grok-header-brand", "Liberado" }
                     HeaderRightSide {
-                        api_base: base.clone(),
-                        route: route,
                         incognito: incognito,
-                        list_epoch: list_epoch,
                     }
                 }
             }
@@ -319,6 +295,7 @@ fn App() -> Element {
                     new_chat_nonce,
                     active_surface,
                     list_epoch,
+                    theme_epoch,
                 }
                 main {
                     class: "main-content grok-main",

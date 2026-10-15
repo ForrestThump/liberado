@@ -3035,3 +3035,341 @@ body {
     flex: 1;
     overflow: auto;
 }
+
+/* ── Collapsed icon rail ──────────────────────────────────────────────────
+ *
+ * Same sidebar width when collapsed as the user's screenshot suggests — about 64px wide,
+ * with each row a square hit target that maps to the matching primary nav target.
+ */
+
+.sidebar-collapsed {
+    width: 64px;
+    background: var(--grok-rail-bg);
+    border-right: 1px solid var(--grok-rail-border);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 0.5rem 0;
+    gap: 0.25rem;
+    flex-shrink: 0;
+    overflow: hidden;
+}
+
+.sidebar-rail-brand {
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    margin-bottom: 0.4rem;
+    padding: 0.25rem;
+    border-radius: 0.5rem;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.sidebar-rail-brand:hover {
+    background: var(--grok-rail-hover);
+}
+
+.sidebar-rail-btn {
+    background: transparent;
+    border: none;
+    width: 2.5rem;
+    height: 2.5rem;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 0.5rem;
+    color: var(--grok-rail-text-muted);
+    transition: background 0.12s, color 0.12s;
+}
+
+.sidebar-rail-btn:hover {
+    background: var(--grok-rail-hover);
+    color: var(--grok-prompt);
+}
+
+.sidebar-rail-btn.active {
+    background: var(--grok-rail-active);
+    color: var(--lib-accent, #f5a623);
+}
+
+.sidebar-rail-spacer {
+    flex: 1;
+}
+
+/* The collapse button in the brand row sits flush right and points the obvious
+   direction (left when expanded). */
+
+.sidebar-icon-btn.collapse-btn {
+    color: var(--grok-rail-text);
+}
+
+.sidebar-brand-spacer {
+    flex: 1;
+}
+
+/* ── Static (non-link) project rows ─────────────────────────────────────── */
+
+.grok-row-static {
+    cursor: default;
+}
+
+.grok-row-static-btn {
+    cursor: default;
+    color: var(--grok-rail-text);
+}
+
+.grok-row-static-btn:hover {
+    color: var(--grok-prompt);
+    background: var(--grok-rail-hover);
+}
+
+/* ── Theme picker popover ───────────────────────────────────────────────── */
+
+.theme-swatch-shell {
+    margin: 0.5rem 0.5rem 0.75rem 0.5rem;
+    border-top: 1px solid var(--grok-rail-border);
+    padding-top: 0.5rem;
+    position: relative;
+    display: flex;
+    justify-content: center;
+}
+
+.theme-swatch-toggle {
+    background: transparent;
+    border: none;
+    color: var(--grok-rail-text-muted);
+    width: 2.25rem;
+    height: 2.25rem;
+    cursor: pointer;
+    border-radius: 0.5rem;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 0.12s, color 0.12s;
+}
+
+.theme-swatch-toggle:hover,
+.theme-swatch-toggle.open {
+    background: var(--grok-rail-hover);
+    color: var(--grok-prompt);
+}
+
+.theme-swatch-pop {
+    position: absolute;
+    left: calc(100% + 0.5rem);
+    bottom: 0;
+    min-width: 12rem;
+    padding: 0.35rem;
+    background: var(--grok-rail-active);
+    border: 1px solid var(--grok-card-border, #1f1f1f);
+    border-radius: 0.5rem;
+    box-shadow: 0 4px 18px rgba(0, 0, 0, 0.35);
+    display: flex;
+    flex-direction: column;
+    gap: 0.1rem;
+    z-index: 30;
+}
+
+.theme-swatch-row {
+    background: transparent;
+    border: none;
+    color: var(--grok-rail-text);
+    text-align: left;
+    display: flex;
+    align-items: center;
+    gap: 0.55rem;
+    padding: 0.35rem 0.55rem;
+    border-radius: 0.35rem;
+    font-family: inherit;
+    font-size: 0.8125rem;
+    cursor: pointer;
+}
+
+.theme-swatch-row:hover {
+    background: var(--grok-rail-hover);
+    color: var(--grok-prompt);
+}
+
+.theme-swatch-row.active {
+    color: var(--lib-accent, #f5a623);
+}
+
+.theme-swatch-dot {
+    width: 0.55rem;
+    height: 0.55rem;
+    border-radius: 999px;
+    display: inline-block;
+    flex-shrink: 0;
+    box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.05);
+}
+
+.theme-swatch-name {
+    text-transform: capitalize;
+}
+
+@media (max-width: 768px) {
+    .theme-swatch-shell {
+        margin: 0.5rem;
+    }
+    .theme-swatch-pop {
+        position: fixed;
+        left: 50%;
+        bottom: 1rem;
+        transform: translateX(-50%);
+        min-width: 14rem;
+    }
+}
+
+/* ── Create Project modal ───────────────────────────────────────────────── */
+
+.projects-dialog-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.55);
+    display: flex;
+    align-items: flex-end;
+    justify-content: center;
+    z-index: 50;
+    padding: 1.5rem;
+}
+
+@media (min-width: 640px) {
+    .projects-dialog-backdrop {
+        align-items: center;
+    }
+}
+
+.projects-dialog-card {
+    width: 100%;
+    max-width: 26rem;
+    background: var(--grok-card-bg, #141414);
+    border: 1px solid var(--grok-card-border, #1f1f1f);
+    border-radius: 0.75rem;
+    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.55);
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+}
+
+.projects-dialog-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 1rem 1rem 0.5rem;
+}
+
+.projects-dialog-title {
+    font-size: 1.1rem;
+    font-weight: 600;
+    color: var(--grok-prompt, #ededed);
+    margin: 0;
+}
+
+.projects-dialog-close {
+    background: transparent;
+    border: none;
+    color: var(--grok-rail-text);
+    font-family: inherit;
+    font-size: 1.5rem;
+    line-height: 1;
+    cursor: pointer;
+    padding: 0.25rem 0.5rem;
+    border-radius: 0.4rem;
+}
+
+.projects-dialog-close:hover {
+    background: rgba(255, 255, 255, 0.05);
+    color: var(--grok-prompt);
+}
+
+.projects-dialog-body {
+    padding: 0.5rem 1rem 1rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+}
+
+.projects-dialog-label {
+    color: var(--grok-rail-text, #b0b0b8);
+    font-size: 0.85rem;
+}
+
+.projects-dialog-input {
+    width: 100%;
+    padding: 0.6rem 0.7rem;
+    border: 1px solid var(--lib-accent, #3aa6c0);
+    border-radius: 0.4rem;
+    background: rgba(255, 255, 255, 0.05);
+    color: var(--grok-prompt, #ededed);
+    font-family: inherit;
+    font-size: 0.95rem;
+    outline: none;
+}
+
+.projects-dialog-input:focus {
+    border-color: var(--lib-accent, #3aa6c0);
+    box-shadow: 0 0 0 2px rgba(58, 166, 192, 0.25);
+}
+
+.projects-dialog-input.error {
+    border-color: var(--lib-tool-err, #e85a5a);
+}
+
+.projects-dialog-error {
+    color: var(--lib-tool-err, #e85a5a);
+    font-size: 0.75rem;
+    margin: 0;
+}
+
+.projects-dialog-footer {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0.75rem 1rem 1rem;
+    border-top: 1px solid var(--grok-rail-border, #1a1a1a);
+    margin-top: auto;
+    gap: 0.5rem;
+}
+
+.projects-dialog-add {
+    background: transparent;
+    border: 1px solid var(--grok-rail-border, #1a1a1a);
+    color: var(--grok-rail-text, #b0b0b8);
+    font-family: inherit;
+    font-size: 0.85rem;
+    cursor: pointer;
+    padding: 0.4rem 0.85rem;
+    border-radius: 999px;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+}
+
+.projects-dialog-add:hover {
+    border-color: var(--lib-accent, #3aa6c0);
+    color: var(--grok-prompt, #ededed);
+}
+
+.projects-dialog-plus {
+    font-size: 0.9rem;
+    line-height: 1;
+}
+
+.projects-dialog-create {
+    background: #ededed;
+    border: none;
+    color: #141414;
+    font-family: inherit;
+    font-size: 0.85rem;
+    font-weight: 600;
+    cursor: pointer;
+    padding: 0.45rem 1rem;
+    border-radius: 999px;
+}
+
+.projects-dialog-create:hover {
+    background: #ffffff;
+}

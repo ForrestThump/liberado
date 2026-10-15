@@ -42,6 +42,17 @@ pub fn theme_names() -> Vec<String> {
     names
 }
 
+/// The set of built-in theme names exposed by the picker. Names are sorted, with the
+/// dark default first so the picker cycles predictably and no theme is silently missing
+/// because a registry merge dropped it.
+pub fn builtin_theme_names() -> Vec<String> {
+    use liberado_theme::Theme;
+    Theme::builtins()
+        .into_iter()
+        .map(|t| t.name)
+        .collect()
+}
+
 /// The remembered theme name, or `dark` when nothing is stored yet.
 pub fn saved_theme_name() -> String {
     #[cfg(target_arch = "wasm32")]
@@ -344,9 +355,9 @@ mod tests {
     /// keyed on nothing else.
     #[test]
     fn theme_by_name_resolves_builtins() {
-        assert_eq!(theme_by_name("dark").name, "dark");
-        assert_eq!(theme_by_name("light").name, "light");
-        assert_eq!(theme_by_name("nord").name, "nord");
+        for name in ["dark", "light", "nord", "sunset", "forest", "plum", "mono"] {
+            assert_eq!(theme_by_name(name).name, name);
+        }
     }
 
     /// An unknown name must not render nothing (an empty `<style>` would drop every CSS variable
@@ -355,6 +366,26 @@ mod tests {
     fn unknown_theme_name_falls_back_to_dark() {
         assert_eq!(theme_by_name("no-such-theme").name, "dark");
         assert_eq!(theme_by_name("").name, "dark");
+    }
+
+    /// `builtin_theme_names` exposes every color palette the picker cycles through. The seven
+    /// fixed built-ins are the contract the UI advertises.
+    #[test]
+    fn builtin_theme_names_covers_the_seven_builtins() {
+        let mut names = builtin_theme_names();
+        names.sort();
+        assert_eq!(
+            names,
+            vec![
+                "dark".to_string(),
+                "forest".to_string(),
+                "light".to_string(),
+                "mono".to_string(),
+                "nord".to_string(),
+                "plum".to_string(),
+                "sunset".to_string(),
+            ]
+        );
     }
 
     /// The host build has no browser storage, so the remembered theme is the fallback — the same
@@ -370,7 +401,7 @@ mod tests {
     fn theme_names_are_sorted_and_have_the_builtins() {
         let names = theme_names();
         assert!(names.windows(2).all(|w| w[0] < w[1]), "sorted: {names:?}");
-        for expected in ["dark", "light", "nord"] {
+        for expected in ["dark", "light", "nord", "sunset", "forest", "plum", "mono"] {
             assert!(
                 names.iter().any(|n| n == expected),
                 "missing {expected}: {names:?}"

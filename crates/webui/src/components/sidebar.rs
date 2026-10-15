@@ -1,51 +1,46 @@
 //! Left sidebar rail.
 //!
-//! Grok-style vertical layout: brand row at the top with the small action icons, primary nav
-//! (Chat / Imagine / Library / Automations), then a categorizable Agents shelf with Pinned +
-//! labelled groups + Show more, then the recent Chats list, then Projects, then Plugins.
+//! Grok-style vertical layout with a permanent icon rail when collapsed and a full-width
+//! panel when expanded. The rail exposes the same brand/logo as the full sidebar so the user
+//! always has something to click to bring it back.
 //!
-//! The whole sidebar renders or hides as one block (no collapsed rail) — the app header keeps the
-//! one button that brings it back. See [`crate::main`] for the matching header wiring.
+//! Sections rendered when expanded: Chat / Library / Automations primary nav, Agents (Pinned +
+//! labelled categories + Show more), Chats (recent), Projects (with `+` opening a modal), and
+//! Plugins. Imagine is intentionally absent — the file `components/imagine.rs` and `Route::Imagine`
+//! survive so the surface can be re-introduced later without re-shaping the rail.
 
 use dioxus::prelude::*;
 
 use chat_client_contract::{ConvHeader, ConversationSearchResponse, ConversationSearchResult, SurfaceMode};
 
-use crate::icons::{IconAttach, IconSearch};
+use crate::components::projects_dialog::ProjectsDialog;
+use crate::icons::{IconChevronDown, IconChevronRight, IconSearch};
 
 // ── Routes ──────────────────────────────────────────────────────────────────
 
-/// Navigation routes the sidebar picks. Mirrors Grok's primary nav + the section headers (Agents,
-/// Chats, Projects, Plugins) and the typed sub-routes (Agents/Projects selection).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Route {
     Chat,
-    Imagine,
     Library,
     Automations,
     Agents,
     Projects,
     Plugins,
-    /// An agent row was selected — opened as a chat with the agent session preloaded.
     AgentSession,
-    /// A row from the recent Chats section.
     ChatSession,
-    /// A row from the Projects section.
     ProjectDetail,
+    /// Reserved for a future Imagine surface — kept so the route enum doesn't drift, but the
+    /// sidebar never renders a primary-nav row that targets it.
+    #[allow(dead_code)]
+    Imagine,
 }
 
 impl Route {
-    /// Whether `route` means the chat compositor (any "I have a session to show" route).
     pub(crate) fn is_chat_view(self) -> bool {
         matches!(
             self,
             Route::Chat | Route::ChatSession | Route::AgentSession | Route::ProjectDetail
         )
-    }
-
-    /// Whether this route highlights the Chat primary nav row.
-    pub(crate) fn highlights_chat(self) -> bool {
-        self.is_chat_view()
     }
 }
 
@@ -102,12 +97,8 @@ async fn delete_conversation(api_base: &str, id: &str) -> Result<(), String> {
 
 // ── Agent categorization ──────────────────────────────────────────────────
 
-/// Names that always sit in the Pinned group, regardless of where they came from. The shipped
-/// surface mode has no category field yet; this is a soft client-side taxonymy until the daemon
-/// exposes one. Case-insensitive prefix match.
 const PINNED_PREFIXES: &[&str] = &["Grok Bot", "Liberado-Budget"];
 
-/// Soft categorization for agent rows. Unknown titles fall into the catch-all bucket.
 fn agent_category(title: &str) -> Option<&'static str> {
     if title.contains("Disk Saver") || title.starts_with("Disk") {
         Some("Liberado Development")
@@ -124,11 +115,8 @@ fn pinned(title: &str) -> bool {
         .any(|prefix| title.to_ascii_lowercase().starts_with(&prefix.to_ascii_lowercase()))
 }
 
-/// Display order for category headers. Anything outside this list goes in its own catch-all at
-/// the bottom, in title order.
 const CATEGORY_ORDER: &[&str] = &["Liberado Development", "Liberado Finance"];
 
-/// Group agents into (pinned list, [(category, &[headers])...], others).
 fn group_agents<'a>(agents: &[&'a ConvHeader]) -> GroupedAgents<'a> {
     let mut pinned_v = Vec::new();
     let mut groups: std::collections::BTreeMap<&'static str, Vec<&'a ConvHeader>> =
@@ -164,22 +152,20 @@ struct GroupedAgents<'a> {
     others: Vec<&'a ConvHeader>,
 }
 
-// ── Component ──────────────────────────────────────────────────────────────
+// ── Sidebar component ──────────────────────────────────────────────────────
 
 #[component]
 pub fn Sidebar(
     api_base: String,
-    /// Currently selected nav route. The sidebar highlights Chat when this is Chat, ChatSession,
-    /// AgentSession, or ProjectDetail.
     route: Signal<Route>,
     active_conv_id: Signal<Option<String>>,
     collapsed: Signal<bool>,
-    /// Bumped by sidebar / header "New chat" controls. Drives a fresh chat.
     new_chat_nonce: Signal<u64>,
-    /// Projected shelf of the open conversation. Agent hides the profile chip.
     active_surface: Signal<Option<SurfaceMode>>,
-    /// Bumped when `create_agent` succeeds so the Agents shelf refetches.
     list_epoch: Signal<u64>,
+    /// Bumped by `App` whenever the user picks a different theme, so this component can keep
+    /// the rail's palette swatch in sync with the active paint.
+    theme_epoch: Signal<u64>,
 ) -> Element {
     #[cfg_attr(not(target_arch = "wasm32"), allow(unused_mut))]
     let mut conversations = use_resource({
@@ -194,8 +180,8 @@ pub fn Sidebar(
     let mut search_query = use_signal(String::new);
     let mut search_open = use_signal(bool::default);
     let expand_all = use_signal(bool::default);
-    let action_error = use_signal(|| None::<String>);
     #[cfg_attr(not(target_arch = "wasm32"), allow(unused_mut))]
+    let mut action_error = use_signal(|| None::<String>);
     let mut search_results = use_resource({
         let base = api_base.clone();
         move || {
@@ -241,17 +227,12 @@ pub fn Sidebar(
         })
     };
 
-    if collapsed() {
-        return rsx! {};
-    }
-
     let headers: Vec<ConvHeader> = conversations
         .read()
         .as_ref()
         .and_then(|r: &Result<Vec<ConvHeader>, String>| r.as_ref().ok())
         .cloned()
         .unwrap_or_default();
-    let headers = headers.as_slice();
     let chat_rows: Vec<&ConvHeader> = headers
         .iter()
         .filter(|c| c.surface_mode == SurfaceMode::Chat)
@@ -262,23 +243,102 @@ pub fn Sidebar(
         .collect();
     let grouped = group_agents(&agent_rows);
 
-    // Each row click needs to know whether the active is itself or a sibling, so the
-    // `active: Signal<Option<String>>` is the single source of truth.
-    rsx! {
-        aside {
-            class: "sidebar",
+    // Projects modal. Lives in App-level state would be tidier, but the dialog has no other
+    // call sites and shortcutting the state is cheaper than threading through another prop.
+    let mut projects_dialog_open = use_signal(bool::default);
 
-            // ── Brand row ───────────────────────────────────────────────────
+    if collapsed() {
+        // Icon rail — vertical column of buttons that bring the rail back / navigate without
+        // expanding the panel. The brand at top expands the sidebar; the rest mirror the primary
+        // nav so the user can hop routes without needing 260px of canvas.
+        return rsx! {
+            aside { class: "sidebar sidebar-collapsed",
+                button {
+                    class: "sidebar-rail-brand",
+                    r#type: "button",
+                    title: "Expand sidebar",
+                    "aria-label": "Expand sidebar",
+                    onclick: move |_| collapsed.set(false),
+                    BrandLogo {}
+                }
+                button {
+                    class: if route() == Route::Chat || route().is_chat_view() {
+                        "sidebar-rail-btn active"
+                    } else {
+                        "sidebar-rail-btn"
+                    },
+                    r#type: "button",
+                    title: "Chat",
+                    "aria-label": "Chat",
+                    onclick: move |_| route.set(Route::Chat),
+                    ChatBubble {}
+                }
+                button {
+                    class: "sidebar-rail-btn",
+                    r#type: "button",
+                    title: "Search",
+                    "aria-label": "Search",
+                    onclick: move |_| {
+                        collapsed.set(false);
+                        search_open.set(true);
+                    },
+                    IconSearch {}
+                }
+                button {
+                    class: if route() == Route::Library { "sidebar-rail-btn active" } else { "sidebar-rail-btn" },
+                    r#type: "button",
+                    title: "Library",
+                    "aria-label": "Library",
+                    onclick: move |_| route.set(Route::Library),
+                    LibraryGlyph {}
+                }
+                button {
+                    class: if route() == Route::Automations { "sidebar-rail-btn active" } else { "sidebar-rail-btn" },
+                    r#type: "button",
+                    title: "Automations",
+                    "aria-label": "Automations",
+                    onclick: move |_| route.set(Route::Automations),
+                    ClockGlyph {}
+                }
+                button {
+                    class: if route() == Route::Agents || route() == Route::AgentSession {
+                        "sidebar-rail-btn active"
+                    } else {
+                        "sidebar-rail-btn"
+                    },
+                    r#type: "button",
+                    title: "Agents",
+                    "aria-label": "Agents",
+                    onclick: move |_| route.set(Route::Agents),
+                    AgentGlyph {}
+                }
+                button {
+                    class: if route() == Route::Plugins { "sidebar-rail-btn active" } else { "sidebar-rail-btn" },
+                    r#type: "button",
+                    title: "Plugins",
+                    "aria-label": "Plugins",
+                    onclick: move |_| route.set(Route::Plugins),
+                    PluginGlyph {}
+                }
+                div { class: "sidebar-rail-spacer" }
+                ThemeSwatch { theme_epoch: theme_epoch }
+            }
+        };
+    }
+
+    rsx! {
+        aside { class: "sidebar",
             div {
                 class: "sidebar-brand",
                 button {
                     class: "sidebar-brand-btn",
                     r#type: "button",
-                    title: "Home",
-                    "aria-label": "Home",
+                    title: "Liberado home",
+                    "aria-label": "Liberado home",
                     onclick: move |_| route.set(Route::Chat),
                     BrandLogo {}
                 }
+                div { class: "sidebar-brand-spacer" }
                 button {
                     class: "sidebar-icon-btn",
                     r#type: "button",
@@ -294,25 +354,15 @@ pub fn Sidebar(
                     IconSearch {}
                 }
                 button {
-                    class: "sidebar-icon-btn",
+                    class: "sidebar-icon-btn collapse-btn",
                     r#type: "button",
-                    title: "New chat",
-                    "aria-label": "New chat",
-                    onclick: move |_| {
-                        new_chat_nonce += 1;
-                        if active_conv_id.read().is_some() {
-                            active_conv_id.set(None);
-                        }
-                        route.set(Route::Chat);
-                        if crate::is_narrow_viewport() {
-                            collapsed.set(true);
-                        }
-                    },
-                    IconAttach {}
+                    title: "Collapse sidebar",
+                    "aria-label": "Collapse sidebar",
+                    onclick: move |_| collapsed.set(true),
+                    CollapseGlyph {}
                 }
             }
 
-            // ── Search field ────────────────────────────────────────────────
             if search_open() {
                 div {
                     class: "sidebar-search",
@@ -327,16 +377,13 @@ pub fn Sidebar(
                 }
             }
 
-            // ── Primary nav ─────────────────────────────────────────────────
             nav {
                 class: "sidebar-nav",
                 PrimaryNavRow { route: route, target: Route::Chat, label: "Chat", icon: rsx! { ChatBubble {} } }
-                PrimaryNavRow { route: route, target: Route::Imagine, label: "Imagine", icon: rsx! { Mountain {} } }
-                PrimaryNavRow { route: route, target: Route::Library, label: "Library", icon: rsx! { Stack {} } }
-                PrimaryNavRow { route: route, target: Route::Automations, label: "Automations", icon: rsx! { Clock {} } }
+                PrimaryNavRow { route: route, target: Route::Library, label: "Library", icon: rsx! { LibraryGlyph {} } }
+                PrimaryNavRow { route: route, target: Route::Automations, label: "Automations", icon: rsx! { ClockGlyph {} } }
             }
 
-            // ── Body: search overlay OR categorized sections ───────────────
             if search_open() && !search_query().trim().is_empty() {
                 div {
                     class: "sidebar-list",
@@ -368,7 +415,6 @@ pub fn Sidebar(
                 div {
                     class: "sidebar-scroll",
 
-                    // ── Agents (categorized) ──────────────────────────────────
                     section {
                         class: "sidebar-section",
                         header {
@@ -384,7 +430,7 @@ pub fn Sidebar(
                                 r#type: "button",
                                 title: "New agent",
                                 "aria-label": "New agent",
-                                onclick: move |evt| { evt.stop_propagation(); },
+                                onclick: move |_: Event<MouseData>| { let _ = (); },
                                 "+"
                             }
                         }
@@ -450,7 +496,6 @@ pub fn Sidebar(
                         }
                     }
 
-                    // ── Chats (recent) ─────────────────────────────────────────
                     section {
                         class: "sidebar-section",
                         header {
@@ -475,7 +520,6 @@ pub fn Sidebar(
                         }
                     }
 
-                    // ── Projects ────────────────────────────────────────────────
                     section {
                         class: "sidebar-section",
                         header {
@@ -486,19 +530,23 @@ pub fn Sidebar(
                                 onclick: move |_| route.set(Route::Projects),
                                 span { class: "sidebar-section-label", "Projects" }
                             }
+                            // The + opens the Create Project dialog rather than routing into a
+                            // placeholder page. The route toggles just so the header row is the
+                            // active piece of chrome even when the modal is open.
+                            button {
+                                class: "sidebar-section-add",
+                                r#type: "button",
+                                title: "Create project",
+                                "aria-label": "Create project",
+                                onclick: move |_| {
+                                    projects_dialog_open.set(true);
+                                },
+                                "+"
+                            }
                         }
-                        ProjectList {
-                            on_pick: move |id: String| {
-                                route.set(Route::ProjectDetail);
-                                active_conv_id.set(Some(id));
-                                if crate::is_narrow_viewport() {
-                                    collapsed.set(true);
-                                }
-                            },
-                        }
+                        ProjectList { route: route }
                     }
 
-                    // ── Plugins ─────────────────────────────────────────────────
                     section {
                         class: "sidebar-section",
                         header {
@@ -520,6 +568,8 @@ pub fn Sidebar(
                             on_open: move |_| route.set(Route::Plugins),
                         }
                     }
+
+                    ThemeSwatch { theme_epoch: theme_epoch }
                 }
             }
 
@@ -551,13 +601,18 @@ pub fn Sidebar(
                 _ => rsx! {},
             }
         }
+
+        if projects_dialog_open() {
+            ProjectsDialog {
+                on_cancel: move |_| projects_dialog_open.set(false),
+                on_create: move |_name: String| projects_dialog_open.set(false),
+            }
+        }
     }
 }
 
 // ── Sub-components ──────────────────────────────────────────────────────────
 
-/// The brand glyph in the top-left of the rail. Renders an orange circle "L" (Liberado's first
-/// letter) — chosen to read as identity without claiming anyone's logo.
 #[component]
 fn BrandLogo() -> Element {
     rsx! {
@@ -574,7 +629,7 @@ fn BrandLogo() -> Element {
                 font_family: "system-ui, sans-serif",
                 font_size: "12",
                 font_weight: "700",
-                fill: "var(--lib-app-bg, #0d0d1a)",
+                fill: "var(--lib-app-bg, #0a0a0a)",
                 "L"
             }
         }
@@ -589,7 +644,7 @@ fn PrimaryNavRow(
     #[props(into)] icon: Element,
 ) -> Element {
     let active = match target {
-        Route::Chat => route().highlights_chat(),
+        Route::Chat => route().is_chat_view(),
         _ => route() == target,
     };
     let cls = if active {
@@ -610,8 +665,7 @@ fn PrimaryNavRow(
     }
 }
 
-// Inline SVG glyphs for the four nav rows. Kept inline so we can tune the colour per-route without
-// building a separate icon crate. Each one is a 22x22 viewBox with 1.6px stroke.
+// Glyph set — kept inline so the colour swatches and weights match the rest of the rail.
 
 #[component]
 fn ChatBubble() -> Element {
@@ -632,27 +686,7 @@ fn ChatBubble() -> Element {
 }
 
 #[component]
-fn Mountain() -> Element {
-    rsx! {
-        svg {
-            class: "icon sidebar-icon",
-            xmlns: "http://www.w3.org/2000/svg",
-            view_box: "0 0 22 22",
-            fill: "none",
-            stroke: "currentColor",
-            stroke_width: "1.6",
-            stroke_linecap: "round",
-            stroke_linejoin: "round",
-            "aria-hidden": "true",
-            rect { x: "3", y: "4", width: "16", height: "14", rx: "2.5" }
-            circle { cx: "8", cy: "9.5", r: "1.4" }
-            path { d: "M5 16l4-4.5 3 3 2-2.5 3 4" }
-        }
-    }
-}
-
-#[component]
-fn Stack() -> Element {
+fn LibraryGlyph() -> Element {
     rsx! {
         svg {
             class: "icon sidebar-icon",
@@ -672,7 +706,7 @@ fn Stack() -> Element {
 }
 
 #[component]
-fn Clock() -> Element {
+fn ClockGlyph() -> Element {
     rsx! {
         svg {
             class: "icon sidebar-icon",
@@ -686,6 +720,25 @@ fn Clock() -> Element {
             "aria-hidden": "true",
             circle { cx: "11", cy: "11", r: "7.5" }
             path { d: "M11 6.5V11l3 1.5" }
+        }
+    }
+}
+
+#[component]
+fn AgentGlyph() -> Element {
+    rsx! {
+        svg {
+            class: "icon sidebar-icon",
+            xmlns: "http://www.w3.org/2000/svg",
+            view_box: "0 0 22 22",
+            fill: "none",
+            stroke: "currentColor",
+            stroke_width: "1.6",
+            stroke_linecap: "round",
+            stroke_linejoin: "round",
+            "aria-hidden": "true",
+            circle { cx: "11", cy: "8", r: "3.5" }
+            path { d: "M4 18a7 7 0 0 1 14 0" }
         }
     }
 }
@@ -729,13 +782,131 @@ fn PluginGlyph() -> Element {
     }
 }
 
-// Sidebar rows
-// ─────────────
+/// Chevron pointing left — the user-facing signal that the action will collapse the rail back
+/// to the icon-only state.
+#[component]
+fn CollapseGlyph() -> Element {
+    rsx! {
+        svg {
+            class: "icon sidebar-icon",
+            xmlns: "http://www.w3.org/2000/svg",
+            view_box: "0 0 22 22",
+            fill: "none",
+            stroke: "currentColor",
+            stroke_width: "1.6",
+            stroke_linecap: "round",
+            stroke_linejoin: "round",
+            "aria-hidden": "true",
+            // Arrow that opens to the right when paired with the brand glyph: a single chevron at
+            // the very left edge of the brand row, identical to the rotate-by-180 mirror image of
+            // the icon in the collapsed-rail state.
+            path { d: "M14.5 5l-6 6 6 6" }
+        }
+    }
+}
 
-/// A solid circle tinted to the conversation's hash. The dot color is the row's visual anchor:
-/// Pinned rows get the accent color, others derive from the title's hash. Colors come from a
-/// short hand-built palette rather than a generator because anything that runs in the main thread
-/// needs to be allocation-free.
+#[component]
+fn PaletteGlyph() -> Element {
+    rsx! {
+        svg {
+            class: "icon sidebar-icon",
+            xmlns: "http://www.w3.org/2000/svg",
+            view_box: "0 0 22 22",
+            fill: "none",
+            stroke: "currentColor",
+            stroke_width: "1.6",
+            stroke_linecap: "round",
+            stroke_linejoin: "round",
+            "aria-hidden": "true",
+            path { d: "M11 3a8 8 0 0 0-1 15.9c.5.1.9-.4.7-.9-.2-.5-.4-1.1-.4-1.6 0-1.1.9-1.4 1.6-1.4H13a3 3 0 0 0 3-3.3 8 8 0 0 0-5-8.7z" }
+            circle { cx: "6.5", cy: "11", r: "1" }
+            circle { cx: "9", cy: "6.5", r: "1" }
+            circle { cx: "14.5", cy: "7.5", r: "1" }
+            circle { cx: "17", cy: "11.5", r: "1" }
+        }
+    }
+}
+
+// ── Theme cycling ──────────────────────────────────────────────────────────
+
+/// A compact swatch that lists the registered themes and applies the picked one through the
+/// `crate::theme` helpers. Persistence rides on `save_theme_name` — the same backend the `/theme`
+/// slash command already uses, so the choice survives across server restarts.
+#[component]
+fn ThemeSwatch(theme_epoch: Signal<u64>) -> Element {
+    let mut current = use_signal(crate::theme::saved_theme_name);
+    // React to external bumps (mostly a safety net — the picker itself mutates `current` on
+    // click and a parent re-render would otherwise not re-sync the dropdown).
+    use_effect(move || {
+        let _ = theme_epoch();
+        current.set(crate::theme::saved_theme_name());
+    });
+    let names = use_signal(crate::theme::builtin_theme_names);
+
+    let mut open = use_signal(bool::default);
+
+    rsx! {
+        div {
+            class: "theme-swatch-shell",
+            button {
+                class: if open() { "theme-swatch-toggle open" } else { "theme-swatch-toggle" },
+                r#type: "button",
+                title: "Theme",
+                "aria-label": "Theme",
+                onclick: move |_| open.set(!open()),
+                PaletteGlyph {}
+            }
+            if open() {
+                div {
+                    class: "theme-swatch-pop",
+                    for name in names.read().iter() {
+                        {
+                            let name_str = name.clone();
+                            let active = *name == current();
+                            let cls = if active { "theme-swatch-row active" } else { "theme-swatch-row" };
+                            let dot = theme_dot(name.as_str());
+                            rsx! {
+                                button {
+                                    class: "{cls}",
+                                    r#type: "button",
+                                    onclick: move |_| {
+                                        current.set(name_str.clone());
+                                        crate::theme::save_theme_name(name_str.as_str());
+                                        open.set(false);
+                                        // Trigger the parent to re-render the CSS block.
+                                        theme_epoch += 1;
+                                    },
+                                    span {
+                                        class: "theme-swatch-dot",
+                                        style: "background: {dot};",
+                                        "aria-hidden": "true"
+                                    }
+                                    span { class: "theme-swatch-name", "{name}" }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn theme_dot(name: &str) -> &'static str {
+    match name {
+        "dark" => "#00ffff",
+        "light" => "#c0c0c0",
+        "nord" => "#5e81ac",
+        "sunset" => "#f5a623",
+        "forest" => "#6dba6d",
+        "plum" => "#ce93d8",
+        "mono" => "#d4a85a",
+        _ => "#888888",
+    }
+}
+
+// ── Sidebar rows ───────────────────────────────────────────────────────────
+
 fn row_dot_color(title: &str) -> &'static str {
     let lower = title.to_ascii_lowercase();
     if lower.starts_with("grok") {
@@ -755,8 +926,6 @@ fn row_dot_color(title: &str) -> &'static str {
     }
 }
 
-/// Truncate title for display with the same width-budget logic the old list used: ends with a
-/// trailing ellipsis when the title overflows.
 fn truncate_title(title: &str, max: usize) -> String {
     if title.chars().count() <= max {
         return title.to_string();
@@ -767,13 +936,9 @@ fn truncate_title(title: &str, max: usize) -> String {
 
 fn conv_display_title(conv: &ConvHeader) -> String {
     let raw = conv.title.as_deref().unwrap_or("(untitled)");
-    // Bump the cap to ~30 chars so titles like "Elite Dangerous Planetary So…" survive without
-    // losing both words.
     truncate_title(raw, 30)
 }
 
-/// A condensed sidebar row, used in Pinned, CategoryList, AgentTailList and SearchResultList.
-/// Matches the Grok aesthetic: dot colour, title, two-line clamp.
 #[component]
 fn SidebarRowCompact(
     conv: ConvHeader,
@@ -783,11 +948,7 @@ fn SidebarRowCompact(
 ) -> Element {
     let id = conv.id.clone();
     let is_active = active().as_deref() == Some(id.as_str());
-    let cls = if is_active {
-        "grok-row grok-row-active"
-    } else {
-        "grok-row"
-    };
+    let cls = if is_active { "grok-row grok-row-active" } else { "grok-row" };
     let display = conv_display_title(&conv);
     let dot = row_dot_color(display.as_str());
     let id_for_pick = id.clone();
@@ -810,7 +971,6 @@ fn SidebarRowCompact(
     }
 }
 
-/// A longer ChatList row — includes the relative-time suffix to match "Chats" expectations.
 #[component]
 fn SidebarRowChat(
     conv: ConvHeader,
@@ -819,11 +979,7 @@ fn SidebarRowChat(
 ) -> Element {
     let id = conv.id.clone();
     let is_active = active().as_deref() == Some(id.as_str());
-    let cls = if is_active {
-        "grok-row grok-row-active"
-    } else {
-        "grok-row"
-    };
+    let cls = if is_active { "grok-row grok-row-active" } else { "grok-row" };
     let display = conv_display_title(&conv);
     let time = relative_time(&conv.created_at);
     let id_for_pick = id.clone();
@@ -912,7 +1068,10 @@ fn ShowMoreRow(count: usize, expanded: Signal<bool>) -> Element {
             class: "sidebar-show-more",
             r#type: "button",
             onclick: move |_| expanded.set(!expanded()),
-            if expanded() { "Show less ({count})" } else { "Show more ({count})" }
+            if expanded() { IconChevronDown {} } else { IconChevronRight {} }
+            span {
+                if expanded() { "Show less ({count})" } else { "Show more ({count})" }
+            }
         }
     }
 }
@@ -962,8 +1121,9 @@ fn ChatList(
     }
 }
 
-/// Section-level placeholder list — three demo projects named after the screenshot. The endpoint
-/// to back this list is part of the same milestone, so a backend connection comes later.
+/// Projects are placeholders for the prototype — three demo entries with the colour the user
+/// saw in the original screenshot. The header `+` opens a modal in the parent; rows here are
+/// status rows, not links.
 const PROJECT_ENTRIES: &[(&str, &str)] = &[
     ("Life System", "var(--dot-cyan)"),
     ("Self Help", "var(--dot-green)"),
@@ -971,7 +1131,7 @@ const PROJECT_ENTRIES: &[(&str, &str)] = &[
 ];
 
 #[component]
-fn ProjectList(on_pick: EventHandler<String>) -> Element {
+fn ProjectList(route: Signal<Route>) -> Element {
     rsx! {
         ul {
             class: "grok-list",
@@ -979,11 +1139,6 @@ fn ProjectList(on_pick: EventHandler<String>) -> Element {
                 ProjectRow {
                     label: entry.0,
                     color: entry.1,
-                    title: format!("Open the {} project.", entry.0),
-                    on_click: move || {
-                        let label = entry.0;
-                        on_pick.call(format!("project:{label}"));
-                    },
                 }
             }
         }
@@ -991,20 +1146,12 @@ fn ProjectList(on_pick: EventHandler<String>) -> Element {
 }
 
 #[component]
-fn ProjectRow(
-    label: &'static str,
-    color: &'static str,
-    title: String,
-    on_click: EventHandler<()>,
-) -> Element {
+fn ProjectRow(label: &'static str, color: &'static str) -> Element {
     rsx! {
         li {
-            class: "grok-row",
-            button {
-                class: "grok-row-btn",
-                r#type: "button",
-                title: "{title}",
-                onclick: move |_| on_click.call(()),
+            class: "grok-row grok-row-static",
+            div {
+                class: "grok-row-btn grok-row-static-btn",
                 span {
                     class: "grok-row-dot",
                     style: "background: {color};",
@@ -1070,7 +1217,7 @@ fn SearchResultList(
     }
 }
 
-// ── Time formatter (moved from old sidebar; identical behaviour) ────────────
+// ── Time formatter ─────────────────────────────────────────────────────────
 
 pub(super) fn relative_time(iso: &str) -> String {
     let parsed = chrono::DateTime::parse_from_rfc3339(iso)
@@ -1130,10 +1277,7 @@ mod tests {
 
     #[test]
     fn age_bands_choose_the_unit() {
-        assert_eq!(
-            relative_time(&ago(chrono::Duration::seconds(12))),
-            "12s ago"
-        );
+        assert_eq!(relative_time(&ago(chrono::Duration::seconds(12))), "12s ago");
         assert_eq!(relative_time(&ago(chrono::Duration::minutes(5))), "5m ago");
         assert_eq!(relative_time(&ago(chrono::Duration::hours(3))), "3h ago");
         assert_eq!(relative_time(&ago(chrono::Duration::days(2))), "2d ago");
@@ -1186,8 +1330,6 @@ mod tests {
         }
     }
 
-    /// A title with a quote in it (or any text overflowing the cap) ends in the truncation
-    /// marker and never exceeds `max` chars minus the marker.
     #[test]
     fn long_titles_truncate_with_an_ellipsis() {
         let s = "a".repeat(40);
@@ -1196,14 +1338,11 @@ mod tests {
         assert!(out.chars().count() <= 30);
     }
 
-    /// Short titles render untouched — no spurious ellipsis when there's room to spare.
     #[test]
     fn short_titles_pass_through() {
         assert_eq!(truncate_title("Disk Saver", 30), "Disk Saver");
     }
 
-    /// The Pinned set is for the user's pinned agents. The match is a case-insensitive prefix on
-    /// the title so a user-typed title still pins without exact casing.
     #[test]
     fn pinned_match_is_case_insensitive_prefix() {
         assert!(pinned("Grok Bot"));
@@ -1212,11 +1351,8 @@ mod tests {
         assert!(!pinned("Other Agent"));
     }
 
-    /// The dot palette covers every visible category in the prototype so we never fall through to
-    /// the neutral palette by accident — if a new agent shows up uncolored, this test breaks.
     #[test]
     fn dot_palette_covers_prototype_categories() {
-        // All categories appear in row_dot_color. Spot-check that grep sees the strings.
         for name in ["Grok", "Liberado-Budget", "Disk Saver", "Self Help", "Life System", "Homelab"] {
             assert!(
                 !row_dot_color(name).is_empty(),
