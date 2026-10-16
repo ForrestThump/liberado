@@ -22,6 +22,9 @@ use chrono::{DateTime, Utc};
 use liberado_common::{Event, EventPayload, EventSource, event_source};
 use tokio::sync::mpsc::UnboundedSender;
 
+mod english;
+pub use english::{cron_to_english, cron_to_english_at};
+
 /// A configured cron schedule: fire on `cron_expr` and dispatch `goal` when it does. `cron_expr`
 /// uses the `cron` crate's 6/7-field syntax (**seconds first** — not standard 5-field cron), e.g.
 /// `"0 0 9 * * * *"` for "every day at 09:00:00".
