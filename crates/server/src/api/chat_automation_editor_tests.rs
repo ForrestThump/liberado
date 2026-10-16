@@ -141,3 +141,78 @@ async fn automation_editor_post_is_one_row_and_delete_is_refused() {
     assert!(del_raw.contains("cannot be deleted"), "{del_raw}");
     assert!(sessions.session(ulid).await.unwrap().automation_editor);
 }
+
+#[tokio::test]
+async fn editor_open_and_a_later_turn_resolve_without_a_topology_row() {
+    let mut cfg = liberado_config::Config::default();
+    cfg.topology.vault_path = std::path::PathBuf::from("/tmp/vault");
+    cfg.policy.grants = vec![
+        liberado_config::Grant {
+            component: "main-agent".into(),
+            capabilities: vec![liberado_common::Capability::AskHuman],
+        },
+        liberado_config::Grant {
+            component: "automation-editor".into(),
+            capabilities: vec![liberado_common::Capability::ExecuteTool(
+                "automation-editor:list_schedules".into(),
+            )],
+        },
+    ];
+    let provider = Arc::new(MockProvider::with_script(
+        "mock",
+        vec![
+            liberado_provider::CompletionResponse::text("Listed."),
+            liberado_provider::CompletionResponse::text("Still listed."),
+        ],
+    ));
+    let dir = tempfile::tempdir().unwrap();
+    let sessions = Arc::new(SessionStore::open(dir.path()).await);
+    let chat = crate::chat_agent_spawn::install(
+        ChatSessions::new(
+            sessions.clone(),
+            Executor::new(provider.clone(), Budget::default()),
+            Arc::new(NoopRuntime),
+        ),
+        crate::surfaces::ProfileCatalog::memory(Arc::new(cfg)),
+    );
+    let (id, created) = chat.open_automation_editor().await.unwrap();
+    assert!(created);
+    let header = sessions.session(id).await.unwrap();
+    assert!(header.automation_editor);
+    assert!(!header.agent_creator);
+    assert_eq!(header.grant.profile.as_deref(), Some("automation-editor"));
+    assert_eq!(header.grant.delegation, Some(false));
+    assert_eq!(
+        header.grant.capabilities.capabilities,
+        vec![liberado_common::Capability::ExecuteTool(
+            "automation-editor:list_schedules".into()
+        )]
+    );
+    assert!(!header.grant.capabilities.grants_ask_human());
+
+    let first = chat.turn(id, "list schedules").await.unwrap();
+    let second = chat.turn(id, "list them again").await.unwrap();
+    assert_eq!(first, "Listed.");
+    assert_eq!(second, "Still listed.");
+    let requests = provider.received_requests();
+    assert_eq!(requests.len(), 2, "both turns must reach the model");
+    for request in &requests {
+        let names: Vec<_> = request
+            .tools
+            .iter()
+            .map(|tool| tool.name.as_str())
+            .collect();
+        assert_eq!(
+            names,
+            vec![
+                liberado_main_agent::LIST_SCHEDULES_TOOL_NAME,
+                liberado_main_agent::CREATE_SCHEDULE_TOOL_NAME,
+                liberado_main_agent::UPDATE_SCHEDULE_TOOL_NAME,
+                liberado_main_agent::DELETE_SCHEDULE_TOOL_NAME,
+            ]
+        );
+    }
+    let after = sessions.session(id).await.unwrap();
+    assert_eq!(after.grant.capabilities, header.grant.capabilities);
+    assert!(after.automation_editor);
+}

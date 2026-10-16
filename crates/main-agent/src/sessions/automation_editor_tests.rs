@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
-use liberado_common::{CapabilitySet, Proposal, ProposalSigner};
+use liberado_common::{Capability, CapabilitySet, Proposal, ProposalSigner};
 use liberado_conversation_store::{Author, is_agent_creator_profile};
 use liberado_executor::{Budget, Executor};
 use liberado_provider::MockProvider;
@@ -56,6 +56,10 @@ fn settings(editor: bool) -> TurnSettings {
 
 #[test]
 fn the_editor_profile_is_not_an_agent_creator() {
+    assert_eq!(
+        AUTOMATION_EDITOR_PROFILE,
+        liberado_config_loader::BUILTIN_AUTOMATION_EDITOR_PROFILE
+    );
     assert!(!is_agent_creator_profile(Some(AUTOMATION_EDITOR_PROFILE)));
     assert!(is_agent_creator_profile(Some("operator")));
 }
@@ -181,11 +185,121 @@ async fn a_proposal_does_not_touch_topology_before_approval() {
         let path = entry.unwrap().path();
         let text = std::fs::read_to_string(&path).unwrap();
         let proposal = Proposal::from_note(&text).unwrap();
-        assert!(proposal.requested_grant.is_some(), "{text}");
+        let liberado_common::ProposedAction::ToolCalls(calls) = &proposal.proposed_action else {
+            panic!("schedule card must carry a tool call: {text}");
+        };
+        let tool_name = &calls[0].tool;
+        assert_eq!(
+            proposal.requested_grant,
+            Some(Capability::ExecuteTool(format!(
+                "{AUTOMATION_EDITOR_PROFILE}:{tool_name}"
+            ))),
+            "{text}"
+        );
         assert_eq!(proposal.session_id.as_deref(), Some("sess-1"));
         assert_eq!(proposal.origin, Some(liberado_common::ApprovalOrigin::Web));
         notes += 1;
     }
     assert_eq!(notes, 3);
     assert_eq!(std::fs::read_to_string(&topology).unwrap(), original);
+}
+
+fn editor_policy_without_a_topology_row() -> liberado_config_loader::Config {
+    let mut cfg = liberado_config_loader::Config::default();
+    cfg.topology.vault_path = std::path::PathBuf::from("/tmp/vault");
+    cfg.policy.grants = vec![
+        liberado_config_loader::Grant {
+            component: "main-agent".into(),
+            capabilities: vec![Capability::AskHuman],
+        },
+        liberado_config_loader::Grant {
+            component: AUTOMATION_EDITOR_PROFILE.into(),
+            capabilities: vec![Capability::ExecuteTool(
+                "automation-editor:list_schedules".into(),
+            )],
+        },
+    ];
+    cfg
+}
+
+fn grant_for_named_hat(
+    cfg: &liberado_config_loader::Config,
+    name: &str,
+) -> Result<SessionGrant, String> {
+    let resolved = cfg
+        .resolve_session_profile(Some(name), "main-agent")
+        .map_err(|err| err.to_string())?;
+    let parts = resolved.grant_parts();
+    let overrides = serde_json::to_value(&resolved.overrides).map_err(|err| err.to_string())?;
+    Ok(SessionGrant {
+        capabilities: parts.capabilities,
+        profile: parts.profile,
+        overrides,
+        delegation: parts.delegation,
+        model: parts.model.map(str::to_string),
+        prompt_append: parts.prompt_append.map(str::to_string),
+    })
+}
+
+#[tokio::test]
+async fn a_later_editor_turn_keeps_schedule_tools_and_the_policy_grant() {
+    let cfg = editor_policy_without_a_topology_row();
+    let store = Arc::new(SessionStore::new());
+    let sessions = Arc::new(
+        ChatSessions::new(
+            store,
+            Executor::new(
+                Arc::new(MockProvider::with_script("m", vec![])),
+                Budget::default(),
+            ),
+            Arc::new(NoopRuntime),
+        )
+        .with_profile_resolver(Arc::new({
+            let cfg = cfg.clone();
+            move |name: &str| grant_for_named_hat(&cfg, name)
+        })),
+    );
+    sessions.install_self_handle();
+    let (id, created) = sessions.open_automation_editor().await.unwrap();
+    assert!(created);
+
+    let first = sessions.turn_settings(id).await;
+    let listed = Capability::ExecuteTool("automation-editor:list_schedules".into());
+    assert!(first.automation_editor);
+    assert!(!first.delegation);
+    assert_eq!(first.profile.as_deref(), Some(AUTOMATION_EDITOR_PROFILE));
+    assert_eq!(first.capabilities.capabilities, vec![listed]);
+    assert!(!first.capabilities.grants_ask_human());
+
+    let runtime = sessions.build_face_runtime(
+        "list them",
+        id,
+        first.capabilities.clone(),
+        Arc::new(AtomicBool::new(false)),
+        &first,
+    );
+    let names: Vec<_> = runtime
+        .catalog()
+        .into_iter()
+        .map(|tool| tool.name)
+        .collect();
+    assert_eq!(
+        names,
+        vec![
+            LIST_SCHEDULES_TOOL_NAME.to_string(),
+            CREATE_SCHEDULE_TOOL_NAME.to_string(),
+            UPDATE_SCHEDULE_TOOL_NAME.to_string(),
+            DELETE_SCHEDULE_TOOL_NAME.to_string(),
+        ]
+    );
+
+    let second = sessions.turn_settings(id).await;
+    assert_eq!(second.capabilities, first.capabilities);
+    assert!(second.automation_editor);
+    assert!(!second.delegation);
+    let again = cfg
+        .resolve_session_profile(Some(AUTOMATION_EDITOR_PROFILE), "main-agent")
+        .unwrap();
+    assert_eq!(again.capabilities, first.capabilities);
+    assert_eq!(again.delegation, Some(false));
 }

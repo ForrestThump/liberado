@@ -14,7 +14,7 @@ use std::sync::{Arc, Mutex};
 
 use liberado_bootstrap::Config;
 use liberado_common::Error;
-use liberado_config::ResolvedProfile;
+use liberado_config::{BUILTIN_AUTOMATION_EDITOR_PROFILE, ResolvedProfile};
 
 /// Named chat profile the picker treats as the built-in default. Not the unnamed grant.
 pub const BUILTIN_DEFAULT_PROFILE: &str = "chat-default";
@@ -135,12 +135,7 @@ impl ProfileCatalog {
             let guard = self.lock();
             match original_of(&self.config, &guard.ledger, name) {
                 Some(original) => original,
-                None => {
-                    return Err(Error::Config(format!(
-                        "session profile '{name}' does not name an enabled \
-                         topology.session_profiles entry"
-                    )));
-                }
+                None => return profile_absent_from_ledger(self, name, domain_fallback),
             }
         };
         let mut resolved = self
@@ -193,7 +188,7 @@ impl ProfileCatalog {
         let to = validate_profile_name(to_raw)?;
         let guard = self.lock();
         let Some(original) = original_of(&self.config, &guard.ledger, from) else {
-            return Err(ProfileReject::Unknown);
+            return Err(missing_profile_reject(from));
         };
         if is_protected(&original) || is_protected(from) || is_protected(&to) {
             return Err(ProfileReject::Protected);
@@ -223,7 +218,7 @@ impl ProfileCatalog {
     pub fn plan_delete(&self, name: &str) -> Result<DeletePlan, ProfileReject> {
         let guard = self.lock();
         let Some(original) = original_of(&self.config, &guard.ledger, name) else {
-            return Err(ProfileReject::Unknown);
+            return Err(missing_profile_reject(name));
         };
         if is_protected(&original) || is_protected(name) {
             return Err(ProfileReject::Protected);
@@ -298,7 +293,50 @@ fn name_taken(config: &Config, ledger: &ProfileLedger, live: &str, except_origin
 
 pub fn is_protected(name: &str) -> bool {
     name == BUILTIN_DEFAULT_PROFILE
+        || name == BUILTIN_AUTOMATION_EDITOR_PROFILE
         || liberado_conversation_store::is_agent_creator_profile(Some(name))
+}
+
+/// A live name the ledger does not currently publish.
+///
+/// A topology row that was deleted or renamed stays unknown, so the catalog
+/// does not fall through to the boot entry. The built-in editor name is
+/// protected even when topology never listed it.
+fn missing_profile_reject(name: &str) -> ProfileReject {
+    if is_protected(name) {
+        ProfileReject::Protected
+    } else {
+        ProfileReject::Unknown
+    }
+}
+
+/// No ledger row for `name`. A deleted topology profile stays an error.
+/// A name topology never listed goes to [`Config::resolve_session_profile`],
+/// which accepts the built-in editor hat and rejects everything else.
+fn profile_absent_from_ledger(
+    catalog: &ProfileCatalog,
+    name: &str,
+    domain_fallback: &str,
+) -> Result<ResolvedProfile, Error> {
+    if catalog
+        .config
+        .topology
+        .session_profiles
+        .iter()
+        .any(|profile| profile.name == name)
+    {
+        return Err(unknown_profile_error(name));
+    }
+    catalog
+        .config
+        .resolve_session_profile(Some(name), domain_fallback)
+}
+
+fn unknown_profile_error(name: &str) -> Error {
+    Error::Config(format!(
+        "session profile '{name}' does not name an enabled \
+         topology.session_profiles entry"
+    ))
 }
 
 fn validate_profile_name(raw: &str) -> Result<String, ProfileReject> {

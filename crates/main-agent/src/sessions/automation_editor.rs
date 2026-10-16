@@ -1,9 +1,11 @@
 //! Singleton Automation Editor session and the schedule-edit proposal it files.
 //!
 //! Copy of the Agent Creator open path. The profile is `automation-editor`.
-//! `is_agent_creator_profile` stays false for that name, so the session does not
-//! gain `create_agent`. Writes file a permission card and return. They do not
-//! edit `topology.toml`.
+//! That name resolves as a built-in when topology has no matching row. Agent
+//! Creator does not need this: it runs as `operator`, which deployments already
+//! list. `is_agent_creator_profile` stays false for the editor name, so the
+//! session does not gain `create_agent`. Writes file a permission card and
+//! return. They do not edit `topology.toml`.
 
 use std::sync::Arc;
 

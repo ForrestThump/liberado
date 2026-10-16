@@ -148,6 +148,10 @@ impl Config {
     /// `topology.schedules` at load time. Runtime-created goals (HTTP `POST /api/goals`, Telegram
     /// `/spawn`) can only be caught here.
     ///
+    /// The built-in name `automation-editor` is the one exception. With no topology row of
+    /// that name it resolves to the `automation-editor` policy grant, delegation off, and no
+    /// domain. A disabled row of that name is still an error.
+    ///
     /// Returns everything a caller needs to run under this profile. The capability set is **the**
     /// authority boundary for the session and can only ever be narrowed from here (Decision 4).
     /// `max_idle_secs` comes from the profile when set (E5); the caller may still override with a
@@ -182,10 +186,7 @@ impl Config {
                 model: p.model.clone(),
                 prompt_append: p.prompt_append.clone(),
             }),
-            None => Err(Error::Config(format!(
-                "session profile '{name}' does not name an enabled \
-                 topology.session_profiles entry"
-            ))),
+            None => super::config_builtin_editor::profile_or_unknown(self, name),
         }
     }
 

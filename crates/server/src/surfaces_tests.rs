@@ -159,6 +159,73 @@ async fn the_chat_mask_hides_and_refuses_a_switched_off_server() {
     assert!(err.contains("tasks"), "{err}");
 }
 
+fn catalog_without_an_editor_row() -> ProfileCatalog {
+    let mut cfg = (*config()).clone();
+    cfg.policy.grants.push(liberado_config::Grant {
+        component: "main-agent".into(),
+        capabilities: vec![liberado_common::Capability::AskHuman],
+    });
+    cfg.policy.grants.push(liberado_config::Grant {
+        component: liberado_config::BUILTIN_AUTOMATION_EDITOR_PROFILE.into(),
+        capabilities: vec![liberado_common::Capability::ExecuteTool(
+            "automation-editor:list_schedules".into(),
+        )],
+    });
+    ProfileCatalog::memory(Arc::new(cfg))
+}
+
+#[test]
+fn catalog_serves_the_editor_hat_on_a_later_lookup_without_a_topology_row() {
+    let profiles = catalog_without_an_editor_row();
+    let listed =
+        liberado_common::Capability::ExecuteTool("automation-editor:list_schedules".into());
+    let first = profiles
+        .resolve(Some("automation-editor"), "main-agent")
+        .expect("open resolves the built-in hat");
+    let second = profiles
+        .resolve(Some("automation-editor"), "main-agent")
+        .expect("a later turn resolves the same hat");
+    assert_eq!(first.name.as_deref(), Some("automation-editor"));
+    assert_eq!(first.delegation, Some(false));
+    assert!(first.domain.is_none());
+    assert_eq!(first.capabilities.capabilities, vec![listed.clone()]);
+    assert!(!first.capabilities.grants_ask_human());
+    assert_eq!(second.capabilities, first.capabilities);
+    let err = profiles
+        .resolve(Some("not-a-real-hat"), "main-agent")
+        .expect_err("a stranger name stays an error");
+    assert!(err.to_string().contains("not-a-real-hat"), "{err}");
+    let body = profiles.list_json();
+    let names: Vec<&str> = body["profiles"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|row| row["name"].as_str())
+        .collect();
+    assert!(
+        !names.contains(&"automation-editor"),
+        "the hat stays off the picker when topology has no row: {names:?}"
+    );
+}
+
+#[test]
+fn the_editor_hat_cannot_be_renamed_or_deleted() {
+    let profiles = ProfileCatalog::memory(config());
+    assert!(is_protected("automation-editor"));
+    assert_eq!(
+        profiles.plan_delete("automation-editor"),
+        Err(ProfileReject::Protected)
+    );
+    assert_eq!(
+        profiles.plan_rename("automation-editor", "other"),
+        Err(ProfileReject::Protected)
+    );
+    assert_eq!(
+        profiles.plan_rename("coding", "automation-editor"),
+        Err(ProfileReject::Protected)
+    );
+}
+
 #[test]
 fn inert_surfaces_share_no_ledger_file() {
     let surfaces = LiveSurfaces::inert();
