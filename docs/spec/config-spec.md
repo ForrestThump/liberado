@@ -2,7 +2,7 @@
 
 **Status**: Resolves Tier-3 Decision 14 (single source of truth for config / topology). Actionable.
 **Owner**: Shiloh Mangus
-**Last Updated**: October 13, 2026
+**Last Updated**: October 16, 2026
 **Related**:
 - `liberado-architecture-decisions.md` (Decision 14; Decision 10 secrets; Decision 4 policy)
 - Every companion spec contributes tunables (their "Tunables — single source of truth" tables)
@@ -25,7 +25,8 @@
    or phone edit must never be able to alter the containment boundary).
 5. **Agents do not write config.** No MCP, hook, dispatcher, or subagent has a capability to modify
    config files. (User-approval-gated config changes *through* the system are a v2+ roadmap item,
-   explicitly out of scope for initial work.)
+   explicitly out of scope for initial work.) A library call may splice `[[schedules]]` only
+   (§4.5). Nothing in the daemon calls it yet.
 6. **Secrets are not config.** They live in env / systemd credentials and are referenced by name
    (Decision 10); raw secret values never appear in any config file.
 
@@ -182,6 +183,33 @@ the default backend.
 
 A profile that names a provider, including the daemon default, gets its own client when that key
 is set. Only an omitted `provider` shares the face client.
+
+## 4.5 Schedule file writer
+
+`[[schedules]]` is the only schedule store. The daemon copies enabled rows into the cron task
+at boot and does not hot-reload them. `liberado_config::create_schedule`, `update_schedule`,
+and `delete_schedule` are the write path. They take a `topology.toml` path, or the config
+directory that contains it. `schedule_topology_path` resolves that file from `config_dir()`.
+
+On apply, in order:
+
+1. If the file is missing or not writable, return that error and write nothing. A read-only
+   mount (`/config:ro` in the homelab compose file) fails here.
+2. Copy the file to a sibling `topology.toml.bak-<utc>`. If the copy fails, stop. The original
+   stays.
+3. Splice a `toml_edit` document. Touch only the `[[schedules]]` array: create a row, replace
+   the row with that name, or delete it. Leave comments and every other table in place. A
+   serde rewrite of the whole file is not allowed — it drops the comment blocks and can move
+   keys relative to tables.
+4. Load the edited text with `load_config` (the boot loader) and therefore `Config::validate`
+   (schedule, pool, and profile checks, plus the rest of the merged config). On error, leave
+   the original file in place and keep the backup.
+5. Write a temp file in the same directory and rename it over `topology.toml`.
+6. Return what changed. Cron and `GET /api/schedules` still show the boot copy until the
+   process is recreated (`docker compose up -d --force-recreate`). This function does not
+   reload either.
+
+No agent, MCP, or HTTP route calls this yet. Principle 5 still holds for those surfaces.
 
 ## 5. Where the Tunables Come From
 
