@@ -807,9 +807,10 @@ pub fn Sidebar(
                             on_open: move |_| route.set(Route::Plugins),
                         }
                     }
-
-                    ThemeSwatch { theme_epoch: theme_epoch }
                 }
+                // Outside `.sidebar-scroll`. That list clips both axes, so a
+                // popover here would lose its box and leave only the shadow.
+                ThemeSwatch { theme_epoch: theme_epoch }
             }
 
             if let Some(err) = action_error() {

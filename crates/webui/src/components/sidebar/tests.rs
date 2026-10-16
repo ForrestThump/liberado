@@ -277,6 +277,184 @@ fn nav_that_opens_a_view_closes_the_phone_drawer() {
     }
 }
 
+/// The theme list hangs into the chat. The rail must paint above the composer,
+/// and the list must sit outside `.sidebar-scroll`, which clips both axes.
+/// Rename and delete menus are already `position: fixed` at the overlay layer,
+/// so the same clip does not apply to them.
+#[test]
+fn theme_picker_paints_above_the_chat_and_is_not_clipped() {
+    let css = include_str!("../../styles/main.css");
+    let sidebar = css_block(css, ".grok-layout .sidebar");
+    let composer = css_z_index(css_block(css, ".composer-dock"));
+    let header = css_z_index(css_block(css, ".app-header"));
+    let modal = css_z_index(css_block(css, ".modal-backdrop"));
+    let rail_z = css_z_index(sidebar);
+    assert!(
+        sidebar.contains("position: relative"),
+        "the rail needs a stacking context: {sidebar}"
+    );
+    assert!(
+        sidebar.contains("overflow: visible"),
+        "hidden overflow clips the theme list at the rail edge: {sidebar}"
+    );
+    assert!(
+        rail_z > composer,
+        "rail z-index {rail_z} must be above the composer {composer}"
+    );
+    assert!(
+        header > rail_z,
+        "the header ({header}) stays above the rail ({rail_z})"
+    );
+    assert!(
+        modal > rail_z,
+        "modals ({modal}) stay above the rail ({rail_z})"
+    );
+
+    let pop = css_block(css, ".theme-swatch-pop");
+    assert!(
+        pop.contains("position: absolute"),
+        "the desktop list stays anchored to the palette button: {pop}"
+    );
+    assert!(css_z_index(pop) > 0, "{pop}");
+
+    let phone_drawer = css
+        .split("/* phone-sidebar-drawer */")
+        .nth(1)
+        .expect("phone drawer styles")
+        .split("/* phone-sidebar-drawer-end */")
+        .next()
+        .expect("phone drawer end");
+    let drawer = css_block(phone_drawer, ".grok-layout.drawer-open .sidebar");
+    assert!(drawer.contains("position: fixed"), "{drawer}");
+    assert!(drawer.contains("z-index: 25"), "{drawer}");
+    assert!(
+        drawer.contains("overflow: hidden"),
+        "the phone overlay stays clipped: {drawer}"
+    );
+    assert!(
+        css_z_index(css_block(phone_drawer, ".app-header")) > css_z_index(drawer),
+        "the phone header stays above the drawer"
+    );
+
+    let phone_pop = nth_css_block(css, ".theme-swatch-pop", 1);
+    assert!(
+        phone_pop.contains("position: fixed"),
+        "a phone keeps the centered fixed list: {phone_pop}"
+    );
+    assert!(
+        phone_pop.contains("transform: translateX(-50%)"),
+        "{phone_pop}"
+    );
+
+    let menu = css_block(css, ".conv-menu-backdrop");
+    assert!(menu.contains("position: fixed"), "{menu}");
+    assert!(
+        css_z_index(menu) >= modal,
+        "row menus stay on the overlay layer: {menu}"
+    );
+
+    let src = include_str!("mod.rs");
+    let scroll_at = src
+        .find("class: \"sidebar-scroll\"")
+        .expect("sidebar scroll");
+    let div_at = src[..scroll_at].rfind("div {").expect("scroll div");
+    let scroll_end = element_end(src, div_at);
+    let swatch_at = src
+        .rfind("ThemeSwatch { theme_epoch: theme_epoch }")
+        .expect("expanded theme swatch");
+    assert!(
+        swatch_at > scroll_end,
+        "ThemeSwatch must be outside .sidebar-scroll or the list clips the picker"
+    );
+
+    let rail = include_str!("rail.rs");
+    let swatch = rail.split("fn ThemeSwatch").nth(1).expect("ThemeSwatch");
+    let swatch = swatch.split("fn theme_dot").next().unwrap_or(swatch);
+    assert!(swatch.contains("open.set(!open())"), "{swatch}");
+    assert!(swatch.contains("open.set(false)"), "{swatch}");
+}
+
+fn css_z_index(block: &str) -> i32 {
+    let line = block
+        .lines()
+        .find(|line| line.contains("z-index:"))
+        .unwrap_or_else(|| panic!("no z-index in {block}"));
+    let digits: String = line.chars().filter(|c| c.is_ascii_digit()).collect();
+    digits
+        .parse()
+        .unwrap_or_else(|_| panic!("bad z-index in {line}"))
+}
+
+fn nth_css_block<'a>(css: &'a str, selector: &str, n: usize) -> &'a str {
+    let needle = format!("{selector} {{");
+    let mut rest = css;
+    let mut found = "";
+    for _ in 0..=n {
+        let start = rest
+            .find(&needle)
+            .unwrap_or_else(|| panic!("missing CSS rule {selector}"))
+            + needle.len();
+        let end = rest[start..]
+            .find('}')
+            .unwrap_or_else(|| panic!("unterminated CSS rule {selector}"));
+        found = &rest[start..start + end];
+        rest = &rest[start + end..];
+    }
+    found
+}
+
+/// Index of the `}` that closes the element whose `{` is at `open_brace`.
+/// Quoted strings and `//` comments do not count.
+fn element_end(src: &str, open_brace: usize) -> usize {
+    let bytes = src.as_bytes();
+    let mut i = open_brace;
+    let mut depth = 0i32;
+    let mut line_comment = false;
+    let mut in_str = false;
+    while i < bytes.len() {
+        let c = bytes[i];
+        if line_comment {
+            if c == b'\n' {
+                line_comment = false;
+            }
+            i += 1;
+            continue;
+        }
+        if in_str {
+            if c == b'\\' {
+                i += 2;
+                continue;
+            }
+            if c == b'"' {
+                in_str = false;
+            }
+            i += 1;
+            continue;
+        }
+        if c == b'/' && i + 1 < bytes.len() && bytes[i + 1] == b'/' {
+            line_comment = true;
+            i += 2;
+            continue;
+        }
+        if c == b'"' {
+            in_str = true;
+            i += 1;
+            continue;
+        }
+        if c == b'{' {
+            depth += 1;
+        }
+        if c == b'}' {
+            depth -= 1;
+            if depth == 0 {
+                return i;
+            }
+        }
+        i += 1;
+    }
+    panic!("unclosed element at {open_brace}");
+}
+
 fn window_around<'a>(src: &'a str, marker: &str, span: usize) -> &'a str {
     let start = src
         .find(marker)

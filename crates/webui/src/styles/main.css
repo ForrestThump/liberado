@@ -2591,7 +2591,13 @@ body {
     display: flex;
     flex-direction: column;
     height: 100%;
-    overflow: hidden;
+    /* Above the chat pane (the composer is z-index 4) and below the header
+       (z-index 10) and modals (z-index 50). Visible overflow lets the theme
+       list hang into the chat. Hidden overflow clips that list at the rail
+       edge and leaves only its shadow. The phone drawer sets hidden again. */
+    position: relative;
+    z-index: 5;
+    overflow: visible;
     font-size: 0.8125rem;
 }
 
@@ -3038,6 +3044,9 @@ body {
         bottom: 0;
         left: 0;
         z-index: 25;
+        /* Keep the overlay clipped. The theme list on a phone is position:fixed,
+           so it still paints above the chat. */
+        overflow: hidden;
         width: min(20rem, calc(100vw - 2.5rem));
         max-width: min(20rem, calc(100vw - 2.5rem));
         height: auto;
@@ -3655,6 +3664,7 @@ body {
     position: relative;
     display: flex;
     justify-content: center;
+    flex-shrink: 0;
 }
 
 .theme-swatch-toggle {
