@@ -1,14 +1,15 @@
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use axum::http::StatusCode;
 use liberado_common::{
     Capability, DecisionVia, Proposal, ProposalStatus, ProposedAction, ToolCall,
 };
-use liberado_telegram_approvals::PermissionResolver;
+use liberado_telegram_approvals::{PermissionResolver, ResolveOutcome};
 use liberado_vault::Vault;
 use serde_json::json;
 
-use super::{apply_at, card_options, is_schedule_edit};
+use super::{apply_at, card_options, http_response, is_schedule_edit};
 
 const POLICY: &str = r#"
 [[zones]]
@@ -255,6 +256,68 @@ async fn the_card_approve_path_writes_once_and_deny_writes_nothing() {
     }
     assert_eq!(std::fs::read_to_string(&path).unwrap(), before_deny);
     assert_ne!(original, before_deny);
+}
+
+/// Each `ResolveOutcome` arm of `http_response`, including both sides of the
+/// shared 404 and 500 patterns. `reply` sees `Some` and `None` for decision,
+/// label, and error.
+#[tokio::test]
+async fn http_response_maps_each_resolve_outcome() {
+    let cases: [(ResolveOutcome, StatusCode, &str); 7] = [
+        (
+            ResolveOutcome::Decided {
+                action: "approve",
+                label: "Approve".into(),
+                emoji: "ok",
+                rationale: "The file is on disk.".into(),
+            },
+            StatusCode::OK,
+            r#"{"status":"decided","decision":"approve","label":"Approve"}"#,
+        ),
+        (
+            ResolveOutcome::AlreadyDecided {
+                action: "deny",
+                label: "Deny".into(),
+            },
+            StatusCode::CONFLICT,
+            r#"{"status":"already_decided","decision":"deny","label":"Deny","error":"already decided: Deny"}"#,
+        ),
+        (
+            ResolveOutcome::NotFound,
+            StatusCode::NOT_FOUND,
+            r#"{"status":"not_found","error":"not found"}"#,
+        ),
+        (
+            ResolveOutcome::NotAPermissionRequest,
+            StatusCode::NOT_FOUND,
+            r#"{"status":"not_found","error":"not found"}"#,
+        ),
+        (
+            ResolveOutcome::UnknownAction,
+            StatusCode::BAD_REQUEST,
+            r#"{"status":"unknown_decision","error":"unknown decision"}"#,
+        ),
+        (
+            ResolveOutcome::Unreadable,
+            StatusCode::INTERNAL_SERVER_ERROR,
+            r#"{"status":"save_failed","error":"could not save the decision"}"#,
+        ),
+        (
+            ResolveOutcome::SaveFailed,
+            StatusCode::INTERNAL_SERVER_ERROR,
+            r#"{"status":"save_failed","error":"could not save the decision"}"#,
+        ),
+    ];
+
+    for (outcome, expect_status, expect_body) in cases {
+        let response = http_response(outcome);
+        assert_eq!(response.status(), expect_status);
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body = String::from_utf8(bytes.to_vec()).unwrap();
+        assert_eq!(body, expect_body, "{expect_status}");
+    }
 }
 
 fn backup_count(dir: &Path) -> usize {
