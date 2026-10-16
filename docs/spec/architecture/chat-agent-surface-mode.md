@@ -355,6 +355,48 @@ profile). A chat, and an empty chat with no conversation yet, still show the chi
 Out of scope here: a wizard UI, notebook editor, skills substrate, custom tool grants, compaction
 of the creator transcript, and TUI shelf parity.
 
+## 6f. Automation Editor session
+
+The Automations page find-or-creates one **Automation Editor** conversation. A second open
+focuses the same row. The marker is `automation_editor: true` on the session and conversation
+headers (serde default false, omitted when false). A fork clears the flag. The title
+`"Automation Editor"` is display-only.
+
+The row runs as profile `automation-editor` with explicit `surface_mode: chat`. That name is
+not an agent-creator profile, so `create_agent` stays off. It is not listed in
+`[chat] agent_profiles`. `delegation` is false. The policy grant for component
+`automation-editor` is an empty capability list: the four schedule tools are face builtins,
+not policy capabilities. The profile has no `domain` and no vault write.
+
+`POST /api/conversations` accepts `automation_editor: true`. `profile` and `title` on that
+body are ignored. The response is 201 the first time and 200 when the flagged row already
+exists. Sending `agent_creator` and `automation_editor` together is 400. The opener
+`Which schedule should I list or change?` is appended only while every node is still
+`Author::System`.
+
+The face catalog for that flag is only `list_schedules`, `create_schedule`,
+`update_schedule`, and `delete_schedule`. Another profile does not see them.
+`list_schedules` re-reads `topology.toml` and needs no card. The three writers file a
+permission proposal (`requested_grant` set, `session_id` set, origin Web) and return
+without editing the file.
+
+The card offers **Approve** and **Deny**. A tap of once, session, or everywhere is treated
+as Approve for this one edit. None of those taps sets `approved_scope` or writes
+`grants.overlay.toml`. Approve calls `liberado_config`'s schedule writer once. Deny writes
+nothing. The model-facing success text is the writer's summary: the file is on disk, and
+cron and the schedules list keep the boot copy until the process is recreated. A refused
+write is the writer error, in plain text. `DELETE` of this row returns 409.
+
+The Automations page stacks the schedule list above an editor dock. The dock posts
+`{"automation_editor": true}` once when it opens, then shows that session's transcript
+and its Approve/Deny cards. The composer posts `POST /api/chat` with that session id.
+The page states that edits land in `topology.toml` and that the schedule list updates
+after the service restarts. A refused write is an assistant message in the transcript.
+
+The sidebar does not list this conversation on the Chats shelf, the Agents shelf, or
+in search. If a row is still drawn, Delete is blocked the same way as the Agent Creator:
+the control stays, and it does not call `DELETE`.
+
 ## 7. Follow-ups
 
 - **S4 (dogfood, Slice 4)** — Current. Use the shelves on the daemon you talk to,

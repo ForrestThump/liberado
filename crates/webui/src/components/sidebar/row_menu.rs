@@ -43,8 +43,13 @@ pub(super) fn agent_delete_block(agent_creator: bool) -> Option<&'static str> {
     }
 }
 
-pub(super) fn delete_block_for(id: &str, creator_ids: &[String]) -> Option<&'static str> {
-    agent_delete_block(creator_ids.iter().any(|row| row == id))
+pub(super) fn delete_block_for(
+    id: &str,
+    creator_ids: &[String],
+    editor_ids: &[String],
+) -> Option<&'static str> {
+    let creator = agent_delete_block(creator_ids.iter().any(|row| row == id));
+    super::editor_row::with_editor_block(creator, id, editor_ids)
 }
 
 /// Profile names match the daemon: trimmed, non-empty, at most 64 characters,
@@ -345,9 +350,9 @@ pub(super) fn RowOptions(
 #[cfg(test)]
 mod tests {
     use super::{
-        DESKTOP_MENU_GUTTER, blocked_delete, clamped_desktop_menu_top, conversation_row_dom_id,
-        delete_confirm_note, delete_confirm_title, name_limit, normalized_profile_name,
-        normalized_title,
+        BUILTIN_AGENT_DELETE_REASON, DESKTOP_MENU_GUTTER, blocked_delete, clamped_desktop_menu_top,
+        conversation_row_dom_id, delete_block_for, delete_confirm_note, delete_confirm_title,
+        name_limit, normalized_profile_name, normalized_title,
     };
 
     #[test]
@@ -362,6 +367,16 @@ mod tests {
             normalized_title(&too_long),
             Err("Keep the title under 120 characters.")
         );
+    }
+
+    #[test]
+    fn the_automation_editor_hides_delete() {
+        let editors = vec!["01EDITOR".to_string()];
+        let block = delete_block_for("01EDITOR", &[], &editors);
+        assert_eq!(block, Some("The Automation Editor cannot be deleted."));
+        assert_eq!(delete_block_for("01CHAT", &[], &editors), None);
+        let creator = delete_block_for("01CREATOR", &["01CREATOR".into()], &[]);
+        assert_eq!(creator, Some(BUILTIN_AGENT_DELETE_REASON));
     }
 
     #[test]

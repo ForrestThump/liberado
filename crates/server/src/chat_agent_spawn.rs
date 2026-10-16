@@ -50,24 +50,26 @@ pub(crate) fn install(
     sessions: ChatSessions,
     profiles: crate::surfaces::ProfileCatalog,
 ) -> Arc<ChatSessions> {
-    let sessions = sessions.with_profile_resolver(Arc::new(move |name: &str| {
-        match profiles.resolve(Some(name), "") {
-            Ok(resolved) => {
-                let parts = resolved.grant_parts();
-                let overrides = serde_json::to_value(&resolved.overrides)
-                    .map_err(|e| format!("failed to serialize profile overrides: {e}"))?;
-                Ok(SessionGrant {
-                    capabilities: parts.capabilities,
-                    profile: parts.profile,
-                    overrides,
-                    delegation: parts.delegation,
-                    model: parts.model.map(str::to_string),
-                    prompt_append: parts.prompt_append.map(str::to_string),
-                })
+    let sessions = sessions
+        .with_profile_resolver(Arc::new(move |name: &str| {
+            match profiles.resolve(Some(name), "") {
+                Ok(resolved) => {
+                    let parts = resolved.grant_parts();
+                    let overrides = serde_json::to_value(&resolved.overrides)
+                        .map_err(|e| format!("failed to serialize profile overrides: {e}"))?;
+                    Ok(SessionGrant {
+                        capabilities: parts.capabilities,
+                        profile: parts.profile,
+                        overrides,
+                        delegation: parts.delegation,
+                        model: parts.model.map(str::to_string),
+                        prompt_append: parts.prompt_append.map(str::to_string),
+                    })
+                }
+                Err(e) => Err(e.to_string()),
             }
-            Err(e) => Err(e.to_string()),
-        }
-    }));
+        }))
+        .with_schedule_list(Arc::new(crate::schedule_cards::list_from_disk));
     let sessions = Arc::new(sessions);
     sessions.install_self_handle();
     sessions

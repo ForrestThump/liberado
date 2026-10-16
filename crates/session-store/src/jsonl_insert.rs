@@ -47,6 +47,7 @@ impl SessionStore {
             // may not carry. See `SessionHeader::to_conversation_header`.
             surface_mode: Default::default(),
             agent_creator: false,
+            automation_editor: false,
             project: None,
             pending_model: None,
         };

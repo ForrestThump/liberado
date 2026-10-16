@@ -606,6 +606,15 @@ component = "main-agent"
 description = "Privileged face that may create_agent other Agents-shelf chats"
 enabled = true
 
+# Built-in Automation Editor. Not in [chat] agent_profiles. The header flag opens it.
+# delegation is off. The four schedule tools are face builtins, not this grant.
+[[session_profiles]]
+name = "automation-editor"
+description = "Built-in Automation Editor chat. Schedule tools only. Not on the Agents shelf."
+enabled = true
+delegation = false
+component = "automation-editor"
+
 # Optional inference routing on any profile. `model` pins the slug sent each turn.
 # `provider` names a [[providers]] entry and sends that slug there. Omit `provider`
 # to keep topology.provider (today's behavior). Unknown ids and entries with an

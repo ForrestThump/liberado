@@ -284,7 +284,11 @@ fn App() -> Element {
                             crate::components::library::Library { api_base: base.clone() }
                         },
                         Route::Automations => rsx! {
-                            crate::components::automations::Automations { api_base: base.clone() }
+                            div {
+                                class: "automations-stack",
+                                crate::components::automations::Automations { api_base: base.clone() }
+                                crate::components::automation_editor::AutomationEditor { api_base: base.clone() }
+                            }
                         },
                         Route::Projects => rsx! {
                             crate::components::projects::Projects {

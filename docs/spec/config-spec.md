@@ -2,7 +2,7 @@
 
 **Status**: Resolves Tier-3 Decision 14 (single source of truth for config / topology). Actionable.
 **Owner**: Shiloh Mangus
-**Last Updated**: October 13, 2026
+**Last Updated**: October 16, 2026
 **Related**:
 - `liberado-architecture-decisions.md` (Decision 14; Decision 10 secrets; Decision 4 policy)
 - Every companion spec contributes tunables (their "Tunables — single source of truth" tables)
@@ -24,8 +24,9 @@
    to change it. It is never synced into the vault (boot-order chicken-and-egg; and a sync conflict
    or phone edit must never be able to alter the containment boundary).
 5. **Agents do not write config.** No MCP, hook, dispatcher, or subagent has a capability to modify
-   config files. (User-approval-gated config changes *through* the system are a v2+ roadmap item,
-   explicitly out of scope for initial work.)
+   config files. The one exception is §4.5: the Automation Editor files a chat card, and Approve
+   calls the schedule writer once. That call splices `[[schedules]]` only. It does not change
+   grants. Cron still uses the boot copy until the process is recreated.
 6. **Secrets are not config.** They live in env / systemd credentials and are referenced by name
    (Decision 10); raw secret values never appear in any config file.
 
@@ -182,6 +183,38 @@ the default backend.
 
 A profile that names a provider, including the daemon default, gets its own client when that key
 is set. Only an omitted `provider` shares the face client.
+
+## 4.5 Schedule file writer
+
+`[[schedules]]` is the only schedule store. The daemon copies enabled rows into the cron task
+at boot and does not hot-reload them. `liberado_config::create_schedule`, `update_schedule`,
+and `delete_schedule` are the write path. They take a `topology.toml` path, or the config
+directory that contains it. `schedule_topology_path` resolves that file from `config_dir()`.
+
+On apply, in order:
+
+1. If the file is missing or not writable, return that error and write nothing. A read-only
+   mount (`/config:ro` in the homelab compose file) fails here.
+2. Copy the file to a sibling `topology.toml.bak-<utc>`. If the copy fails, stop. The original
+   stays.
+3. Splice a `toml_edit` document. Touch only the `[[schedules]]` array: create a row, replace
+   the row with that name, or delete it. Leave comments and every other table in place. A
+   serde rewrite of the whole file is not allowed — it drops the comment blocks and can move
+   keys relative to tables.
+4. Load the edited text with `load_config` (the boot loader) and therefore `Config::validate`
+   (schedule, pool, and profile checks, plus the rest of the merged config). On error, leave
+   the original file in place and keep the backup.
+5. Write a temp file in the same directory and rename it over `topology.toml`.
+6. Return what changed. Cron and `GET /api/schedules` still show the boot copy until the
+   process is recreated (`docker compose up -d --force-recreate`). This function does not
+   reload either.
+
+The Automation Editor is the caller. `create_schedule`, `update_schedule`, and `delete_schedule`
+in the face file a permission card and return. They do not call this writer. Approve on that
+card calls it once. Deny writes nothing. A refused write (read-only config directory, or a
+validation error) is returned as text on the card and in the chat. The writer still leaves the
+original file in place. This path does not hot-reload cron or `GET /api/schedules`, and it does
+not change the compose mount.
 
 ## 5. Where the Tunables Come From
 

@@ -120,7 +120,20 @@ fn the_list_keeps_the_built_in_creator_id() {
         Some("operator")
     );
     assert!(!page.profiles.contains_key("02"));
+    assert!(page.editor_ids.is_empty());
     assert!(page_from_list(&serde_json::json!({"profiles": []})).is_err());
+}
+
+#[test]
+fn the_list_keeps_the_automation_editor_id_off_the_creator_set() {
+    let raw = r#"[
+        {"id":"01","title":"Automation Editor","created_at":"2026-01-01T00:00:00Z","automation_editor":true,"surface_mode":"chat"},
+        {"id":"02","title":"Notes","created_at":"2026-01-01T00:00:00Z","surface_mode":"chat"}
+    ]"#;
+    let page = page_from_list(&serde_json::from_str(raw).unwrap()).unwrap();
+    assert_eq!(page.editor_ids, vec!["01".to_string()]);
+    assert!(page.creator_ids.is_empty());
+    assert_eq!(page.headers.len(), 2);
 }
 
 /// Agent rows rename and delete the profile. Chat rows still rename the conversation.

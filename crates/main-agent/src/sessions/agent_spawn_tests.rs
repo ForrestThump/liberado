@@ -525,6 +525,17 @@ fn face_runtime(sessions: &ChatSessions, session: Ulid) -> Box<dyn ToolRuntime> 
         session,
         CapabilitySet::empty(),
         Arc::new(AtomicBool::new(false)),
-        None,
+        &editor_settings(false),
     )
+}
+
+fn editor_settings(editor: bool) -> super::super::TurnSettings {
+    super::super::TurnSettings {
+        capabilities: CapabilitySet::empty(),
+        delegation: false,
+        prompt_append: None,
+        profile: None,
+        model: None,
+        automation_editor: editor,
+    }
 }

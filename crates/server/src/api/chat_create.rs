@@ -20,6 +20,9 @@ use super::chat::{CHAT_DISABLED_HINT, chat_error, resolve_chat_grant};
 /// `agent_creator: true` ignores `profile` and `title` and find-or-creates the singleton Agent
 /// Creator session (201 the first time, 200 after that). See
 /// `docs/spec/architecture/chat-agent-surface-mode.md` §6e.
+///
+/// `automation_editor: true` is the same shape for the Automation Editor (§6f). The two flags
+/// together are a 400.
 #[derive(Deserialize, Default)]
 pub struct CreateConversationRequest {
     #[serde(default)]
@@ -30,6 +33,9 @@ pub struct CreateConversationRequest {
     /// `{profile}` keep their existing meaning.
     #[serde(default)]
     pub agent_creator: bool,
+    /// Automations page. Find-or-create the flagged editor session. Default false.
+    #[serde(default)]
+    pub automation_editor: bool,
 }
 
 /// `POST /api/conversations` — create a conversation and return its header.
@@ -41,10 +47,51 @@ pub async fn create_conversation(
     State(state): State<Arc<AppState>>,
     Json(req): Json<CreateConversationRequest>,
 ) -> impl IntoResponse {
+    create_from_request(state, req).await
+}
+
+async fn create_from_request(
+    state: Arc<AppState>,
+    req: CreateConversationRequest,
+) -> axum::response::Response {
+    if req.agent_creator && req.automation_editor {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ApiError {
+                error: "send only one of agent_creator or automation_editor".into(),
+            }),
+        )
+            .into_response();
+    }
+    if req.automation_editor {
+        return open_automation_editor_response(state).await;
+    }
     if req.agent_creator {
         return open_agent_creator_response(state).await;
     }
     create_standard_conversation(state, req).await
+}
+
+async fn open_automation_editor_response(state: Arc<AppState>) -> axum::response::Response {
+    let Some(sessions) = &state.chat else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ApiError {
+                error: CHAT_DISABLED_HINT.into(),
+            }),
+        )
+            .into_response();
+    };
+    let (id, created) = match sessions.open_automation_editor().await {
+        Ok(pair) => pair,
+        Err(msg) => {
+            return (StatusCode::BAD_REQUEST, Json(ApiError { error: msg })).into_response();
+        }
+    };
+    match sessions.list().await {
+        Ok(headers) => header_or_missing(headers, id, created),
+        Err(e) => chat_error(e),
+    }
 }
 
 async fn open_agent_creator_response(state: Arc<AppState>) -> axum::response::Response {
@@ -157,6 +204,10 @@ async fn create_standard_conversation(
         Err(e) => chat_error(e),
     }
 }
+
+#[cfg(test)]
+#[path = "chat_automation_editor_tests.rs"]
+mod automation_editor_tests;
 
 fn schedule_agent_dm(
     sessions: &liberado_main_agent::ChatSessions,

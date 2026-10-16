@@ -9,10 +9,12 @@
 mod api;
 mod approvals;
 mod chat_agent_spawn;
+mod chat_delete_guard;
 mod coding_pack;
 mod cron_delivery;
 mod dispatcher_guidance;
 mod main_agent_budget;
+mod schedule_cards;
 use coding_pack::{build_coding_pack, load_server_config};
 use main_agent_budget::main_agent_budget;
 mod bindings;

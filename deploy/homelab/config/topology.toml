@@ -411,6 +411,15 @@ domain = "dispatch"
 component = "conformance"
 # No AskHuman — unattended probe. No delegation — stays inside the envelope.
 
+# Built-in Automation Editor. Not an Agents-shelf profile. Empty policy grant.
+# Schedule tools are face builtins. A card must not widen grants.overlay.toml.
+[[session_profiles]]
+name = "automation-editor"
+description = "Built-in Automation Editor chat. Schedule tools only. Not on the Agents shelf."
+enabled = true
+delegation = false
+component = "automation-editor"
+
 [[hooks]]
 name = "conformance"
 enabled = true

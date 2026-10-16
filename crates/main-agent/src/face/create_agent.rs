@@ -152,6 +152,7 @@ mod tests {
         assert!(!is_agent_creator_profile(Some("coding")));
         assert!(!is_agent_creator_profile(Some("life")));
         assert!(!is_agent_creator_profile(Some("researcher")));
+        assert!(!is_agent_creator_profile(Some("automation-editor")));
     }
 
     #[test]
