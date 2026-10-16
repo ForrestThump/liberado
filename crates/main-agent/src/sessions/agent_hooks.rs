@@ -15,7 +15,11 @@ use super::{ChatSessions, SessionResult};
 /// An agent DM is an Agents-shelf session. The Agent Creator session is not one:
 /// it is the shelf's make-an-agent chat, and it keeps no puppet.
 pub fn is_agent_dm_session(header: &ConversationHeader) -> bool {
-    header.surface_mode == SurfaceMode::Agent && !header.agent_creator
+    header.surface_mode == SurfaceMode::Agent && !is_built_in_chat(header)
+}
+
+fn is_built_in_chat(header: &ConversationHeader) -> bool {
+    header.agent_creator || header.automation_editor
 }
 
 pub(super) type MatrixHook = Arc<dyn Fn() + Send + Sync>;

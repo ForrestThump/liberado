@@ -31,8 +31,9 @@ pub use compaction::{
 };
 pub use dispatch_journal::{dispatches_dir, journal_path};
 pub use face::{
-    AgentSpawner, CREATE_AGENT_TOOL_NAME, CreateAgentResult, DELEGATE_TOOL_NAME, DispatchBridge,
-    FaceRuntime,
+    AgentSpawner, CREATE_AGENT_TOOL_NAME, CREATE_SCHEDULE_TOOL_NAME, CreateAgentResult,
+    DELEGATE_TOOL_NAME, DELETE_SCHEDULE_TOOL_NAME, DispatchBridge, EditorRuntime, FaceRuntime,
+    LIST_SCHEDULES_TOOL_NAME, UPDATE_SCHEDULE_TOOL_NAME, is_schedule_write_tool,
 };
 pub use sessions::{
     ChatSessions, PROFILE_AUTHOR, SessionError, SessionResult, TURN_ERROR_AUTHOR,

@@ -8,14 +8,14 @@ use std::path::Path;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use chat_client_contract::{ApprovalCard, ApprovalOption, PendingApproval};
+use chat_client_contract::{ApprovalCard, PendingApproval};
 use chrono::{DateTime, Utc};
 use liberado_common::{
     ApprovalLedger, Capability, ChannelKind, Proposal, ProposedAction, recorded_action,
 };
 use liberado_executor::PermissionSink;
 use liberado_main_agent::ChatSessions;
-use liberado_messaging::{decided_phrase, permission_card_options};
+use liberado_messaging::decided_phrase;
 use liberado_notify::Notifier;
 use liberado_telegram_approvals::PermissionResolver;
 use liberado_vault::Vault;
@@ -110,13 +110,7 @@ fn card_from_proposal(proposal: &Proposal) -> ApprovalCard {
         id: proposal.id.clone(),
         title: "Permission".into(),
         summary: proposal.rationale.clone(),
-        options: permission_card_options()
-            .into_iter()
-            .map(|option| ApprovalOption {
-                action: option.action.to_string(),
-                label: option.label.to_string(),
-            })
-            .collect(),
+        options: crate::schedule_cards::card_options(proposal),
         pending,
         decision: (!pending).then(|| action.to_string()),
         decision_label: (!pending).then(|| decided_phrase(action).to_string()),

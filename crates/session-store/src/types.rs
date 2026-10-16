@@ -88,6 +88,11 @@ pub struct SessionHeader {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub agent_creator: bool,
 
+    /// Singleton Automation Editor conversation. See
+    /// [`ConversationHeader::automation_editor`](liberado_conversation_store::ConversationHeader::automation_editor).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub automation_editor: bool,
+
     /// Coding project attached to this chat. See [`ConversationHeader::project`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project: Option<String>,
@@ -124,6 +129,7 @@ impl SessionHeader {
             // class upgrades it on the chat lens — see `to_conversation_header`.
             surface_mode: SurfaceMode::default(),
             agent_creator: false,
+            automation_editor: false,
             project: None,
             pending_model: None,
         }
@@ -200,6 +206,7 @@ impl SessionHeader {
             grant: self.grant.clone(),
             surface_mode: self.projected_surface_mode(profiles),
             agent_creator: self.agent_creator,
+            automation_editor: self.automation_editor,
             project: self.project.clone(),
             pending_model: self.pending_model.clone(),
         }
@@ -247,6 +254,9 @@ pub struct NewSession {
     /// Singleton Agent Creator marker. Default false. Forks pass false even
     /// when the source is the creator — a branch is not a second creator.
     pub agent_creator: bool,
+    /// Singleton Automation Editor marker. Default false. A fork is not a
+    /// second editor.
+    pub automation_editor: bool,
     /// Coding project to stamp on the new session. Default none. A fork copies
     /// the source project; it does not copy `pending_model`.
     pub project: Option<String>,
@@ -352,8 +362,16 @@ mod surface_mode_tests {
         assert!(wire.contains("\"agent_creator\":true"), "{wire}");
         let back: SessionHeader = serde_json::from_str(&wire).unwrap();
         assert!(back.agent_creator);
+        assert!(!back.automation_editor);
         let projected = back.to_conversation_header();
         assert!(projected.agent_creator);
+        assert!(!projected.automation_editor);
+        stamped.automation_editor = true;
+        let wire = serde_json::to_string(&stamped).unwrap();
+        assert!(wire.contains("\"automation_editor\":true"), "{wire}");
+        let back: SessionHeader = serde_json::from_str(&wire).unwrap();
+        assert!(back.automation_editor);
+        assert!(back.to_conversation_header().automation_editor);
     }
 
     #[test]

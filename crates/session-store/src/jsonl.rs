@@ -299,6 +299,7 @@ impl SessionStore {
             // profile class, not goal-ness.
             surface_mode: new.surface_mode,
             agent_creator: new.agent_creator,
+            automation_editor: new.automation_editor,
             project: new.project,
             pending_model: None,
         };
@@ -470,7 +471,9 @@ impl SessionStore {
                 // conversation, not a reclassification.
                 surface_mode: parent.surface_mode,
                 // A fork of the Agent Creator is an ordinary branch, not a second creator.
+                // A fork of the Automation Editor is not a second editor.
                 agent_creator: false,
+                automation_editor: false,
                 // The fork stays on the same project. A pending model pick belongs to the
                 // source's next turn, so it is not copied.
                 project: parent.project.clone(),
@@ -618,6 +621,7 @@ impl ConversationStore for SessionStore {
                 // Reading B: shelf stamp is create-time / profile-class, not goal.
                 surface_mode: new.surface_mode,
                 agent_creator: new.agent_creator,
+                automation_editor: new.automation_editor,
                 project: None,
             })
             .await;

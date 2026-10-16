@@ -85,13 +85,13 @@ fn header_matches_agent(header: &ConversationHeader, profile: &str, title: &str)
         && header.title.as_deref() == Some(title)
 }
 
-fn pick_oldest<'a>(
+pub(super) fn pick_oldest<'a>(
     headers: impl Iterator<Item = &'a ConversationHeader>,
 ) -> Option<&'a ConversationHeader> {
     headers.min_by(|a, b| (&a.created_at, a.id).cmp(&(&b.created_at, b.id)))
 }
 
-fn agent_shelf_lock() -> &'static tokio::sync::Mutex<()> {
+pub(super) fn agent_shelf_lock() -> &'static tokio::sync::Mutex<()> {
     static LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
     LOCK.get_or_init(|| tokio::sync::Mutex::new(()))
 }
@@ -212,6 +212,7 @@ impl ChatSessions {
                 grant,
                 explicit_surface: Some(SurfaceMode::Agent),
                 agent_creator: true,
+                automation_editor: false,
                 system_prompt: Some(AGENT_CREATOR_SYSTEM_PROMPT.to_owned()),
             })
             .await
@@ -279,10 +280,27 @@ impl ChatSessions {
         session: Ulid,
         capabilities: CapabilitySet,
         turn_deferral: Arc<AtomicBool>,
-        profile: Option<&str>,
+        settings: &super::TurnSettings,
     ) -> Box<dyn ToolRuntime> {
+        self.assemble_face_runtime(user, session, capabilities, turn_deferral, settings)
+    }
+
+    fn assemble_face_runtime(
+        &self,
+        user: &str,
+        session: Ulid,
+        capabilities: CapabilitySet,
+        turn_deferral: Arc<AtomicBool>,
+        settings: &super::TurnSettings,
+    ) -> Box<dyn ToolRuntime> {
+        if settings.automation_editor {
+            return Box::new(crate::face::EditorRuntime::new(
+                session.to_string(),
+                self.schedule_editor_ops(),
+            ));
+        }
         let extras = self.scoped_extras_runtime(user, session, capabilities);
-        let agent_spawner = self.agent_spawner_for_profile(profile);
+        let agent_spawner = self.agent_spawner_for_profile(settings.profile.as_deref());
         self.attach_workspace(
             session,
             Box::new(FaceRuntime::new(

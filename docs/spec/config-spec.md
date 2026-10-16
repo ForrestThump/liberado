@@ -24,9 +24,9 @@
    to change it. It is never synced into the vault (boot-order chicken-and-egg; and a sync conflict
    or phone edit must never be able to alter the containment boundary).
 5. **Agents do not write config.** No MCP, hook, dispatcher, or subagent has a capability to modify
-   config files. (User-approval-gated config changes *through* the system are a v2+ roadmap item,
-   explicitly out of scope for initial work.) A library call may splice `[[schedules]]` only
-   (§4.5). Nothing in the daemon calls it yet.
+   config files. The one exception is §4.5: the Automation Editor files a chat card, and Approve
+   calls the schedule writer once. That call splices `[[schedules]]` only. It does not change
+   grants. Cron still uses the boot copy until the process is recreated.
 6. **Secrets are not config.** They live in env / systemd credentials and are referenced by name
    (Decision 10); raw secret values never appear in any config file.
 
@@ -209,7 +209,12 @@ On apply, in order:
    process is recreated (`docker compose up -d --force-recreate`). This function does not
    reload either.
 
-No agent, MCP, or HTTP route calls this yet. Principle 5 still holds for those surfaces.
+The Automation Editor is the caller. `create_schedule`, `update_schedule`, and `delete_schedule`
+in the face file a permission card and return. They do not call this writer. Approve on that
+card calls it once. Deny writes nothing. A refused write (read-only config directory, or a
+validation error) is returned as text on the card and in the chat. The writer still leaves the
+original file in place. This path does not hot-reload cron or `GET /api/schedules`, and it does
+not change the compose mount.
 
 ## 5. Where the Tunables Come From
 

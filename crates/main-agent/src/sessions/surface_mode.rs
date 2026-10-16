@@ -51,6 +51,8 @@ pub(super) struct ConversationCreate {
     pub explicit_surface: Option<SurfaceMode>,
     /// Singleton Agent Creator marker. Ordinary creates pass false.
     pub agent_creator: bool,
+    /// Singleton Automation Editor marker. Ordinary creates pass false.
+    pub automation_editor: bool,
     /// Root system text. `None` uses [`ChatSessions`]'s configured prompt.
     pub system_prompt: Option<String>,
 }
@@ -71,6 +73,7 @@ impl ChatSessions {
             grant,
             explicit_surface: None,
             agent_creator: false,
+            automation_editor: false,
             system_prompt: None,
         })
         .await
@@ -100,6 +103,7 @@ impl ChatSessions {
                 grant: spec.grant,
                 surface_mode,
                 agent_creator: spec.agent_creator,
+                automation_editor: spec.automation_editor,
             })
             .await?;
         self.store
