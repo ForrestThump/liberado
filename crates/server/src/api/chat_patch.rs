@@ -37,7 +37,11 @@ where
     Ok(Some(Option::<String>::deserialize(deserializer)?))
 }
 
-pub async fn apply(state: Arc<AppState>, id: Ulid, req: PatchConversation) -> Response {
+pub async fn patch_conversation(
+    state: Arc<AppState>,
+    id: Ulid,
+    req: PatchConversation,
+) -> Response {
     let Some(sessions) = &state.chat else {
         return (
             StatusCode::SERVICE_UNAVAILABLE,

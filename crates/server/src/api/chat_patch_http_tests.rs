@@ -22,22 +22,32 @@ struct Harness {
 }
 
 async fn harness(projects: Vec<ProjectConfig>) -> Harness {
+    open_harness(projects, true).await
+}
+
+async fn harness_without_chat() -> Harness {
+    open_harness(vec![], false).await
+}
+
+async fn open_harness(projects: Vec<ProjectConfig>, with_chat: bool) -> Harness {
     let dir = tempfile::tempdir().unwrap();
     let sessions = Arc::new(SessionStore::open(dir.path()).await);
-    let chat = Arc::new(ChatSessions::new(
-        sessions.clone(),
-        Executor::new(
-            Arc::new(MockProvider::with_script(
-                "mock",
-                [CompletionResponse::text("ok")],
-            )),
-            Budget::default(),
-        ),
-        Arc::new(NoopRuntime),
-    ));
+    let chat = with_chat.then(|| {
+        Arc::new(ChatSessions::new(
+            sessions.clone(),
+            Executor::new(
+                Arc::new(MockProvider::with_script(
+                    "mock",
+                    [CompletionResponse::text("ok")],
+                )),
+                Budget::default(),
+            ),
+            Arc::new(NoopRuntime),
+        ))
+    });
     let mut config = liberado_bootstrap::Config::default();
     config.topology.projects = projects;
-    let mut state = AppState::for_test(sessions, Some(chat), dir.path().to_path_buf());
+    let mut state = AppState::for_test(sessions, chat, dir.path().to_path_buf());
     state.config = Arc::new(config);
     let app = Router::new()
         .route(
@@ -248,4 +258,76 @@ async fn a_request_model_is_not_replaced_by_a_stored_pick() {
         .find(|message| message["role"] == "user")
         .unwrap();
     assert_eq!(user["model"], "request-model");
+}
+
+#[tokio::test]
+async fn a_missing_conversation_patch_is_not_found() {
+    let h = harness(vec![]).await;
+    let id = liberado_conversation_store::Ulid::new();
+
+    // Meta is written first. A missing session fails there, before the title.
+    let (status, body) = call(
+        &h.app,
+        "PATCH",
+        &format!("/api/conversations/{id}"),
+        Some(r#"{"pending_model":"vendor/exact-model"}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+    assert_eq!(json(&body)["error"], "conversation not found");
+
+    // Title-only skips the meta write, so the missing session fails on set_title.
+    let (status, body) = call(
+        &h.app,
+        "PATCH",
+        &format!("/api/conversations/{id}"),
+        Some(r#"{"title":"gone"}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+    assert_eq!(json(&body)["error"], "conversation not found");
+}
+
+#[tokio::test]
+async fn a_store_failure_other_than_not_found_is_a_server_error() {
+    let id = liberado_conversation_store::Ulid::new();
+    let error = liberado_main_agent::SessionError::Store(
+        liberado_conversation_store::StoreError::Io(std::io::Error::other("disk full")),
+    );
+    let response = super::store_error(id, error);
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let body = String::from_utf8(bytes.to_vec()).unwrap();
+    let parsed = json(&body);
+    let message = parsed["error"].as_str().unwrap();
+    assert_ne!(message, "conversation not found");
+    assert!(message.contains("disk full"), "{body}");
+}
+
+#[tokio::test]
+async fn an_empty_patch_is_rejected_and_chat_off_is_unavailable() {
+    let h = harness(vec![]).await;
+    let id = create(&h.app).await;
+    let (status, body) = call(
+        &h.app,
+        "PATCH",
+        &format!("/api/conversations/{id}"),
+        Some("{}"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert!(body.contains("nothing to update"), "{body}");
+
+    let off = harness_without_chat().await;
+    let (status, body) = call(
+        &off.app,
+        "PATCH",
+        &format!("/api/conversations/{id}"),
+        Some(r#"{"title":"Notes"}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{body}");
+    assert!(body.contains("chat is disabled"), "{body}");
 }

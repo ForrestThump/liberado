@@ -788,7 +788,7 @@ pub async fn patch_conversation_title(
     Path(id): Path<Ulid>,
     Json(req): Json<chat_patch::PatchConversation>,
 ) -> impl IntoResponse {
-    chat_patch::apply(state, id, req).await
+    chat_patch::patch_conversation(state, id, req).await
 }
 
 #[path = "chat_patch.rs"]
