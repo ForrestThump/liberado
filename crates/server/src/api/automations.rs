@@ -6,10 +6,14 @@ use axum::{Json, extract::State, response::IntoResponse};
 
 use crate::state::AppState;
 
+use super::schedule_description::schedule_description;
+
 /// `GET /api/schedules` — configured cron entries from in-memory topology (read-only).
 ///
 /// Does not expose `next_fire` until the cron runtime surfaces it; the field is always `null`.
+/// `description`, `schedule_text`, and `timezone` are additive display fields.
 pub async fn list_schedules(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let timezone = state.config.topology.timezone.clone();
     let schedules: Vec<serde_json::Value> = state
         .config
         .topology
@@ -24,6 +28,9 @@ pub async fn list_schedules(State(state): State<Arc<AppState>>) -> impl IntoResp
                 "job": s.job,
                 "profile": s.profile,
                 "next_fire": serde_json::Value::Null,
+                "description": schedule_description(s),
+                "schedule_text": liberado_cron::cron_to_english(&s.cron_expr, &timezone),
+                "timezone": &timezone,
             })
         })
         .collect();

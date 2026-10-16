@@ -6231,6 +6231,7 @@ dependencies = [
  "liberado-config",
  "liberado-conversation-store",
  "liberado-cost",
+ "liberado-cron",
  "liberado-daemon",
  "liberado-dispatcher",
  "liberado-executor",

@@ -105,6 +105,65 @@ async fn list_schedules_reflects_topology_rows() {
     assert_eq!(rows[0]["cron_expr"], "0 0 9 * * * *");
     assert_eq!(rows[0]["profile"], "maintenance");
     assert!(rows[0]["next_fire"].is_null());
+    assert_eq!(rows[0]["timezone"], "America/Chicago");
+    assert_eq!(
+        rows[0]["description"],
+        "Runs the \"maintenance\" agent with the prompt: \"Summarize inbox\". The result is pushed to the notifier when the run finishes."
+    );
+    assert_eq!(
+        rows[0]["schedule_text"],
+        liberado_cron::cron_to_english("0 0 9 * * * *", "America/Chicago")
+    );
+}
+
+#[tokio::test]
+async fn list_schedules_describes_a_mechanical_job_without_secrets() {
+    let app = app_with_topology(
+        vec![CronSchedule {
+            name: "morning-tasks".into(),
+            enabled: true,
+            cron_expr: "0 */15 * * * *".into(),
+            goal: String::new(),
+            pool: None,
+            profile: None,
+            deliver: Some(false),
+            max_turns: None,
+            job: Some("task-ping".into()),
+            habit_text: None,
+            task_limit: Some(10),
+            capture_path: None,
+            git_remote: None,
+            git_branch: None,
+            git_user_name: Some("Secret Name".into()),
+            git_user_email: Some("secret@example.com".into()),
+            run_on_start: None,
+            direct: None,
+        }],
+        vec![],
+    );
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/api/schedules")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let text = String::from_utf8(bytes.to_vec()).unwrap();
+    assert!(!text.contains("secret@example.com"));
+    assert!(!text.contains("Secret Name"));
+    let v: serde_json::Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(v["schedules"][0]["schedule_text"], "Every 15 minutes");
+    assert_eq!(
+        v["schedules"][0]["description"],
+        "Sends a reminder listing up to 10 open vault tasks. No model session. The reminder goes to the reminder channel, not the sticky chat."
+    );
 }
 
 #[tokio::test]

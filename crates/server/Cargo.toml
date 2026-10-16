@@ -15,6 +15,7 @@ liberado-chat-search = { workspace = true }
 liberado-common = { workspace = true }
 liberado-cost = { workspace = true }
 liberado-config = { workspace = true }
+liberado-cron = { workspace = true }
 liberado-daemon = { workspace = true }
 liberado-dispatcher = { workspace = true }
 liberado-mcp = { workspace = true }

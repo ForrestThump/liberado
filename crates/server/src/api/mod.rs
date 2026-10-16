@@ -9,6 +9,7 @@ mod grants;
 mod library;
 mod plugins;
 mod profiles;
+mod schedule_description;
 mod search;
 mod sessions;
 mod status;
