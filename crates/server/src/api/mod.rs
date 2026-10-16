@@ -6,6 +6,7 @@ mod chat;
 mod chat_create;
 mod goals;
 mod grants;
+mod library;
 mod plugins;
 mod profiles;
 mod search;
@@ -25,6 +26,7 @@ pub use goals::{
     goals_rewind, goals_start, goals_stream, list_projects,
 };
 pub use grants::{conversation_grants, get_header_grant};
+pub use library::list_library;
 pub use plugins::set_plugin_enabled;
 pub use profiles::{delete_profile, rename_profile};
 pub use search::search_conversations;

@@ -7,6 +7,10 @@
 use dioxus::prelude::*;
 use serde::Deserialize;
 
+/// Shown on the projects page. Projects are config, not a create form.
+pub(crate) const PROJECT_SOURCE: &str =
+    "Projects are declared in topology.toml. This list reads them. It does not create one.";
+
 /// Shown on the projects page. A phone has no hover, so the sentence is not only a tooltip.
 pub(crate) const PROJECT_BIND_GAP: &str = "Choosing a project attaches it to the open chat. \
      A new chat keeps the choice until the first message saves it on the conversation.";
@@ -257,6 +261,12 @@ mod tests {
         let body = body.split("pub(crate) fn").next().unwrap_or(body);
         assert!(body.contains("collapsed_after_pick"));
         assert!(body.contains("is_narrow_viewport"));
+    }
+
+    #[test]
+    fn the_projects_page_names_topology_and_not_a_create_form() {
+        assert!(PROJECT_SOURCE.contains("topology.toml"));
+        assert!(PROJECT_SOURCE.contains("does not create"));
     }
 
     #[test]

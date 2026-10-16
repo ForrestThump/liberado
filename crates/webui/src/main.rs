@@ -280,7 +280,9 @@ fn App() -> Element {
                             }
                         },
                         Route::Imagine => rsx! { crate::components::imagine::Imagine {} },
-                        Route::Library => rsx! { crate::components::library::Library {} },
+                        Route::Library => rsx! {
+                            crate::components::library::Library { api_base: base.clone() }
+                        },
                         Route::Automations => rsx! {
                             crate::components::automations::Automations { api_base: base.clone() }
                         },

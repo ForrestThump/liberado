@@ -6,8 +6,8 @@
 use dioxus::prelude::*;
 
 use super::project_data::{
-    PROJECT_BIND_GAP, collapsed_after_pick, fetch_projects, project_dot, queue_project_patch,
-    selected_project_name,
+    PROJECT_BIND_GAP, PROJECT_SOURCE, collapsed_after_pick, fetch_projects, project_dot,
+    queue_project_patch, selected_project_name,
 };
 use super::sidebar::Route;
 
@@ -35,6 +35,7 @@ pub fn Projects(
                 class: "grok-page-header",
                 div { class: "grok-page-eyebrow", "Projects" }
                 h1 { class: "grok-page-title", "Projects" }
+                p { class: "grok-page-subtitle", "{PROJECT_SOURCE}" }
                 p { class: "grok-page-subtitle", "{PROJECT_BIND_GAP}" }
             }
             div {
@@ -43,7 +44,7 @@ pub fn Projects(
                     None => rsx! { p { class: "project-status", "Loading..." } },
                     Some(Err(error)) => rsx! { p { class: "project-status", "{error}" } },
                     Some(Ok(rows)) if rows.is_empty() => rsx! {
-                        p { class: "project-status", "No projects are configured." }
+                        p { class: "project-status", "No projects are configured. They are declared in topology.toml." }
                     },
                     Some(Ok(rows)) => rsx! {
                         ul {

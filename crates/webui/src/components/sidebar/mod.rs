@@ -5,7 +5,7 @@
 //! On a desk the rail's brand mark brings the panel back. On a phone the header menu does.
 //!
 //! Sections rendered when expanded: Chat / Library / Automations primary nav, Agents (Pinned +
-//! labelled categories + Show more), Chats (recent), Projects (with `+` opening a modal), and
+//! labelled categories + Show more), Chats (recent), Projects (the list from `GET /api/projects`), and
 //! Plugins. Imagine is intentionally absent — the file `components/imagine.rs` and `Route::Imagine`
 //! survive so the surface can be re-introduced later without re-shaping the rail.
 
@@ -18,7 +18,6 @@ use chat_client_contract::{
 };
 
 use crate::components::project_data::close_phone_drawer;
-use crate::components::projects_dialog::ProjectsDialog;
 use crate::components::sidebar_agent_creator::CreatorError;
 #[cfg(target_arch = "wasm32")]
 use crate::components::sidebar_agent_creator::open_agent_creator_session;
@@ -359,9 +358,6 @@ pub fn Sidebar(
         .collect();
     let grouped = group_agents(&agent_rows);
 
-    // Projects modal. Lives in App-level state would be tidier, but the dialog has no other
-    // call sites and shortcutting the state is cheaper than threading through another prop.
-    let mut projects_dialog_open = use_signal(bool::default);
     // Cloned before the move closures below, which take `api_base` for their own requests.
     let projects_api = api_base.clone();
 
@@ -776,19 +772,6 @@ pub fn Sidebar(
                                 },
                                 span { class: "sidebar-section-label", "Projects" }
                             }
-                            // The + opens the Create Project dialog rather than routing into a
-                            // placeholder page. The route toggles just so the header row is the
-                            // active piece of chrome even when the modal is open.
-                            button {
-                                class: "sidebar-section-add",
-                                r#type: "button",
-                                title: "Create project",
-                                "aria-label": "Create project",
-                                onclick: move |_| {
-                                    projects_dialog_open.set(true);
-                                },
-                                "+"
-                            }
                         }
                         ProjectList {
                             api_base: projects_api,
@@ -855,13 +838,6 @@ pub fn Sidebar(
                     }
                 },
                 _ => rsx! {},
-            }
-        }
-
-        if projects_dialog_open() {
-            ProjectsDialog {
-                on_cancel: move |_| projects_dialog_open.set(false),
-                on_create: move |_name: String| projects_dialog_open.set(false),
             }
         }
     }
