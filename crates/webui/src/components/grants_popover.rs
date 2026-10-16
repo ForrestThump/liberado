@@ -478,8 +478,12 @@ mod tests {
         let css = std::fs::read_to_string(root.join("src/styles/main.css")).unwrap();
         assert!(header.contains("ToolsPopover"), "{header}");
         assert!(
-            app.contains("HeaderRightSide"),
-            "the header cluster is mounted by App: {app}"
+            app.contains("GrokAppHeader"),
+            "the shell header is mounted by App: {app}"
+        );
+        assert!(
+            header.contains("HeaderRightSide"),
+            "Tools lives in the shared header component: {header}"
         );
         assert!(
             !chat.contains("ToolsPopover") && !chat.contains("tools-popover"),

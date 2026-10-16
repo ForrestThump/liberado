@@ -266,9 +266,10 @@ mod tests {
             !css.contains(".brand-version"),
             "version next to the brand costs header width the chip now needs"
         );
+        let shell = read_crate_file("src/shell.rs");
         assert!(
-            app.contains("ProfileChip"),
-            "the chip is a header control, owned by App"
+            shell.contains("ProfileChip") && app.contains("GrokAppHeader"),
+            "the chip is a header control, owned by the shell header App mounts"
         );
         assert!(
             !app.contains("brand-version"),
@@ -407,7 +408,11 @@ mod tests {
         );
         assert!(html.contains("width=device-width"));
         let app = read_crate_file("src/main.rs");
-        assert!(app.contains("sidebar-menu-btn"));
+        let shell = read_crate_file("src/shell.rs");
+        assert!(
+            shell.contains("sidebar-menu-btn") && app.contains("PhoneMenuFab"),
+            "phone drawer controls live in the shell header and the fixed FAB"
+        );
         assert!(app.contains("sidebar-backdrop"));
         assert!(app.contains("sidebar_drawer_open"));
     }

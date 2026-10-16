@@ -13,8 +13,7 @@ mod theme;
 
 use components::chat::Chat;
 use components::sidebar::{Route, Sidebar};
-use icons::IconMenu;
-use shell::{HeaderProfileChip, HeaderRightSide};
+use shell::{DESKTOP_APP_HEADER_CLASS, GrokAppHeader, PHONE_SCROLL_APP_HEADER_CLASS, PhoneMenuFab};
 
 #[cfg(target_arch = "wasm32")]
 pub(crate) use shell::watch_viewport_width;
@@ -189,6 +188,12 @@ fn App() -> Element {
     });
     use_effect(move || back_nav::sync_depth(back_depth()));
 
+    let drawer_open = move || sidebar_drawer_open(is_narrow(), sidebar_collapsed());
+    let open_profile_picker = move |_| {
+        route.set(Route::Chat);
+        profile_browser_open.set(true);
+    };
+
     // Top-right cluster is always present — the Grok layout puts a single row up there with the
     // agent pill + private pill, and the open route is reflected through the sidebar's primary nav.
 
@@ -198,43 +203,24 @@ fn App() -> Element {
 
         div {
             class: "app",
-            header {
-                class: "app-header grok-header",
-                div {
-                    class: "grok-header-inner",
-                    // Phone-only. CSS hides it from 769px up, where the icon rail is the control.
-                    // Toggles the same collapsed signal the rail uses, so a chat pick still closes it.
-                    button {
-                        class: "sidebar-menu-btn",
-                        r#type: "button",
-                        title: if sidebar_drawer_open(is_narrow(), sidebar_collapsed()) { "Close sidebar" } else { "Open sidebar" },
-                        "aria-label": if sidebar_drawer_open(is_narrow(), sidebar_collapsed()) { "Close sidebar" } else { "Open sidebar" },
-                        "aria-expanded": "{sidebar_drawer_open(is_narrow(), sidebar_collapsed())}",
-                        "aria-controls": "sidebar",
-                        onclick: move |_| sidebar_collapsed.set(!sidebar_collapsed()),
-                        IconMenu {}
-                    }
-                    span { class: "brand grok-header-brand", "Liberado" }
-                    if let Some(name) = active_project() {
-                        span { class: "grok-header-project", "{name}" }
-                    }
-                    HeaderProfileChip {
-                        active_profile,
-                        active_surface,
-                        on_open: move |_| {
-                            // The picker is rendered inside `Chat`. Switching first means a
-                            // click from another route still opens it.
-                            route.set(Route::Chat);
-                            profile_browser_open.set(true);
-                        },
-                    }
-                    HeaderRightSide {
-                        incognito,
-                        api_base: base.clone(),
-                        active_conv_id,
-                        tools_open,
-                    }
+            if !is_narrow() {
+                GrokAppHeader {
+                    shell_class: DESKTOP_APP_HEADER_CLASS,
+                    drawer_open: drawer_open(),
+                    sidebar_collapsed,
+                    active_project,
+                    active_profile,
+                    active_surface,
+                    on_profile_open: open_profile_picker,
+                    incognito,
+                    api_base: base.clone(),
+                    active_conv_id,
+                    tools_open,
                 }
+            }
+            PhoneMenuFab {
+                drawer_open: drawer_open(),
+                sidebar_collapsed,
             }
 
             div {
@@ -277,31 +263,156 @@ fn App() -> Element {
                                 active_surface,
                                 list_epoch,
                                 active_project,
+                                phone_scroll_header: if is_narrow() {
+                                    Some(rsx! {
+                                        GrokAppHeader {
+                                            shell_class: PHONE_SCROLL_APP_HEADER_CLASS,
+                                            drawer_open: drawer_open(),
+                                            sidebar_collapsed,
+                                            active_project,
+                                            active_profile,
+                                            active_surface,
+                                            on_profile_open: open_profile_picker,
+                                            incognito,
+                                            api_base: base.clone(),
+                                            active_conv_id,
+                                            tools_open,
+                                        }
+                                    })
+                                } else {
+                                    None
+                                },
                             }
                         },
-                        Route::Imagine => rsx! { crate::components::imagine::Imagine {} },
+                        Route::Imagine => rsx! {
+                            div { class: "grok-main-phone-scroll",
+                                if is_narrow() {
+                                    GrokAppHeader {
+                                        shell_class: PHONE_SCROLL_APP_HEADER_CLASS,
+                                        drawer_open: drawer_open(),
+                                        sidebar_collapsed,
+                                        active_project,
+                                        active_profile,
+                                        active_surface,
+                                        on_profile_open: open_profile_picker,
+                                        incognito,
+                                        api_base: base.clone(),
+                                        active_conv_id,
+                                        tools_open,
+                                    }
+                                }
+                                crate::components::imagine::Imagine {}
+                            }
+                        },
                         Route::Library => rsx! {
-                            crate::components::library::Library { api_base: base.clone() }
+                            div { class: "grok-main-phone-scroll",
+                                if is_narrow() {
+                                    GrokAppHeader {
+                                        shell_class: PHONE_SCROLL_APP_HEADER_CLASS,
+                                        drawer_open: drawer_open(),
+                                        sidebar_collapsed,
+                                        active_project,
+                                        active_profile,
+                                        active_surface,
+                                        on_profile_open: open_profile_picker,
+                                        incognito,
+                                        api_base: base.clone(),
+                                        active_conv_id,
+                                        tools_open,
+                                    }
+                                }
+                                crate::components::library::Library { api_base: base.clone() }
+                            }
                         },
                         Route::Automations => rsx! {
                             div {
                                 class: "automations-stack",
+                                if is_narrow() {
+                                    GrokAppHeader {
+                                        shell_class: PHONE_SCROLL_APP_HEADER_CLASS,
+                                        drawer_open: drawer_open(),
+                                        sidebar_collapsed,
+                                        active_project,
+                                        active_profile,
+                                        active_surface,
+                                        on_profile_open: open_profile_picker,
+                                        incognito,
+                                        api_base: base.clone(),
+                                        active_conv_id,
+                                        tools_open,
+                                    }
+                                }
                                 crate::components::automations::Automations { api_base: base.clone() }
                                 crate::components::automation_editor::AutomationEditor { api_base: base.clone() }
                             }
                         },
                         Route::Projects => rsx! {
-                            crate::components::projects::Projects {
-                                api_base: base.clone(),
-                                active_project,
-                                active_conv_id,
-                                list_epoch,
-                                route,
-                                collapsed: sidebar_collapsed,
+                            div { class: "grok-main-phone-scroll",
+                                if is_narrow() {
+                                    GrokAppHeader {
+                                        shell_class: PHONE_SCROLL_APP_HEADER_CLASS,
+                                        drawer_open: drawer_open(),
+                                        sidebar_collapsed,
+                                        active_project,
+                                        active_profile,
+                                        active_surface,
+                                        on_profile_open: open_profile_picker,
+                                        incognito,
+                                        api_base: base.clone(),
+                                        active_conv_id,
+                                        tools_open,
+                                    }
+                                }
+                                crate::components::projects::Projects {
+                                    api_base: base.clone(),
+                                    active_project,
+                                    active_conv_id,
+                                    list_epoch,
+                                    route,
+                                    collapsed: sidebar_collapsed,
+                                }
                             }
                         },
-                        Route::Plugins => rsx! { crate::components::plugins::Plugins { api_base: base.clone() } },
-                        Route::Agents => rsx! { crate::components::imagine::Imagine {} },
+                        Route::Plugins => rsx! {
+                            div { class: "grok-main-phone-scroll",
+                                if is_narrow() {
+                                    GrokAppHeader {
+                                        shell_class: PHONE_SCROLL_APP_HEADER_CLASS,
+                                        drawer_open: drawer_open(),
+                                        sidebar_collapsed,
+                                        active_project,
+                                        active_profile,
+                                        active_surface,
+                                        on_profile_open: open_profile_picker,
+                                        incognito,
+                                        api_base: base.clone(),
+                                        active_conv_id,
+                                        tools_open,
+                                    }
+                                }
+                                crate::components::plugins::Plugins { api_base: base.clone() }
+                            }
+                        },
+                        Route::Agents => rsx! {
+                            div { class: "grok-main-phone-scroll",
+                                if is_narrow() {
+                                    GrokAppHeader {
+                                        shell_class: PHONE_SCROLL_APP_HEADER_CLASS,
+                                        drawer_open: drawer_open(),
+                                        sidebar_collapsed,
+                                        active_project,
+                                        active_profile,
+                                        active_surface,
+                                        on_profile_open: open_profile_picker,
+                                        incognito,
+                                        api_base: base.clone(),
+                                        active_conv_id,
+                                        tools_open,
+                                    }
+                                }
+                                crate::components::imagine::Imagine {}
+                            }
+                        },
                     }
                 }
             }

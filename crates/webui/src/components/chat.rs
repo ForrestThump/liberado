@@ -201,6 +201,8 @@ pub fn Chat(
     list_epoch: Signal<u64>,
     /// Coding project remembered for this window. The chip says it is not sent on a chat message.
     active_project: Signal<Option<String>>,
+    /// On a phone, the Liberado bar rendered at the top of `#chat-messages`.
+    phone_scroll_header: Option<Element>,
 ) -> Element {
     // The SSE listener that writes this is wasm-only. Native still has the prop.
     #[cfg(not(target_arch = "wasm32"))]
@@ -654,6 +656,9 @@ pub fn Chat(
                 div {
                     class: "messages",
                     id: "chat-messages",
+                    if let Some(header) = phone_scroll_header.clone() {
+                        {header}
+                    }
                     TranscriptScroll { follow: transcript_follow, messages, sending }
                     if messages.read().is_empty() && conv_id.is_none() && !sending() && ghost_session.read().is_none() {
                         // Grok-style centered landing: a single prompt to focus the user. The

@@ -2968,10 +2968,104 @@ body {
     color: var(--grok-prompt);
 }
 
+/* phone-scroll-header */
+/* On a phone the Liberado bar scrolls with content. A fixed FAB keeps the drawer reachable. */
+@media (max-width: 768px) {
+    .app-header-desktop-root {
+        display: none;
+    }
+
+    .app-header.app-header-in-scroll {
+        position: static;
+        top: auto;
+        z-index: auto;
+        flex-shrink: 0;
+        backdrop-filter: none;
+        background: var(--lib-app-bg);
+    }
+
+    .app-header-in-scroll .sidebar-menu-btn {
+        display: none;
+    }
+
+    .messages .app-header-in-scroll {
+        margin: -0.5rem -0.75rem 0;
+        width: calc(100% + 1.5rem);
+    }
+
+    .phone-menu-fab {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        position: fixed;
+        top: max(0.35rem, env(safe-area-inset-top, 0px));
+        left: max(0.35rem, env(safe-area-inset-left, 0px));
+        z-index: 35;
+        width: 2.5rem;
+        height: 2.5rem;
+        padding: 0;
+        border: 1px solid var(--grok-rail-border);
+        border-radius: 0.5rem;
+        background: color-mix(in srgb, var(--lib-app-bg) 92%, transparent);
+        color: var(--grok-rail-text);
+        box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+        cursor: pointer;
+        touch-action: manipulation;
+    }
+
+    .phone-menu-fab:hover,
+    .phone-menu-fab:focus-visible {
+        background: var(--grok-rail-hover);
+        color: var(--grok-prompt);
+    }
+
+    .grok-main-phone-scroll {
+        display: flex;
+        flex-direction: column;
+        flex: 1;
+        min-height: 0;
+        min-width: 0;
+        overflow-y: auto;
+        overscroll-behavior: contain;
+        -webkit-overflow-scrolling: touch;
+    }
+
+    .grok-main-phone-scroll > .grok-page {
+        flex: none;
+        min-height: 0;
+        overflow: visible;
+    }
+
+    .grok-main-phone-scroll .grok-page-body,
+    .grok-main-phone-scroll .plugin-list {
+        overflow: visible;
+        flex: none;
+        max-height: none;
+    }
+
+    .automations-stack {
+        overflow-y: auto;
+        overscroll-behavior: contain;
+        -webkit-overflow-scrolling: touch;
+    }
+}
+
+@media (min-width: 769px) {
+    .phone-menu-fab {
+        display: none;
+    }
+
+    .grok-main-phone-scroll {
+        display: contents;
+    }
+}
+/* phone-scroll-header-end */
+
 /* phone-sidebar-drawer */
 /* At max-width 768px the sidebar is an overlay. Closed (`.sidebar-collapsed`) it takes no
    width, so the greeting and composer use the full screen. Open (`.drawer-open`) it is fixed
-   over the chat, under the header. From 769px up the in-flow icon rail is unchanged. */
+   over the chat (the shell header scrolls away, so the drawer is full-height). From 769px up
+   the in-flow icon rail is unchanged. */
 @media (max-width: 768px) {
     .app {
         --phone-header-offset: calc(3rem + env(safe-area-inset-top, 0px));
@@ -3023,7 +3117,7 @@ body {
 
     .sidebar-backdrop {
         position: fixed;
-        top: var(--phone-header-offset);
+        top: 0;
         right: 0;
         bottom: 0;
         left: 0;
@@ -3039,11 +3133,12 @@ body {
         position: fixed;
         /* `inset` first: the shorthand clears every edge, then the offsets below stick. */
         inset: auto;
-        top: var(--phone-header-offset);
+        top: 0;
         right: auto;
         bottom: 0;
         left: 0;
         z-index: 25;
+        padding-top: env(safe-area-inset-top, 0px);
         /* Keep the overlay clipped. The theme list on a phone is position:fixed,
            so it still paints above the chat. */
         overflow: hidden;
@@ -3593,6 +3688,12 @@ body {
         max-width: 100%;
         overflow-x: hidden;
         box-sizing: border-box;
+    }
+
+    .automations-stack .automation-editor-dock {
+        position: sticky;
+        bottom: 0;
+        z-index: 2;
     }
 
     .automation-editor-dock {

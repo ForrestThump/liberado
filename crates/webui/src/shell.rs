@@ -8,6 +8,7 @@ use crate::components::grants_popover::ToolsPopover;
 use crate::components::incognito::IncognitoToggle;
 use crate::components::profile_browser::ProfileChip;
 use crate::components::profile_surface::profile_chip_visible;
+use crate::icons::IconMenu;
 
 /// Same cutoff as `@media (max-width: 768px)` in `styles/main.css`.
 ///
@@ -87,6 +88,84 @@ pub(crate) fn watch_viewport_width(mut narrow: Signal<bool>) {
 
 // ── Grok-style top bar ─────────────────────────────────────────────────────
 
+/// CSS class on the desktop-only shell header (`display: none` inside the phone query).
+pub(crate) const DESKTOP_APP_HEADER_CLASS: &str = "app-header-desktop-root";
+
+/// CSS class on in-flow phone headers that scroll with page content.
+pub(crate) const PHONE_SCROLL_APP_HEADER_CLASS: &str = "app-header-in-scroll";
+
+/// Marker pair for tests that assert phone scroll-header rules in `main.css`.
+pub(crate) const PHONE_SCROLL_HEADER_CSS_START: &str = "/* phone-scroll-header */";
+pub(crate) const PHONE_SCROLL_HEADER_CSS_END: &str = "/* phone-scroll-header-end */";
+
+/// Liberado top bar: brand, optional project chip, profile, Tools, incognito.
+#[component]
+pub(crate) fn GrokAppHeader(
+    /// Extra classes after `app-header grok-header` (desktop root or in-scroll variant).
+    shell_class: &'static str,
+    drawer_open: bool,
+    mut sidebar_collapsed: Signal<bool>,
+    active_project: Signal<Option<String>>,
+    active_profile: Signal<Option<String>>,
+    active_surface: Signal<Option<chat_client_contract::SurfaceMode>>,
+    on_profile_open: EventHandler<()>,
+    incognito: Signal<bool>,
+    api_base: String,
+    active_conv_id: Signal<Option<String>>,
+    tools_open: Signal<bool>,
+) -> Element {
+    rsx! {
+        header {
+            class: "app-header grok-header {shell_class}",
+            div {
+                class: "grok-header-inner",
+                button {
+                    class: "sidebar-menu-btn",
+                    r#type: "button",
+                    title: if drawer_open { "Close sidebar" } else { "Open sidebar" },
+                    "aria-label": if drawer_open { "Close sidebar" } else { "Open sidebar" },
+                    "aria-expanded": "{drawer_open}",
+                    "aria-controls": "sidebar",
+                    onclick: move |_| sidebar_collapsed.set(!sidebar_collapsed()),
+                    IconMenu {}
+                }
+                span { class: "brand grok-header-brand", "Liberado" }
+                if let Some(name) = active_project() {
+                    span { class: "grok-header-project", "{name}" }
+                }
+                HeaderProfileChip {
+                    active_profile,
+                    active_surface,
+                    on_open: on_profile_open,
+                }
+                HeaderRightSide {
+                    incognito,
+                    api_base,
+                    active_conv_id,
+                    tools_open,
+                }
+            }
+        }
+    }
+}
+
+/// Fixed menu control on a phone. The in-flow header scrolls away; this stays reachable.
+#[component]
+pub(crate) fn PhoneMenuFab(drawer_open: bool, mut sidebar_collapsed: Signal<bool>) -> Element {
+    rsx! {
+        button {
+            class: "phone-menu-fab",
+            r#type: "button",
+            title: if drawer_open { "Close sidebar" } else { "Open sidebar" },
+            "aria-label": if drawer_open { "Close sidebar" } else { "Open sidebar" },
+            "aria-expanded": "{drawer_open}",
+            "aria-controls": "sidebar",
+            onclick: move |_| sidebar_collapsed.set(!sidebar_collapsed()),
+            IconMenu {}
+        }
+    }
+}
+
 /// Top-right region: the read-only Tools list, then the incognito pill. Agent selection stays
 /// on the sidebar shelf. Tools lives here so Back can close it with the other header layers.
 #[component]
@@ -161,5 +240,35 @@ mod tests {
     fn layout_class_marks_the_open_drawer() {
         assert_eq!(app_layout_class(false), "app-layout grok-layout");
         assert_eq!(app_layout_class(true), "app-layout grok-layout drawer-open");
+    }
+
+    /// Phone headers scroll inside the content; desktop keeps the sticky shell bar.
+    #[test]
+    fn phone_scroll_header_css_hides_the_sticky_bar_and_keeps_a_menu_fab() {
+        let css = include_str!("styles/main.css");
+        let block = css
+            .split(PHONE_SCROLL_HEADER_CSS_START)
+            .nth(1)
+            .expect("phone scroll header block");
+        let block = block
+            .split(PHONE_SCROLL_HEADER_CSS_END)
+            .next()
+            .expect("phone scroll header end");
+        assert!(
+            block.contains(".app-header-desktop-root"),
+            "desktop shell header must hide on a phone: {block}"
+        );
+        assert!(
+            block.contains(".app-header-in-scroll"),
+            "in-flow phone header rules: {block}"
+        );
+        assert!(
+            block.contains("position: static"),
+            "phone header must not stay sticky: {block}"
+        );
+        assert!(
+            block.contains(".phone-menu-fab"),
+            "floating menu for when the bar scrolls off: {block}"
+        );
     }
 }
