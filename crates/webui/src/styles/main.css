@@ -3617,8 +3617,10 @@ body {
 
 /* ── Collapsed icon rail ──────────────────────────────────────────────────
  *
- * Same sidebar width when collapsed as the user's screenshot suggests — about 64px wide,
- * with each row a square hit target that maps to the matching primary nav target.
+ * Each row is a square hit target for the matching primary nav item.
+ * `.grok-layout .sidebar` is 260px and beats a lone `.sidebar-collapsed`,
+ * so the live desktop width is the query below. The phone drawer query
+ * hides this rail.
  */
 
 .sidebar-collapsed {
@@ -3632,6 +3634,15 @@ body {
     gap: 0.15rem;
     flex-shrink: 0;
     overflow: hidden;
+}
+
+/* desktop-collapsed-rail */
+@media (min-width: 769px) {
+    .grok-layout .sidebar.sidebar-collapsed {
+        width: 44px;
+        min-width: 44px;
+        max-width: 44px;
+    }
 }
 
 .sidebar-rail-brand {

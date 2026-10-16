@@ -374,6 +374,40 @@ fn theme_picker_paints_above_the_chat_and_is_not_clipped() {
     assert!(swatch.contains("open.set(false)"), "{swatch}");
 }
 
+/// A collapsed desk rail is an icon column. The open rail stays 260px.
+/// The phone drawer still hides the collapsed rail.
+#[test]
+fn collapsed_desktop_rail_is_a_narrow_icon_column() {
+    let css = include_str!("../../styles/main.css");
+    let open = css_block(css, ".grok-layout .sidebar");
+    assert!(
+        open.contains("width: 260px"),
+        "the expanded rail stays wide: {open}"
+    );
+
+    let marker = "/* desktop-collapsed-rail */";
+    let at = css.find(marker).expect("desktop collapsed rail marker");
+    let after = css[at + marker.len()..].trim_start();
+    assert!(
+        after.starts_with("@media (min-width: 769px)"),
+        "the narrow width must stay inside the desk query so the phone drawer still wins: {after}"
+    );
+    let rule = css_block(after, ".grok-layout .sidebar.sidebar-collapsed");
+    assert!(rule.contains("width: 44px"), "{rule}");
+    assert!(rule.contains("max-width: 44px"), "{rule}");
+
+    let phone = css
+        .split("/* phone-sidebar-drawer */")
+        .nth(1)
+        .expect("phone drawer styles")
+        .split("/* phone-sidebar-drawer-end */")
+        .next()
+        .expect("phone drawer end");
+    let hidden = css_block(phone, ".grok-layout .sidebar.sidebar-collapsed");
+    assert!(hidden.contains("display: none"), "{hidden}");
+    assert!(hidden.contains("width: 0"), "{hidden}");
+}
+
 fn css_z_index(block: &str) -> i32 {
     let line = block
         .lines()
