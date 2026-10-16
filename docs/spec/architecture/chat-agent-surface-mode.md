@@ -387,6 +387,16 @@ nothing. The model-facing success text is the writer's summary: the file is on d
 cron and the schedules list keep the boot copy until the process is recreated. A refused
 write is the writer error, in plain text. `DELETE` of this row returns 409.
 
+The Automations page stacks the schedule list above an editor dock. The dock posts
+`{"automation_editor": true}` once when it opens, then shows that session's transcript
+and its Approve/Deny cards. The composer posts `POST /api/chat` with that session id.
+The page states that edits land in `topology.toml` and that the schedule list updates
+after the service restarts. A refused write is an assistant message in the transcript.
+
+The sidebar does not list this conversation on the Chats shelf, the Agents shelf, or
+in search. If a row is still drawn, Delete is blocked the same way as the Agent Creator:
+the control stays, and it does not call `DELETE`.
+
 ## 7. Follow-ups
 
 - **S4 (dogfood, Slice 4)** — Current. Use the shelves on the daemon you talk to,

@@ -1,4 +1,5 @@
 pub mod approval_card;
+pub mod automation_editor;
 pub mod automations;
 pub mod chat;
 mod chat_submission;

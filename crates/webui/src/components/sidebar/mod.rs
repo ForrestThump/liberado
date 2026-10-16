@@ -25,6 +25,7 @@ use crate::components::sidebar_shelf::{Shelf, search_results_on_shelf, surface_f
 use crate::icons::IconSearch;
 
 mod agents;
+mod editor_row;
 mod profile_api;
 mod projects;
 mod rail;
@@ -81,6 +82,8 @@ impl Route {
 pub(super) struct ConversationPage {
     pub(super) headers: Vec<ConvHeader>,
     pub(super) creator_ids: Vec<String>,
+    /// Sessions with `automation_editor: true`. Hidden from the shelves.
+    pub(super) editor_ids: Vec<String>,
     pub(super) profiles: HashMap<String, String>,
 }
 
@@ -90,6 +93,7 @@ pub(super) fn page_from_list(value: &serde_json::Value) -> Result<ConversationPa
         .ok_or_else(|| "Bad response: expected a list".to_string())?;
     let mut headers = Vec::with_capacity(items.len());
     let mut creator_ids = Vec::new();
+    let mut editor_ids = Vec::new();
     let mut profiles = HashMap::new();
     for item in items {
         let header: ConvHeader =
@@ -101,6 +105,7 @@ pub(super) fn page_from_list(value: &serde_json::Value) -> Result<ConversationPa
         {
             creator_ids.push(header.id.clone());
         }
+        editor_row::push_editor_id(item, &header.id, &mut editor_ids);
         if let Some(name) = profile_name_from_item(item) {
             profiles.insert(header.id.clone(), name);
         }
@@ -109,6 +114,7 @@ pub(super) fn page_from_list(value: &serde_json::Value) -> Result<ConversationPa
     Ok(ConversationPage {
         headers,
         creator_ids,
+        editor_ids,
         profiles,
     })
 }
@@ -345,17 +351,20 @@ pub fn Sidebar(
     );
 
     let page = loaded_page(conversations.read().as_ref());
+    let editor_ids = page.editor_ids;
     let headers = page.headers;
-    let project_chats = headers.clone();
+    let project_chats = editor_row::headers_without_editor(&headers, &editor_ids);
     let creator_ids = page.creator_ids;
     let chat_rows: Vec<&ConvHeader> = headers
         .iter()
         .filter(|c| c.surface_mode == SurfaceMode::Chat)
         .collect();
+    let chat_rows = editor_row::without_editor(chat_rows, &editor_ids);
     let agent_rows: Vec<&ConvHeader> = headers
         .iter()
         .filter(|c| c.surface_mode == SurfaceMode::Agent)
         .collect();
+    let agent_rows = editor_row::without_editor(agent_rows, &editor_ids);
     let grouped = group_agents(&agent_rows);
 
     // Cloned before the move closures below, which take `api_base` for their own requests.
@@ -531,15 +540,16 @@ pub fn Sidebar(
                     match &*search_results.read() {
                         Some(Some(Ok(results))) => rsx! {
                             SearchResultList {
-                                results: search_results_on_shelf(results, &headers, shelf())
-                                    .into_iter()
-                                    .cloned()
-                                    .collect(),
+                                results: editor_row::search_hits(
+                                    search_results_on_shelf(results, &headers, shelf()),
+                                    &editor_ids,
+                                ),
                                 menu_for,
                                 action_error,
                                 agents_shelf: shelf() == Shelf::Agents,
                                 profiles: page.profiles.clone(),
                                 protected_ids: creator_ids.clone(),
+                                editor_ids: editor_ids.clone(),
                                 on_delete: move |id: String| delete_conv.call(id),
                                 on_rename: move |pair: (String, String)| rename_conv.call(pair),
                                 on_delete_profile: move |id: String| delete_profile.call(id),
@@ -641,6 +651,7 @@ pub fn Sidebar(
                             menu_for,
                             profiles: page.profiles.clone(),
                             protected_ids: creator_ids.clone(),
+                            editor_ids: editor_ids.clone(),
                             on_rename: move |pair: (String, String)| rename_profile.call(pair),
                             on_pick: move |id: String| {
                                 active_project.set(project_for_open(conversations.read().as_ref(), &id));
@@ -663,6 +674,7 @@ pub fn Sidebar(
                                 menu_for,
                                 profiles: page.profiles.clone(),
                                 protected_ids: creator_ids.clone(),
+                                editor_ids: editor_ids.clone(),
                                 on_rename: move |pair: (String, String)| rename_profile.call(pair),
                                 on_pick: move |id: String| {
                                     active_project.set(project_for_open(conversations.read().as_ref(), &id));
@@ -690,6 +702,7 @@ pub fn Sidebar(
                                     menu_for,
                                     profiles: page.profiles.clone(),
                                     protected_ids: creator_ids.clone(),
+                                    editor_ids: editor_ids.clone(),
                                     on_rename: move |pair: (String, String)| rename_profile.call(pair),
                                     on_pick: move |id: String| {
                                         active_project.set(project_for_open(conversations.read().as_ref(), &id));
@@ -740,6 +753,7 @@ pub fn Sidebar(
                             items: chat_rows.iter().map(|c| (*c).clone()).collect(),
                             active: active_conv_id,
                             menu_for,
+                            editor_ids: editor_ids.clone(),
                             on_pick: move |id: String| {
                                 active_project.set(project_for_open(conversations.read().as_ref(), &id));
                                 active_conv_id.set(Some(id));

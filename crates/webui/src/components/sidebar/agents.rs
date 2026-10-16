@@ -174,6 +174,7 @@ fn SidebarRowChat(
     active: Signal<Option<String>>,
     menu_for: Signal<Option<String>>,
     action_error: Signal<Option<String>>,
+    editor_ids: Vec<String>,
     on_pick: EventHandler<String>,
     on_delete: EventHandler<String>,
     on_rename: EventHandler<(String, String)>,
@@ -190,6 +191,7 @@ fn SidebarRowChat(
     let time = relative_time(&conv.created_at);
     let id_for_pick = id.clone();
     let row_dom_id = conversation_row_dom_id(&id);
+    let delete_block = delete_block_for(&id, &[], &editor_ids);
     rsx! {
         li {
             id: "{row_dom_id}",
@@ -211,7 +213,7 @@ fn SidebarRowChat(
                 noun: "chat",
                 menu_for,
                 action_error,
-                delete_block: None,
+                delete_block,
                 on_delete,
                 on_rename,
             }
@@ -226,6 +228,7 @@ pub(super) fn PinnedList(
     active: Signal<Option<String>>,
     menu_for: Signal<Option<String>>,
     protected_ids: Vec<String>,
+    editor_ids: Vec<String>,
     on_pick: EventHandler<String>,
     on_delete: EventHandler<String>,
     on_rename: EventHandler<(String, String)>,
@@ -248,7 +251,7 @@ pub(super) fn PinnedList(
                     active: active,
                     menu_for: menu_for,
                     action_error: action_error,
-                    delete_block: delete_block_for(&conv.id, &protected_ids),
+                    delete_block: delete_block_for(&conv.id, &protected_ids, &editor_ids),
                     on_pick: on_pick,
                     on_delete: on_delete,
                     on_rename: on_rename,
@@ -266,6 +269,7 @@ pub(super) fn CategoryList(
     active: Signal<Option<String>>,
     menu_for: Signal<Option<String>>,
     protected_ids: Vec<String>,
+    editor_ids: Vec<String>,
     on_pick: EventHandler<String>,
     on_delete: EventHandler<String>,
     on_rename: EventHandler<(String, String)>,
@@ -288,7 +292,7 @@ pub(super) fn CategoryList(
                     active: active,
                     menu_for: menu_for,
                     action_error: action_error,
-                    delete_block: delete_block_for(&conv.id, &protected_ids),
+                    delete_block: delete_block_for(&conv.id, &protected_ids, &editor_ids),
                     on_pick: on_pick,
                     on_delete: on_delete,
                     on_rename: on_rename,
@@ -320,6 +324,7 @@ pub(super) fn AgentTailList(
     active: Signal<Option<String>>,
     menu_for: Signal<Option<String>>,
     protected_ids: Vec<String>,
+    editor_ids: Vec<String>,
     on_pick: EventHandler<String>,
     on_delete: EventHandler<String>,
     on_rename: EventHandler<(String, String)>,
@@ -335,7 +340,7 @@ pub(super) fn AgentTailList(
                     active: active,
                     menu_for: menu_for,
                     action_error: action_error,
-                    delete_block: delete_block_for(&conv.id, &protected_ids),
+                    delete_block: delete_block_for(&conv.id, &protected_ids, &editor_ids),
                     on_pick: on_pick,
                     on_delete: on_delete,
                     on_rename: on_rename,
@@ -350,6 +355,7 @@ pub(super) fn ChatList(
     items: Vec<ConvHeader>,
     active: Signal<Option<String>>,
     menu_for: Signal<Option<String>>,
+    editor_ids: Vec<String>,
     on_pick: EventHandler<String>,
     on_delete: EventHandler<String>,
     on_rename: EventHandler<(String, String)>,
@@ -364,6 +370,7 @@ pub(super) fn ChatList(
                     active: active,
                     menu_for: menu_for,
                     action_error: action_error,
+                    editor_ids: editor_ids.clone(),
                     on_pick: on_pick,
                     on_delete: on_delete,
                     on_rename: on_rename,
@@ -407,6 +414,7 @@ pub(super) fn SearchResultList(
     on_delete_profile: EventHandler<String>,
     on_rename_profile: EventHandler<(String, String)>,
     protected_ids: Vec<String>,
+    editor_ids: Vec<String>,
 ) -> Element {
     if results.is_empty() {
         return rsx! {
@@ -433,7 +441,7 @@ pub(super) fn SearchResultList(
                     let title = r.title.clone().unwrap_or_else(|| "(untitled)".into());
                     let seed = search_seed(agents_shelf, &profiles, &id, &r.title);
                     let row_dom_id = conversation_row_dom_id(&id);
-                    let delete_block = delete_block_for(&id, &protected_ids);
+                    let delete_block = delete_block_for(&id, &protected_ids, &editor_ids);
                     rsx! {
                         li {
                             id: "{row_dom_id}",
