@@ -75,6 +75,7 @@ fn app(vault: &Path, config: liberado_bootstrap::Config) -> Router {
         live_mcp: liberado_bootstrap::LiveMcpController::empty(),
         drain: crate::shutdown::DrainGate::default(),
         approval_hub: None,
+        surfaces: crate::surfaces::LiveSurfaces::inert(),
     });
     Router::new()
         .route("/api/library", get(list_library))
