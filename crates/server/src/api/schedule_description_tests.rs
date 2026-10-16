@@ -113,9 +113,60 @@ fn habit_ping_quotes_the_habit_text() {
     let mut schedule = bare();
     schedule.job = Some("habit-ping".into());
     schedule.habit_text = Some("Write tonight's journal.".into());
+    let text = schedule_description(&schedule);
+    assert!(
+        text.starts_with("Sends this reminder: \"Write tonight's journal.\" No model session."),
+        "{text}"
+    );
+    assert!(!text.contains("\"."), "{text}");
+}
+
+#[test]
+fn a_goal_that_already_ends_in_punctuation_keeps_one_stop() {
+    let mut schedule = bare();
+    schedule.goal = "Write tonight's journal.".into();
+    assert_eq!(
+        schedule_description(&schedule),
+        "Runs an agent with the prompt: \"Write tonight's journal.\" The result is pushed to the notifier when the run finishes."
+    );
+
+    schedule.goal = "Ship it!".into();
     assert!(
         schedule_description(&schedule)
-            .starts_with("Sends this reminder: \"Write tonight's journal.\"")
+            .contains("with the prompt: \"Ship it!\" The result is pushed")
+    );
+
+    schedule.goal = "Is the vault quiet?".into();
+    assert!(
+        schedule_description(&schedule)
+            .contains("with the prompt: \"Is the vault quiet?\" The result is pushed")
+    );
+
+    schedule.job = Some("inbox-if-present".into());
+    schedule.goal = "File the captures.".into();
+    let inbox = schedule_description(&schedule);
+    assert!(
+        inbox.contains("with the prompt: \"File the captures.\" The result"),
+        "{inbox}"
+    );
+    assert!(!inbox.contains("\"."), "{inbox}");
+
+    schedule.job = Some("custom-job".into());
+    schedule.goal = "Sort the inbox.".into();
+    schedule.profile = None;
+    let unknown = schedule_description(&schedule);
+    assert!(
+        unknown.contains("Prompt: \"Sort the inbox.\" No behavior"),
+        "{unknown}"
+    );
+
+    schedule.job = None;
+    schedule.goal = format!("word {}.", "x".repeat(200));
+    let long = schedule_description(&schedule);
+    assert!(long.contains('…'), "{long}");
+    assert!(
+        long.contains("\"."),
+        "a cut goal hides its final stop, so the sentence still closes: {long}"
     );
 }
 

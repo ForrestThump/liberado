@@ -42,7 +42,13 @@ fn task_ping(schedule: &CronSchedule) -> String {
 
 fn habit_ping(schedule: &CronSchedule) -> String {
     match nonempty(schedule.habit_text.as_deref()) {
-        Some(text) => format!("Sends this reminder: {}.{REMINDER}", quote(&collapse(text))),
+        Some(text) => {
+            let collapsed = collapse(text);
+            format!(
+                "Sends this reminder: {}{REMINDER}",
+                stopped(&quote(&collapsed), &collapsed)
+            )
+        }
         None => format!("Sends a habit reminder, but no habit text is set.{REMINDER}"),
     }
 }
@@ -72,18 +78,18 @@ fn git_snapshot(schedule: &CronSchedule) -> String {
 fn inbox_description(schedule: &CronSchedule) -> String {
     let path = nonempty(schedule.capture_path.as_deref()).unwrap_or("Inbox/Capture.md");
     format!(
-        "When \"{path}\" has capture text, {} {}. {} When that file is empty, does nothing.",
+        "When \"{path}\" has capture text, {} {} {} When that file is empty, does nothing.",
         run_lead(schedule),
-        prompt_clause(&schedule.goal),
+        stopped(&prompt_clause(&schedule.goal), &schedule.goal),
         delivery_sentence(schedule.deliver)
     )
 }
 
 fn prompt_description(schedule: &CronSchedule) -> String {
     format!(
-        "{} {}. {}",
+        "{} {} {}",
         capitalize(&run_lead(schedule)),
-        prompt_clause(&schedule.goal),
+        stopped(&prompt_clause(&schedule.goal), &schedule.goal),
         delivery_sentence(schedule.deliver)
     )
 }
@@ -94,11 +100,15 @@ fn unknown_job(schedule: &CronSchedule, kind: &str) -> String {
         text.push_str(&format!(" Profile \"{profile}\"."));
     }
     if let Some(habit) = nonempty(schedule.habit_text.as_deref()) {
-        text.push_str(&format!(" Habit text {}.", quote(&collapse(habit))));
+        let collapsed = collapse(habit);
+        text.push_str(&format!(
+            " Habit text {}",
+            stopped(&quote(&collapsed), &collapsed)
+        ));
     }
     let goal = collapse(&schedule.goal);
     if !goal.is_empty() {
-        text.push_str(&format!(" Prompt: {}.", quote(&goal)));
+        text.push_str(&format!(" Prompt: {}", stopped(&quote(&goal), &goal)));
     }
     text.push_str(" No behavior is defined for this kind.");
     text
@@ -123,6 +133,22 @@ fn prompt_clause(goal: &str) -> String {
     } else {
         format!("with the prompt: {}", quote(&collapsed))
     }
+}
+
+/// Close `clause` with one period. A goal that is fully shown and already ends
+/// in `.`, `!`, or `?` keeps that mark. The description does not add a second one.
+fn stopped(clause: &str, source: &str) -> String {
+    if source_keeps_its_stop(source) {
+        clause.to_string()
+    } else {
+        format!("{clause}.")
+    }
+}
+
+fn source_keeps_its_stop(source: &str) -> bool {
+    let collapsed = collapse(source);
+    collapsed.chars().nth(PROMPT_LIMIT).is_none()
+        && matches!(collapsed.chars().next_back(), Some('.' | '!' | '?'))
 }
 
 fn delivery_sentence(deliver: Option<bool>) -> &'static str {
