@@ -3423,11 +3423,61 @@ body {
     color: var(--grok-subtitle);
 }
 
-.automation-expr code {
-    font-size: 0.8125rem;
-    color: var(--grok-subtitle);
+.automations-page {
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
 }
 
+.automation-sheet {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+.automation-filled {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+.automations-page .grok-page-header {
+    flex-shrink: 0;
+}
+
+.automations-page .grok-page-body {
+    flex: 1;
+    min-height: 0;
+    overflow: auto;
+}
+
+.automations-page .grok-page-empty {
+    flex: 1;
+    min-height: 0;
+}
+
+.automation-composer-reserve {
+    flex-shrink: 0;
+    min-height: 5.5rem;
+}
+
+.automation-when {
+    margin: 0;
+    color: var(--grok-prompt);
+    font-size: 0.9375rem;
+}
+
+.automation-when-raw {
+    margin: 0;
+    color: var(--grok-subtitle);
+    font-size: 0.75rem;
+}
+
+.automation-description,
 .automation-snippet,
 .automation-meta {
     margin: 0;
@@ -3435,10 +3485,10 @@ body {
     font-size: 0.8125rem;
 }
 
+.automation-description,
 .automation-snippet {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    line-height: 1.45;
+    overflow-wrap: anywhere;
 }
 
 .library-list {

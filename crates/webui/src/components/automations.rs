@@ -12,6 +12,12 @@ pub(crate) struct ScheduleRow {
     goal: String,
     job: Option<String>,
     profile: Option<String>,
+    #[serde(default)]
+    description: String,
+    #[serde(default)]
+    schedule_text: String,
+    #[serde(default)]
+    timezone: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -54,6 +60,33 @@ pub(crate) fn schedule_snippet(row: &ScheduleRow) -> String {
         .unwrap_or_else(|| "—".to_string())
 }
 
+pub(crate) fn schedule_primary(row: &ScheduleRow) -> String {
+    let text = row.schedule_text.trim();
+    if text.is_empty() {
+        row.cron_expr.clone()
+    } else {
+        text.to_string()
+    }
+}
+
+pub(crate) fn schedule_secondary(row: &ScheduleRow) -> String {
+    let timezone = row.timezone.trim();
+    if timezone.is_empty() {
+        row.cron_expr.clone()
+    } else {
+        format!("{} · {}", row.cron_expr, timezone)
+    }
+}
+
+pub(crate) fn schedule_body(row: &ScheduleRow) -> String {
+    let description = row.description.trim();
+    if description.is_empty() {
+        schedule_snippet(row)
+    } else {
+        description.to_string()
+    }
+}
+
 fn enabled_badge(enabled: bool) -> (&'static str, &'static str) {
     if enabled {
         ("automation-badge on", "Enabled")
@@ -75,55 +108,62 @@ pub fn Automations(api_base: String) -> Element {
     rsx! {
         div {
             class: "grok-page automations-page",
-            match schedules.read().as_ref() {
-                None => rsx! {
-                    div {
-                        class: "grok-page-header",
-                        div { class: "grok-page-eyebrow", "Automations" }
-                        h1 { class: "grok-page-title", "Schedules and automations" }
-                        p { class: "project-status", "Loading..." }
-                    }
-                },
-                Some(Err(error)) => rsx! {
-                    div {
-                        class: "grok-page-header",
-                        div { class: "grok-page-eyebrow", "Automations" }
-                        h1 { class: "grok-page-title", "Schedules and automations" }
-                        p { class: "project-status", "{error}" }
-                    }
-                },
-                Some(Ok(rows)) if rows.is_empty() => rsx! {
-                    div {
-                        class: "grok-page-empty",
-                        div { class: "grok-page-eyebrow", "Automations" }
-                        h1 { class: "grok-page-title", "Schedules and automations" }
-                        p {
-                            class: "grok-page-subtitle",
-                            "Cron jobs, recurring prompts, and other timed work from topology.toml. Nothing is configured right now."
+            div {
+                class: "automation-sheet",
+                match schedules.read().as_ref() {
+                    None => rsx! {
+                        div {
+                            class: "grok-page-header",
+                            div { class: "grok-page-eyebrow", "Automations" }
+                            h1 { class: "grok-page-title", "Schedules and automations" }
+                            p { class: "project-status", "Loading..." }
                         }
-                    }
-                },
-                Some(Ok(rows)) => rsx! {
-                    div {
-                        class: "grok-page-header",
-                        div { class: "grok-page-eyebrow", "Automations" }
-                        h1 { class: "grok-page-title", "Schedules and automations" }
-                        p {
-                            class: "grok-page-subtitle",
-                            "Read-only view of [[schedules]] in topology.toml. Enable, disable, and run-now are not available here yet."
+                    },
+                    Some(Err(error)) => rsx! {
+                        div {
+                            class: "grok-page-header",
+                            div { class: "grok-page-eyebrow", "Automations" }
+                            h1 { class: "grok-page-title", "Schedules and automations" }
+                            p { class: "project-status", "{error}" }
                         }
-                    }
-                    div {
-                        class: "grok-page-body",
-                        ul {
-                            class: "automation-list",
-                            for row in rows.iter() {
-                                ScheduleRowView { row: row.clone() }
+                    },
+                    Some(Ok(rows)) if rows.is_empty() => rsx! {
+                        div {
+                            class: "grok-page-empty",
+                            div { class: "grok-page-eyebrow", "Automations" }
+                            h1 { class: "grok-page-title", "Schedules and automations" }
+                            p {
+                                class: "grok-page-subtitle",
+                                "Timed work from topology.toml. Nothing is configured right now."
                             }
                         }
-                    }
-                },
+                    },
+                    Some(Ok(rows)) => rsx! {
+                        div {
+                            class: "automation-filled",
+                            div {
+                                class: "grok-page-header",
+                                div { class: "grok-page-eyebrow", "Automations" }
+                                h1 { class: "grok-page-title", "Schedules and automations" }
+                                p {
+                                    class: "grok-page-subtitle",
+                                    "Read-only. The time is local. The small line under it is the UTC cron expression. Enable, disable, and run-now are not available here yet."
+                                }
+                            }
+                            div {
+                                class: "grok-page-body",
+                                ul {
+                                    class: "automation-list",
+                                    for row in rows.iter() {
+                                        ScheduleRowView { row: row.clone() }
+                                    }
+                                }
+                            }
+                        }
+                    },
+                }
             }
+            div { class: "automation-composer-reserve", "aria-hidden": "true" }
         }
     }
 }
@@ -131,11 +171,14 @@ pub fn Automations(api_base: String) -> Element {
 #[component]
 fn ScheduleRowView(row: ScheduleRow) -> Element {
     let (badge_class, badge_label) = enabled_badge(row.enabled);
-    let snippet = schedule_snippet(&row);
+    let primary = schedule_primary(&row);
+    let secondary = schedule_secondary(&row);
+    let body = schedule_body(&row);
+    let show_profile = row.description.trim().is_empty();
     let profile = row
         .profile
         .as_deref()
-        .filter(|p| !p.is_empty())
+        .filter(|p| show_profile && !p.is_empty())
         .map(|p| format!("profile: {p}"))
         .unwrap_or_default();
 
@@ -147,13 +190,13 @@ fn ScheduleRowView(row: ScheduleRow) -> Element {
                 span { class: "automation-name", "{row.name}" }
                 span { class: "{badge_class}", "{badge_label}" }
             }
-            div {
-                class: "automation-expr",
-                code { "{row.cron_expr}" }
+            p { class: "automation-when", "{primary}" }
+            if secondary != primary {
+                p { class: "automation-when-raw", "{secondary}" }
             }
             p {
-                class: "automation-snippet",
-                "{snippet}"
+                class: "automation-description",
+                "{body}"
             }
             if !profile.is_empty() {
                 p { class: "automation-meta", "{profile}" }
@@ -185,8 +228,54 @@ mod tests {
             goal: String::new(),
             job: Some("habit-ping".into()),
             profile: None,
+            description: String::new(),
+            schedule_text: String::new(),
+            timezone: String::new(),
         };
         assert_eq!(schedule_snippet(&row), "habit-ping");
+        assert_eq!(schedule_body(&row), "habit-ping");
+    }
+
+    #[test]
+    fn readable_schedule_text_is_primary_and_cron_plus_zone_is_secondary() {
+        let row = ScheduleRow {
+            name: "morning".into(),
+            enabled: true,
+            cron_expr: "0 30 12 * * * *".into(),
+            goal: String::new(),
+            job: Some("event-ping".into()),
+            profile: None,
+            description: "Sends a reminder listing calendar events.".into(),
+            schedule_text: "Every day at 6:30 AM".into(),
+            timezone: "America/Chicago".into(),
+        };
+        assert_eq!(schedule_primary(&row), "Every day at 6:30 AM");
+        assert_eq!(
+            schedule_secondary(&row),
+            "0 30 12 * * * * · America/Chicago"
+        );
+        assert_eq!(
+            schedule_body(&row),
+            "Sends a reminder listing calendar events."
+        );
+    }
+
+    #[test]
+    fn a_missing_reading_falls_back_to_the_raw_cron() {
+        let row = ScheduleRow {
+            name: "tick".into(),
+            enabled: true,
+            cron_expr: "0 * * * * *".into(),
+            goal: "ping".into(),
+            job: None,
+            profile: Some("ops".into()),
+            description: String::new(),
+            schedule_text: String::new(),
+            timezone: String::new(),
+        };
+        assert_eq!(schedule_primary(&row), "0 * * * * *");
+        assert_eq!(schedule_secondary(&row), "0 * * * * *");
+        assert_eq!(schedule_body(&row), "ping");
     }
 
     #[test]
