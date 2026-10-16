@@ -243,6 +243,105 @@ fn validate_failure_leaves_the_original_and_keeps_the_backup() {
 }
 
 #[test]
+fn missing_topology_writes_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let missing = dir.path().join("topology.toml");
+    let err = create_schedule(&missing, bare("noon")).unwrap_err();
+    let message = err.to_string();
+    assert!(message.contains("not writable"), "{message}");
+    assert!(message.contains("file does not exist"), "{message}");
+    assert!(message.contains("wrote nothing"), "{message}");
+    assert!(!missing.exists());
+    assert!(backups(dir.path()).is_empty());
+}
+
+#[test]
+fn duplicate_create_refuses_and_keeps_the_backup() {
+    with_config(|dir| {
+        let before = read_topology(dir);
+        let err = create_schedule(dir, bare("morning")).unwrap_err();
+        let message = err.to_string();
+        assert!(message.contains("cannot edit"), "{message}");
+        assert!(message.contains("already exists"), "{message}");
+        assert!(
+            message.contains("original file was not changed"),
+            "{message}"
+        );
+        assert_eq!(read_topology(dir), before);
+        assert_eq!(backups(dir).len(), 1);
+    });
+}
+
+#[test]
+fn invalid_utf8_fails_read_and_keeps_the_backup() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("topology.toml");
+    let bytes = b"\xff\xfe topology";
+    std::fs::write(&file, bytes).unwrap();
+    let err = delete_schedule(&file, "morning").unwrap_err();
+    let message = err.to_string();
+    assert!(message.contains("failed to read"), "{message}");
+    assert!(
+        message.contains("original file was not changed"),
+        "{message}"
+    );
+    assert!(message.contains("backup kept"), "{message}");
+    assert_eq!(std::fs::read(&file).unwrap(), bytes);
+    let copies = backups(dir.path());
+    assert_eq!(copies.len(), 1);
+    assert_eq!(std::fs::read(&copies[0]).unwrap(), bytes);
+}
+
+#[test]
+fn blocked_temp_file_leaves_the_original_and_keeps_the_backup() {
+    with_config(|dir| {
+        let before = read_topology(dir);
+        std::fs::create_dir(dir.join("topology.toml.tmp")).unwrap();
+        let err = delete_schedule(&topology(dir), "evening").unwrap_err();
+        let message = err.to_string();
+        assert!(message.contains("failed to replace"), "{message}");
+        assert!(
+            message.contains("original file was not changed"),
+            "{message}"
+        );
+        assert!(message.contains("backup kept"), "{message}");
+        assert_eq!(read_topology(dir), before);
+        assert_eq!(backups(dir).len(), 1);
+        assert!(dir.join("topology.toml.tmp").is_dir());
+    });
+}
+
+#[cfg(unix)]
+#[test]
+fn unreadable_topology_fails_backup_and_leaves_the_original() {
+    use std::os::unix::fs::PermissionsExt;
+
+    with_config(|dir| {
+        let file = topology(dir);
+        let before = read_topology(dir);
+        let original = std::fs::metadata(&file).unwrap().permissions();
+        let mut write_only = original.clone();
+        write_only.set_mode(0o222);
+        std::fs::set_permissions(&file, write_only).unwrap();
+        let _restore = RestorePerms {
+            path: &file,
+            perms: original.clone(),
+        };
+
+        let err = delete_schedule(&file, "morning").unwrap_err();
+        let message = err.to_string();
+        assert!(message.contains("failed to back up"), "{message}");
+        assert!(
+            message.contains("original file was not changed"),
+            "{message}"
+        );
+        std::fs::set_permissions(&file, original).unwrap();
+        assert_eq!(read_topology(dir), before);
+        assert!(backups(dir).is_empty());
+    });
+}
+
+#[test]
 fn read_only_path_refuses_and_writes_nothing() {
     with_config(|dir| {
         let file = topology(dir);

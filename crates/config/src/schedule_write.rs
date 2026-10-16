@@ -180,7 +180,7 @@ pub fn create_schedule(
     path: &Path,
     schedule: CronSchedule,
 ) -> Result<ScheduleWriteReport, ScheduleWriteError> {
-    apply(path, ScheduleEdit::Create(schedule))
+    apply_schedule_edit(path, ScheduleEdit::Create(schedule))
 }
 
 /// Replace the `[[schedules]]` row named `name`.
@@ -193,7 +193,7 @@ pub fn update_schedule(
     name: &str,
     schedule: CronSchedule,
 ) -> Result<ScheduleWriteReport, ScheduleWriteError> {
-    apply(
+    apply_schedule_edit(
         path,
         ScheduleEdit::Update {
             name: name.to_string(),
@@ -204,7 +204,7 @@ pub fn update_schedule(
 
 /// Remove the `[[schedules]]` row named `name`. A missing row is refused.
 pub fn delete_schedule(path: &Path, name: &str) -> Result<ScheduleWriteReport, ScheduleWriteError> {
-    apply(
+    apply_schedule_edit(
         path,
         ScheduleEdit::Delete {
             name: name.to_string(),
@@ -223,7 +223,10 @@ enum ScheduleEdit {
     },
 }
 
-fn apply(path: &Path, edit: ScheduleEdit) -> Result<ScheduleWriteReport, ScheduleWriteError> {
+fn apply_schedule_edit(
+    path: &Path,
+    edit: ScheduleEdit,
+) -> Result<ScheduleWriteReport, ScheduleWriteError> {
     let path = resolve_topology_file(path);
     ensure_writable(&path)?;
     let backup = backup_topology(&path)?;
