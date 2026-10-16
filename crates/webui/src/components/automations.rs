@@ -109,61 +109,23 @@ pub fn Automations(api_base: String) -> Element {
         div {
             class: "grok-page automations-page",
             div {
-                class: "automation-sheet",
+                class: "grok-page-body",
                 match schedules.read().as_ref() {
-                    None => rsx! {
-                        div {
-                            class: "grok-page-header",
-                            div { class: "grok-page-eyebrow", "Automations" }
-                            h1 { class: "grok-page-title", "Schedules and automations" }
-                            p { class: "project-status", "Loading..." }
-                        }
-                    },
-                    Some(Err(error)) => rsx! {
-                        div {
-                            class: "grok-page-header",
-                            div { class: "grok-page-eyebrow", "Automations" }
-                            h1 { class: "grok-page-title", "Schedules and automations" }
-                            p { class: "project-status", "{error}" }
-                        }
-                    },
+                    None => rsx! { p { class: "project-status", "Loading..." } },
+                    Some(Err(error)) => rsx! { p { class: "project-status", "{error}" } },
                     Some(Ok(rows)) if rows.is_empty() => rsx! {
-                        div {
-                            class: "grok-page-empty",
-                            div { class: "grok-page-eyebrow", "Automations" }
-                            h1 { class: "grok-page-title", "Schedules and automations" }
-                            p {
-                                class: "grok-page-subtitle",
-                                "Timed work from topology.toml. Nothing is configured right now."
-                            }
-                        }
+                        p { class: "project-status", "No automations are configured." }
                     },
                     Some(Ok(rows)) => rsx! {
-                        div {
-                            class: "automation-filled",
-                            div {
-                                class: "grok-page-header",
-                                div { class: "grok-page-eyebrow", "Automations" }
-                                h1 { class: "grok-page-title", "Schedules and automations" }
-                                p {
-                                    class: "grok-page-subtitle",
-                                    "Read-only. The time is local. The small line under it is the UTC cron expression. Enable, disable, and run-now are not available here yet."
-                                }
-                            }
-                            div {
-                                class: "grok-page-body",
-                                ul {
-                                    class: "automation-list",
-                                    for row in rows.iter() {
-                                        ScheduleRowView { row: row.clone() }
-                                    }
-                                }
+                        ul {
+                            class: "automation-list",
+                            for row in rows.iter() {
+                                ScheduleRowView { row: row.clone() }
                             }
                         }
                     },
                 }
             }
-            div { class: "automation-composer-reserve", "aria-hidden": "true" }
         }
     }
 }

@@ -320,6 +320,35 @@ async fn http_response_maps_each_resolve_outcome() {
     }
 }
 
+#[test]
+fn schedules_json_with_local_clock_stamps_the_file_timezone() {
+    let file: super::ScheduleFile = toml::from_str(
+        r#"
+timezone = "America/Chicago"
+[[schedules]]
+name = "morning"
+cron_expr = "0 30 12 * * * *"
+goal = "ping"
+"#,
+    )
+    .unwrap();
+    let json = super::schedules_json_with_local_clock(&file).unwrap();
+    let rows: Vec<serde_json::Value> = serde_json::from_str(&json).unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["name"], "morning");
+    assert_eq!(rows[0]["cron_expr"], "0 30 12 * * * *");
+    assert_eq!(rows[0]["timezone"], "America/Chicago");
+    assert_eq!(
+        rows[0]["local_time"],
+        liberado_cron::cron_to_english("0 30 12 * * * *", "America/Chicago")
+    );
+    let local = rows[0]["local_time"].as_str().unwrap();
+    assert!(
+        local.contains("AM") || local.contains("PM"),
+        "local_time must be a clock reading, not the raw cron: {local}"
+    );
+}
+
 fn backup_count(dir: &Path) -> usize {
     std::fs::read_dir(dir)
         .unwrap()

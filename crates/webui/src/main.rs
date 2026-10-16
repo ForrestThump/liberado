@@ -13,7 +13,10 @@ mod theme;
 
 use components::chat::Chat;
 use components::sidebar::{Route, Sidebar};
-use shell::{DESKTOP_APP_HEADER_CLASS, GrokAppHeader, PHONE_SCROLL_APP_HEADER_CLASS, PhoneMenuFab};
+use shell::{
+    DESKTOP_APP_HEADER_CLASS, GrokAppHeader, PHONE_SCROLL_APP_HEADER_CLASS, PhoneMenuFab,
+    shell_route_title,
+};
 
 #[cfg(target_arch = "wasm32")]
 pub(crate) use shell::watch_viewport_width;
@@ -206,6 +209,7 @@ fn App() -> Element {
             if !is_narrow() {
                 GrokAppHeader {
                     shell_class: DESKTOP_APP_HEADER_CLASS,
+                    bar_title: shell_route_title(route()),
                     drawer_open: drawer_open(),
                     sidebar_collapsed,
                     active_project,
@@ -267,6 +271,7 @@ fn App() -> Element {
                                     Some(rsx! {
                                         GrokAppHeader {
                                             shell_class: PHONE_SCROLL_APP_HEADER_CLASS,
+                                            bar_title: shell_route_title(route()),
                                             drawer_open: drawer_open(),
                                             sidebar_collapsed,
                                             active_project,
@@ -289,6 +294,7 @@ fn App() -> Element {
                                 if is_narrow() {
                                     GrokAppHeader {
                                         shell_class: PHONE_SCROLL_APP_HEADER_CLASS,
+                                            bar_title: shell_route_title(route()),
                                         drawer_open: drawer_open(),
                                         sidebar_collapsed,
                                         active_project,
@@ -309,6 +315,7 @@ fn App() -> Element {
                                 if is_narrow() {
                                     GrokAppHeader {
                                         shell_class: PHONE_SCROLL_APP_HEADER_CLASS,
+                                            bar_title: shell_route_title(route()),
                                         drawer_open: drawer_open(),
                                         sidebar_collapsed,
                                         active_project,
@@ -327,22 +334,26 @@ fn App() -> Element {
                         Route::Automations => rsx! {
                             div {
                                 class: "automations-stack",
-                                if is_narrow() {
-                                    GrokAppHeader {
-                                        shell_class: PHONE_SCROLL_APP_HEADER_CLASS,
-                                        drawer_open: drawer_open(),
-                                        sidebar_collapsed,
-                                        active_project,
-                                        active_profile,
-                                        active_surface,
-                                        on_profile_open: open_profile_picker,
-                                        incognito,
-                                        api_base: base.clone(),
-                                        active_conv_id,
-                                        tools_open,
+                                div {
+                                    class: "automations-list-pane",
+                                    if is_narrow() {
+                                        GrokAppHeader {
+                                            shell_class: PHONE_SCROLL_APP_HEADER_CLASS,
+                                            bar_title: shell_route_title(route()),
+                                            drawer_open: drawer_open(),
+                                            sidebar_collapsed,
+                                            active_project,
+                                            active_profile,
+                                            active_surface,
+                                            on_profile_open: open_profile_picker,
+                                            incognito,
+                                            api_base: base.clone(),
+                                            active_conv_id,
+                                            tools_open,
+                                        }
                                     }
+                                    crate::components::automations::Automations { api_base: base.clone() }
                                 }
-                                crate::components::automations::Automations { api_base: base.clone() }
                                 crate::components::automation_editor::AutomationEditor { api_base: base.clone() }
                             }
                         },
@@ -351,6 +362,7 @@ fn App() -> Element {
                                 if is_narrow() {
                                     GrokAppHeader {
                                         shell_class: PHONE_SCROLL_APP_HEADER_CLASS,
+                                            bar_title: shell_route_title(route()),
                                         drawer_open: drawer_open(),
                                         sidebar_collapsed,
                                         active_project,
@@ -378,6 +390,7 @@ fn App() -> Element {
                                 if is_narrow() {
                                     GrokAppHeader {
                                         shell_class: PHONE_SCROLL_APP_HEADER_CLASS,
+                                            bar_title: shell_route_title(route()),
                                         drawer_open: drawer_open(),
                                         sidebar_collapsed,
                                         active_project,
@@ -398,6 +411,7 @@ fn App() -> Element {
                                 if is_narrow() {
                                     GrokAppHeader {
                                         shell_class: PHONE_SCROLL_APP_HEADER_CLASS,
+                                            bar_title: shell_route_title(route()),
                                         drawer_open: drawer_open(),
                                         sidebar_collapsed,
                                         active_project,

@@ -8,6 +8,7 @@ use crate::components::grants_popover::ToolsPopover;
 use crate::components::incognito::IncognitoToggle;
 use crate::components::profile_browser::ProfileChip;
 use crate::components::profile_surface::profile_chip_visible;
+use crate::components::sidebar::Route;
 use crate::icons::IconMenu;
 
 /// Same cutoff as `@media (max-width: 768px)` in `styles/main.css`.
@@ -98,11 +99,33 @@ pub(crate) const PHONE_SCROLL_APP_HEADER_CLASS: &str = "app-header-in-scroll";
 pub(crate) const PHONE_SCROLL_HEADER_CSS_START: &str = "/* phone-scroll-header */";
 pub(crate) const PHONE_SCROLL_HEADER_CSS_END: &str = "/* phone-scroll-header-end */";
 
+/// Marker pair for the later phone rules that beat inner scrollports.
+pub(crate) const PHONE_SCROLL_FOLLOW_CSS_START: &str = "/* phone-scroll-follow */";
+pub(crate) const PHONE_SCROLL_FOLLOW_CSS_END: &str = "/* phone-scroll-follow-end */";
+
+/// Top-bar title for the open route.
+///
+/// Chat views stay "Liberado". The bar has no conversation title to show.
+/// Every other route uses its view name.
+pub(crate) fn shell_route_title(route: Route) -> &'static str {
+    match route {
+        Route::Library => "Library",
+        Route::Automations => "Automations",
+        Route::Agents => "Agents",
+        Route::Projects => "Projects",
+        Route::Plugins => "Plugins",
+        Route::Imagine => "Imagine",
+        Route::Chat | Route::ChatSession | Route::AgentSession | Route::ProjectDetail => "Liberado",
+    }
+}
+
 /// Liberado top bar: brand, optional project chip, profile, Tools, incognito.
 #[component]
 pub(crate) fn GrokAppHeader(
     /// Extra classes after `app-header grok-header` (desktop root or in-scroll variant).
     shell_class: &'static str,
+    /// [`shell_route_title`] for the open route.
+    bar_title: &'static str,
     drawer_open: bool,
     mut sidebar_collapsed: Signal<bool>,
     active_project: Signal<Option<String>>,
@@ -129,7 +152,7 @@ pub(crate) fn GrokAppHeader(
                     onclick: move |_| sidebar_collapsed.set(!sidebar_collapsed()),
                     IconMenu {}
                 }
-                span { class: "brand grok-header-brand", "Liberado" }
+                span { class: "brand grok-header-brand", "{bar_title}" }
                 if let Some(name) = active_project() {
                     span { class: "grok-header-project", "{name}" }
                 }
@@ -270,5 +293,105 @@ mod tests {
             block.contains(".phone-menu-fab"),
             "floating menu for when the bar scrolls off: {block}"
         );
+        assert!(
+            !block.contains(".app-header-in-scroll .sidebar-menu-btn"),
+            "the in-flow menu button stays so the title sits beside it: {block}"
+        );
+        assert!(
+            block.contains("display: flex") && block.contains("gap: 0.5rem"),
+            "title and menu button share a flex row: {block}"
+        );
+    }
+
+    #[test]
+    fn shell_route_title_names_each_view_and_keeps_chat_as_liberado() {
+        use crate::components::sidebar::Route;
+        assert_eq!(shell_route_title(Route::Automations), "Automations");
+        assert_eq!(shell_route_title(Route::Plugins), "Plugins");
+        assert_eq!(shell_route_title(Route::Projects), "Projects");
+        assert_eq!(shell_route_title(Route::Library), "Library");
+        assert_eq!(shell_route_title(Route::Imagine), "Imagine");
+        assert_eq!(shell_route_title(Route::Agents), "Agents");
+        assert_eq!(shell_route_title(Route::Chat), "Liberado");
+        assert_eq!(shell_route_title(Route::ChatSession), "Liberado");
+        assert_eq!(shell_route_title(Route::AgentSession), "Liberado");
+        assert_eq!(shell_route_title(Route::ProjectDetail), "Liberado");
+    }
+
+    /// The phone bar has to be the first child of the element that actually scrolls.
+    /// A later CSS block turns inner page scrollports off so that element is the wrapper.
+    #[test]
+    fn phone_header_is_inside_the_scrolling_element_on_every_route() {
+        let css = include_str!("styles/main.css");
+        let app = include_str!("main.rs");
+        let chat = include_str!("components/chat.rs");
+        let page = include_str!("components/automations.rs");
+
+        let messages = chat
+            .split("id: \"chat-messages\"")
+            .nth(1)
+            .expect("chat messages");
+        let header_in_messages = messages.find("phone_scroll_header").expect("chat header");
+        let transcript = messages.find("TranscriptScroll").expect("transcript");
+        assert!(
+            header_in_messages < transcript,
+            "chat header must lead the transcript scroller"
+        );
+
+        let pane_at = app.find("automations-list-pane").expect("list pane");
+        let header_at = app[pane_at..]
+            .find("GrokAppHeader")
+            .map(|at| at + pane_at)
+            .expect("header in the automations pane");
+        let list_at = app[pane_at..]
+            .find("automations::Automations")
+            .map(|at| at + pane_at)
+            .expect("schedule list");
+        let dock_at = app[pane_at..]
+            .find("AutomationEditor")
+            .map(|at| at + pane_at)
+            .expect("editor dock");
+        assert!(pane_at < header_at && header_at < list_at && list_at < dock_at);
+
+        let follow = css
+            .split(PHONE_SCROLL_FOLLOW_CSS_START)
+            .nth(1)
+            .expect("phone scroll follow block");
+        let follow = follow
+            .split(PHONE_SCROLL_FOLLOW_CSS_END)
+            .next()
+            .expect("phone scroll follow end");
+        let body_rule = css
+            .find(".automations-page .grok-page-body")
+            .expect("schedule body rule");
+        let plugin_rule = css
+            .find(".plugins-page .plugin-list")
+            .expect("plugin list rule");
+        let follow_at = css
+            .find(PHONE_SCROLL_FOLLOW_CSS_START)
+            .expect("follow marker");
+        assert!(
+            follow_at > body_rule && follow_at > plugin_rule,
+            "follow rules must come after the inner scrollports they override"
+        );
+        assert!(follow.contains(".automations-list-pane"), "{follow}");
+        assert!(follow.contains("max-height: 38%"), "{follow}");
+        assert!(follow.contains("overflow-y: auto"), "{follow}");
+        assert!(follow.contains("overflow: visible"), "{follow}");
+        assert!(follow.contains("position: static"), "{follow}");
+        assert!(
+            follow.contains(".automations-stack .automation-editor-transcript"),
+            "{follow}"
+        );
+        assert!(follow.contains("max-height: none"), "{follow}");
+        assert!(follow.contains(".plugins-page .plugin-list"), "{follow}");
+
+        let heading = ["Schedules and ", "automations"].concat();
+        let note = ["Read-only. The time ", "is local"].concat();
+        let eyebrow = ["grok-page-", "eyebrow"].concat();
+        assert!(!page.contains(&heading), "{page}");
+        assert!(!page.contains(&note));
+        assert!(!page.contains(&eyebrow));
+        assert!(page.contains("automation-list"));
     }
 }

@@ -2984,8 +2984,17 @@ body {
         background: var(--lib-app-bg);
     }
 
-    .app-header-in-scroll .sidebar-menu-btn {
-        display: none;
+    /* The menu button stays in the flex row. The title follows it. The fixed
+       FAB covers that button and remains after the row scrolls away. */
+    .app-header-in-scroll .grok-header-inner {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+    }
+
+    .app-header-in-scroll .grok-header-brand {
+        position: static;
+        margin-left: 0;
     }
 
     .messages .app-header-in-scroll {
@@ -2998,8 +3007,8 @@ body {
         align-items: center;
         justify-content: center;
         position: fixed;
-        top: max(0.35rem, env(safe-area-inset-top, 0px));
-        left: max(0.35rem, env(safe-area-inset-left, 0px));
+        top: calc(env(safe-area-inset-top, 0px) + 0.25rem);
+        left: max(0.5rem, env(safe-area-inset-left, 0px));
         z-index: 35;
         width: 2.5rem;
         height: 2.5rem;
@@ -3041,12 +3050,6 @@ body {
         overflow: visible;
         flex: none;
         max-height: none;
-    }
-
-    .automations-stack {
-        overflow-y: auto;
-        overscroll-behavior: contain;
-        -webkit-overflow-scrolling: touch;
     }
 }
 
@@ -3690,21 +3693,10 @@ body {
         box-sizing: border-box;
     }
 
-    .automations-stack .automation-editor-dock {
-        position: sticky;
-        bottom: 0;
-        z-index: 2;
-    }
-
     .automation-editor-dock {
-        max-height: 46dvh;
         padding-left: env(safe-area-inset-left, 0px);
         padding-right: env(safe-area-inset-right, 0px);
         padding-bottom: env(safe-area-inset-bottom, 0px);
-    }
-
-    .automation-editor-transcript {
-        max-height: 24dvh;
     }
 
     .automation-editor-send {
@@ -3713,6 +3705,95 @@ body {
     }
 }
 /* automation-editor-phone-end */
+
+/* phone-scroll-follow */
+/* The block above loses to later rules of equal specificity: `.automations-stack`
+   is `overflow: hidden`, and `.plugins-page .plugin-list` scrolls on its own.
+   These selectors are more specific and come after those scrollports, so the
+   phone top bar — the first child of the scroller — moves with the content. */
+@media (max-width: 768px) {
+    .messages > .app-header.app-header-in-scroll,
+    .grok-main-phone-scroll > .app-header.app-header-in-scroll,
+    .automations-list-pane > .app-header.app-header-in-scroll {
+        position: static;
+        top: auto;
+        z-index: auto;
+    }
+
+    .grok-main-phone-scroll > .grok-page,
+    .grok-main-phone-scroll > .plugins-page,
+    .grok-main-phone-scroll > .library-page,
+    .grok-main-phone-scroll > .projects-page,
+    .grok-main-phone-scroll > .imagine-page {
+        flex: 0 0 auto;
+        height: auto;
+        max-height: none;
+        overflow: visible;
+    }
+
+    .grok-main-phone-scroll .grok-page-body,
+    .grok-main-phone-scroll .plugins-page .grok-page-body,
+    .grok-main-phone-scroll .plugins-page .plugin-list,
+    .grok-main-phone-scroll .library-page .grok-page-body,
+    .grok-main-phone-scroll .projects-page .grok-page-body {
+        overflow: visible;
+        flex: 0 0 auto;
+        max-height: none;
+        height: auto;
+        min-height: 0;
+    }
+}
+
+/* The schedule list is at most about 38% of the column. The editor dock
+   takes the rest, on a phone and on a desk. */
+.automations-list-pane {
+    flex: 0 1 auto;
+    max-height: 38%;
+    min-height: 0;
+    min-width: 0;
+    width: 100%;
+    overflow-x: hidden;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+}
+
+.automations-list-pane .automations-page,
+.automations-list-pane .automation-sheet,
+.automations-list-pane .automation-filled,
+.automations-list-pane .grok-page {
+    flex: none;
+    height: auto;
+    max-height: none;
+    min-height: 0;
+    overflow: visible;
+}
+
+.automations-list-pane .automations-page .grok-page-body,
+.automations-list-pane .grok-page-body {
+    overflow: visible;
+    flex: none;
+    max-height: none;
+    height: auto;
+    min-height: 0;
+}
+
+.automations-stack .automation-editor-dock {
+    flex: 1 1 auto;
+    min-height: 0;
+    max-height: none;
+    position: static;
+    bottom: auto;
+    overflow: hidden;
+}
+
+.automations-stack .automation-editor-transcript {
+    flex: 1 1 auto;
+    min-height: 0;
+    max-height: none;
+    overflow-y: auto;
+}
+/* phone-scroll-follow-end */
 
 .automation-when {
     margin: 0;

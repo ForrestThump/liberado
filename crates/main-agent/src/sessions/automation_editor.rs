@@ -48,6 +48,9 @@ They do not change the file. Wait for the human to tap Approve or Deny.
 schedules list still show the boot copy until the process is recreated.
 
 You do not have delegate or create_agent. Do not claim a write happened before Approve. \
+list_schedules rows include local_time and timezone. Quote local_time to the user. \
+cron_expr stays UTC, seconds first, and is only for edits. \
+Do not present the UTC hour as the local time. \
 Be concise.";
 
 /// Re-read of `[[schedules]]` for `list_schedules`. The server wires the file reader.

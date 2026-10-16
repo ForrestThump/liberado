@@ -12,8 +12,8 @@ use serde_json::json;
 
 use super::super::TurnSettings;
 use super::{
-    AUTOMATION_EDITOR_OPENER, AUTOMATION_EDITOR_PROFILE, AUTOMATION_EDITOR_TITLE,
-    SCHEDULE_PROPOSAL_ACK,
+    AUTOMATION_EDITOR_OPENER, AUTOMATION_EDITOR_PROFILE, AUTOMATION_EDITOR_SYSTEM_PROMPT,
+    AUTOMATION_EDITOR_TITLE, SCHEDULE_PROPOSAL_ACK,
 };
 use crate::ChatSessions;
 use crate::face::{
@@ -99,6 +99,19 @@ async fn editor_catalog_is_the_four_tools_and_another_profile_does_not_see_them(
             .iter()
             .all(|name| !is_schedule_write_tool(name) && name != LIST_SCHEDULES_TOOL_NAME),
         "{other_names:?}"
+    );
+}
+
+#[test]
+fn editor_prompt_quotes_local_time_and_keeps_cron_in_utc() {
+    assert!(
+        AUTOMATION_EDITOR_SYSTEM_PROMPT.contains("local_time"),
+        "{AUTOMATION_EDITOR_SYSTEM_PROMPT}"
+    );
+    assert!(AUTOMATION_EDITOR_SYSTEM_PROMPT.contains("timezone"));
+    assert!(AUTOMATION_EDITOR_SYSTEM_PROMPT.contains("UTC"));
+    assert!(
+        AUTOMATION_EDITOR_SYSTEM_PROMPT.contains("Do not present the UTC hour as the local time")
     );
 }
 

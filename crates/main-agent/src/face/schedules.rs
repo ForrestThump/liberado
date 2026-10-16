@@ -35,7 +35,9 @@ pub fn schedule_tool_defs() -> Vec<ToolDef> {
         ToolDef::new(
             LIST_SCHEDULES_TOOL_NAME,
             "List the schedules stored in topology.toml. This reads the file. \
-             It does not use the boot snapshot. No approval card.",
+             It does not use the boot snapshot. No approval card. \
+             Each row includes local_time in the operator timezone. Quote local_time. \
+             cron_expr is UTC, seconds first, and is only for edits.",
             json!({"type": "object", "properties": {}}),
         ),
         ToolDef::new(
@@ -217,6 +219,20 @@ mod tests {
         async fn invoke(&self, _: &ToolInvocation) -> Result<String, String> {
             Err("no extras".into())
         }
+    }
+
+    #[test]
+    fn list_schedules_tool_tells_the_model_to_quote_local_time() {
+        let list = schedule_tool_defs()
+            .into_iter()
+            .find(|tool| tool.name == LIST_SCHEDULES_TOOL_NAME)
+            .expect("list tool");
+        assert!(
+            list.description.contains("local_time"),
+            "{}",
+            list.description
+        );
+        assert!(list.description.contains("UTC"), "{}", list.description);
     }
 
     #[test]
