@@ -94,6 +94,46 @@ pub async fn run(vault_path: String) -> Result<(), Box<dyn std::error::Error>> {
     // an empty argument falls back to `topology.vault_path`. Both empty is a hard error.
     let vault_path = resolve_vault_path(vault_path, &config)?;
 
+    let (daemon_handle, app, state) = assemble_daemon(config, coder_tuning, vault_path).await?;
+    let addr = format!("0.0.0.0:{port}");
+    finish_serve(daemon_handle, app, state, &addr).await
+}
+
+/// Serve until drain, then stop the vault-watch task.
+///
+/// The abort stays after `serve_with_drain` so cron and vault reactions do not keep the process
+/// alive past the grace budget.
+async fn finish_serve(
+    daemon_handle: tokio::task::JoinHandle<()>,
+    app: Router,
+    state: Arc<AppState>,
+    addr: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    serve_with_drain(app, &state, addr).await?;
+    daemon_handle.abort();
+    Ok(())
+}
+
+/// Live profile names and the chat plugin mask, opened from the data-dir ledgers.
+///
+/// A missing ledger is an empty overlay. Callers pass the deployment data dir; tests pass a
+/// scratch directory so boot wiring does not touch the operator's files.
+fn open_live_surfaces(
+    config: &liberado_bootstrap::Config,
+    data_dir: &Path,
+) -> crate::surfaces::LiveSurfaces {
+    crate::surfaces::LiveSurfaces::open(Arc::new(config.clone()), data_dir)
+}
+
+/// Build chat, the vault daemon, approvals, and the HTTP router, then spawn the reaction loop.
+///
+/// Split from [`run`] so profile, plugin, library, and schedule wiring does not sit in the
+/// fail-fast preamble. [`finish_serve`] owns the drain and the post-drain abort.
+async fn assemble_daemon(
+    config: liberado_bootstrap::Config,
+    coder_tuning: liberado_coder_core::CoderTuning,
+    vault_path: String,
+) -> Result<(tokio::task::JoinHandle<()>, Router, Arc<AppState>), Box<dyn std::error::Error>> {
     // One live catalog + shared MCP registry (boot apply + hot-reload). Every consumer (API,
     // daemon pools, chat, dispatch pack) uses the same cloneable registry handle.
     let live_mcp = liberado_bootstrap::live_mcp_from_config(&config, None);
@@ -144,8 +184,7 @@ pub async fn run(vault_path: String) -> Result<(), Box<dyn std::error::Error>> {
     )
     .await;
 
-    let surfaces =
-        crate::surfaces::LiveSurfaces::open(Arc::new(config.clone()), &liberado_config::data_dir());
+    let surfaces = open_live_surfaces(&config, &liberado_config::data_dir());
     let (chat, chat_tools, chat_tool_names) = build_chat(
         &providers,
         mcp_registry.clone(),
@@ -253,14 +292,7 @@ pub async fn run(vault_path: String) -> Result<(), Box<dyn std::error::Error>> {
     });
 
     let app = build_app_router(&state);
-
-    let addr = format!("0.0.0.0:{port}");
-    serve_with_drain(app, &state, &addr).await?;
-
-    // Vault-watch / reaction loop: stop after chat drain so cron/vault reactions do not keep the
-    // process alive past the grace budget.
-    daemon_handle.abort();
-    Ok(())
+    Ok((daemon_handle, app, state))
 }
 
 /// The converged Session store (S5′ / D7): ONE store under `<data_dir>/sessions/`, handed to

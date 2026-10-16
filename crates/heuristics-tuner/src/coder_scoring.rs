@@ -573,4 +573,73 @@ mod tests {
             fitness.accuracy
         );
     }
+
+    /// The smoke mock never leaves `greet` in place, never leaves `x + x + 1`, and never
+    /// claims success on an empty diff. Those three gates live in `score_one`.
+    #[tokio::test]
+    async fn score_one_rejects_unfixed_stress_and_an_empty_success() {
+        let mut rename = None;
+        let mut repair = None;
+        let mut hello = None;
+        for scenario in crate::coder_scenarios::coder_scenarios() {
+            if scenario.name == "rename-across-modules" {
+                rename = Some(scenario);
+            } else if scenario.name == "repair-broken-unit-test" {
+                repair = Some(scenario);
+            } else if scenario.name == "create-hello-file" {
+                hello = Some(scenario);
+            }
+        }
+        let claim = CompletionResponse::tool_calls(vec![ToolInvocation::new(
+            "r1",
+            liberado_executor::SUBMIT_REPORT_TOOL,
+            json!({
+                "outcome": "succeeded",
+                "summary": "no edits",
+                "artifacts": [],
+                "new_high_signal_facts": [],
+                "follow_up": null
+            }),
+        )]);
+
+        let provider = Arc::new(MockProvider::with_script("mock", [claim.clone()]));
+        let (_scenario, trial) = score_one(
+            provider,
+            rename.expect("rename scenario"),
+            "rename",
+            "mock".into(),
+            2,
+        )
+        .await
+        .expect("rename trial");
+        assert!(!trial.outcome.passed, "an unfixed greet must not pass");
+
+        let provider = Arc::new(MockProvider::with_script("mock", []));
+        let (_scenario, trial) = score_one(
+            provider,
+            repair.expect("repair scenario"),
+            "repair",
+            "mock".into(),
+            2,
+        )
+        .await
+        .expect("repair trial");
+        assert!(!trial.outcome.passed, "an unfixed double must not pass");
+
+        let provider = Arc::new(MockProvider::with_script("mock", [claim]));
+        let (_scenario, trial) = score_one(
+            provider,
+            hello.expect("hello scenario"),
+            "hello",
+            "mock".into(),
+            2,
+        )
+        .await
+        .expect("hello trial");
+        assert!(
+            !trial.outcome.passed,
+            "succeeded with no diff must not pass when a diff is required"
+        );
+        assert!(!trial.outcome.nonempty_diff);
+    }
 }

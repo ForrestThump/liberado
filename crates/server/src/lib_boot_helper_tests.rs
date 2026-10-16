@@ -213,3 +213,18 @@ async fn open_session_store_opens_under_the_resolved_root() {
         store.agent_profiles().names()
     );
 }
+
+#[test]
+fn open_live_surfaces_reads_an_empty_ledger_from_a_fresh_data_dir() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = liberado_bootstrap::Config::default();
+    let surfaces = open_live_surfaces(&config, dir.path());
+    assert!(
+        surfaces.profiles.list_json()["profiles"].is_array(),
+        "a fresh data dir still lists topology profiles"
+    );
+    assert!(
+        !surfaces.plugins.is_disabled("vault"),
+        "a missing plugin ledger disables nothing"
+    );
+}
