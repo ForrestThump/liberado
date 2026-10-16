@@ -10,9 +10,20 @@ use super::super::chat::ChatMsg;
 use super::super::chat::chat_reasoning::fold_thinking;
 use super::super::chat_submission::bubble_role;
 
-/// Shown above the composer. The list on this page is the boot copy.
-pub const EDITOR_DOCK_NOTE: &str =
-    "Edits land in topology.toml. The schedule list updates after the service restarts.";
+/// How far from the bottom still counts as following the latest editor row.
+pub const EDITOR_SCROLL_SLACK_PX: i32 = 80;
+
+/// Log label when the reader posts from the editor composer.
+pub const SCROLL_TRIGGER_SEND: &str = "send";
+
+/// Log label when the dock's interval reloads the transcript.
+pub const SCROLL_TRIGGER_POLL: &str = "poll";
+
+/// Log label when a render applies history without a send or a poll.
+pub const SCROLL_TRIGGER_RENDER: &str = "render";
+
+/// Log label when a live token grows the main transcript.
+pub const SCROLL_TRIGGER_STREAM: &str = "stream";
 
 /// How often the dock re-reads the transcript after Approve.
 pub const EDITOR_POLL_MS: i32 = 2_000;
@@ -161,6 +172,21 @@ pub fn dock_class(no_pending: bool) -> &'static str {
     }
 }
 
+/// Follow the latest row only when the reader is already there, or they just sent.
+pub fn should_autoscroll(near_bottom: bool, user_sent: bool) -> bool {
+    user_sent || near_bottom
+}
+
+/// True when the viewport sits within [`EDITOR_SCROLL_SLACK_PX`] of the content bottom.
+pub fn editor_near_bottom(scroll_top: i32, client_height: i32, scroll_height: i32) -> bool {
+    pixels_from_bottom(scroll_top, client_height, scroll_height) <= EDITOR_SCROLL_SLACK_PX
+}
+
+fn pixels_from_bottom(scroll_top: i32, client_height: i32, scroll_height: i32) -> i32 {
+    let shown = scroll_top.max(0).saturating_add(client_height.max(0));
+    scroll_height.max(0).saturating_sub(shown)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -275,8 +301,6 @@ mod tests {
         assert!(!send_is_disabled(false, false));
         assert_eq!(dock_class(true), "automation-editor-dock");
         assert!(dock_class(false).contains("has-pending"));
-        assert!(EDITOR_DOCK_NOTE.contains("topology.toml"));
-        assert!(EDITOR_DOCK_NOTE.contains("restarts"));
         assert_eq!(
             error_from_body(r#"{"error":"read-only"}"#, 500),
             "read-only"
@@ -308,5 +332,61 @@ mod tests {
         assert!(phone.contains("safe-area-inset-right"), "{phone}");
         assert!(phone.contains("overflow-x: hidden"), "{phone}");
         assert!(phone.contains("max-width: 100%"), "{phone}");
+        assert!(phone.contains("100dvh"), "{phone}");
+        assert!(phone.contains("safe-area-inset-bottom"), "{phone}");
+    }
+
+    #[test]
+    fn scroll_triggers_name_send_poll_render_and_stream() {
+        assert_eq!(SCROLL_TRIGGER_SEND, "send");
+        assert_eq!(SCROLL_TRIGGER_POLL, "poll");
+        assert_eq!(SCROLL_TRIGGER_RENDER, "render");
+        assert_eq!(SCROLL_TRIGGER_STREAM, "stream");
+    }
+
+    #[test]
+    fn autoscroll_follows_only_near_the_bottom_or_after_send() {
+        assert!(should_autoscroll(true, false));
+        assert!(should_autoscroll(false, true));
+        assert!(!should_autoscroll(false, false));
+        assert_eq!(EDITOR_SCROLL_SLACK_PX, 80);
+    }
+
+    #[test]
+    fn near_bottom_is_an_eighty_pixel_window() {
+        let slack = EDITOR_SCROLL_SLACK_PX;
+        let at_slack = 800 - 100 - slack;
+        assert!(editor_near_bottom(at_slack, 100, 800));
+        assert!(!editor_near_bottom(at_slack - 1, 100, 800));
+        assert!(editor_near_bottom(0, 100, 40));
+        assert!(editor_near_bottom(-4, -1, -8));
+    }
+
+    #[test]
+    fn the_dock_separator_is_a_bar_not_the_restart_footnote() {
+        let editor = include_str!("automation_editor.rs");
+        let css = include_str!("../styles/main.css");
+        let footnote = ["Edits land in ", "topology.toml"].concat();
+        assert!(!editor.contains(&footnote), "{editor}");
+        assert!(editor.contains("automation-editor-split"));
+        let bar = css
+            .split(".automation-editor-split {")
+            .nth(1)
+            .expect("split rule");
+        let bar = bar.split('}').next().unwrap_or(bar);
+        assert!(bar.contains("height: 8px"), "{bar}");
+        assert!(bar.contains("flex: none"), "{bar}");
+        let composer = css
+            .split(".automation-editor-composer {")
+            .nth(1)
+            .expect("composer rule");
+        let composer = composer.split('}').next().unwrap_or(composer);
+        assert!(composer.contains("flex: none"), "{composer}");
+        let history = css
+            .split(".automations-stack .automation-editor-transcript {")
+            .nth(1)
+            .expect("history rule");
+        let history = history.split('}').next().unwrap_or(history);
+        assert!(history.contains("min-height: 0"), "{history}");
     }
 }

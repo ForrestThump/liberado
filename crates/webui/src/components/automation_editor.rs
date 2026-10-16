@@ -4,7 +4,8 @@
 //! rows. Approve and Deny are the shared approval cards for this session id.
 //! The composer posts `POST /api/chat`. A short poll reloads the thread so the
 //! note after Approve — the file is on disk, or the write was refused — shows
-//! above the composer.
+//! in the transcript. The transcript follows the bottom only while the reader
+//! is already there, or just after they send.
 
 use dioxus::prelude::*;
 
@@ -24,9 +25,9 @@ mod net;
 #[path = "automation_editor_poll.rs"]
 mod poll;
 
-use logic::{
-    EDITOR_DOCK_NOTE, assistant_line, begin_send, dock_class, send_is_disabled, send_label,
-};
+#[cfg(target_arch = "wasm32")]
+use logic::SCROLL_TRIGGER_SEND;
+use logic::{assistant_line, begin_send, dock_class, send_is_disabled, send_label};
 
 #[derive(Clone, Copy)]
 struct EditorUi {
@@ -36,6 +37,8 @@ struct EditorUi {
     draft: Signal<String>,
     sending: Signal<bool>,
     status: Signal<Option<String>>,
+    /// True while the reader is near the bottom, or just after they send.
+    follow: Signal<bool>,
 }
 
 #[component]
@@ -47,6 +50,7 @@ pub fn AutomationEditor(api_base: String) -> Element {
     let sending = use_signal(|| false);
     let status = use_signal(|| None::<String>);
     let pending_ids = use_signal(Vec::<String>::new);
+    let follow = use_signal(|| true);
     let ui = EditorUi {
         session,
         messages,
@@ -54,6 +58,7 @@ pub fn AutomationEditor(api_base: String) -> Element {
         draft,
         sending,
         status,
+        follow,
     };
 
     mount_editor(api_base.clone(), ui);
@@ -67,7 +72,10 @@ pub fn AutomationEditor(api_base: String) -> Element {
         section {
             class: "{class}",
             aria_label: "Automation Editor",
-            p { class: "automation-editor-note", "{EDITOR_DOCK_NOTE}" }
+            div {
+                class: "automation-editor-split",
+                role: "separator",
+            }
             div {
                 class: "automation-editor-transcript",
                 id: "automation-editor-transcript",
@@ -133,7 +141,12 @@ fn mount_editor(api_base: String, mut ui: EditorUi) {
         });
         use_effect(move || {
             let _count = ui.messages.read().len();
-            poll::scroll_dock();
+            let why = poll::take_scroll_why();
+            let stick = *ui.follow.peek();
+            poll::scroll_transcript(stick, why);
+        });
+        use_effect(move || {
+            poll::watch_editor_scroll(ui.follow);
         });
         use_drop(poll::stop);
     }
@@ -167,6 +180,9 @@ fn submit_editor_message(api_base: String, mut ui: EditorUi) {
     ui.draft.set(String::new());
     ui.sending.set(true);
     ui.status.set(None);
+    ui.follow.set(true);
+    #[cfg(target_arch = "wasm32")]
+    poll::scroll_transcript(true, SCROLL_TRIGGER_SEND);
     #[cfg(target_arch = "wasm32")]
     wasm_bindgen_futures::spawn_local(async move {
         match net::post_turn(&api_base, &session_id, &text).await {
