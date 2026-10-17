@@ -106,7 +106,13 @@ async fn editor_catalog_is_the_four_tools_and_another_profile_does_not_see_them(
 #[test]
 fn editor_prompt_quotes_central_time_and_keeps_cron_in_utc() {
     assert!(
-        AUTOMATION_EDITOR_SYSTEM_PROMPT.contains("local_time"),
+        AUTOMATION_EDITOR_SYSTEM_PROMPT.contains(
+            "Judge timing only from next_fires and the code-generated description; never from names, comments or labels; compare them to what the user asked and say so if they disagree."
+        ),
+        "{AUTOMATION_EDITOR_SYSTEM_PROMPT}"
+    );
+    assert!(
+        AUTOMATION_EDITOR_SYSTEM_PROMPT.contains("next_fires"),
         "{AUTOMATION_EDITOR_SYSTEM_PROMPT}"
     );
     assert!(AUTOMATION_EDITOR_SYSTEM_PROMPT.contains("timezone"));
@@ -263,6 +269,50 @@ async fn a_proposal_does_not_touch_topology_before_approval() {
     }
     assert_eq!(notes, 3);
     assert_eq!(std::fs::read_to_string(&topology).unwrap(), original);
+}
+
+#[tokio::test]
+async fn a_proposal_ack_includes_the_code_computed_timing() {
+    let proposals = tempfile::tempdir().unwrap();
+    let store = Arc::new(SessionStore::new());
+    let sessions = Arc::new(
+        ChatSessions::new(
+            store,
+            Executor::new(
+                Arc::new(MockProvider::with_script("m", vec![])),
+                Budget::default(),
+            ),
+            Arc::new(NoopRuntime),
+        )
+        .with_guards(
+            Vec::new(),
+            CapabilitySet::empty(),
+            proposals.path().to_path_buf(),
+            ProposalSigner::random(),
+        )
+        .with_schedule_facts(Arc::new(|tool, args| {
+            format!(
+                "cron_expr: {}\nschedule_text: Every Tuesday at 8:00 PM\nnext_fires: Tue Oct 20",
+                args["cron_expr"].as_str().unwrap_or(tool)
+            )
+        })),
+    );
+    let ack = sessions
+        .propose_edit(
+            "sess-1",
+            UPDATE_SCHEDULE_TOOL_NAME,
+            json!({"name": "trash", "cron_expr": "0 0 1 * * 4 *"}),
+            "move trash night",
+        )
+        .await
+        .unwrap();
+    assert!(ack.starts_with(SCHEDULE_PROPOSAL_ACK), "{ack}");
+    assert!(ack.contains("cron_expr: 0 0 1 * * 4 *"), "{ack}");
+    assert!(
+        ack.contains("schedule_text: Every Tuesday at 8:00 PM"),
+        "{ack}"
+    );
+    assert!(ack.contains("next_fires: Tue Oct 20"), "{ack}");
 }
 
 fn editor_policy_without_a_topology_row() -> liberado_config_loader::Config {

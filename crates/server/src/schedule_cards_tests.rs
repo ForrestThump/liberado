@@ -338,15 +338,20 @@ goal = "ping"
     assert_eq!(rows[0]["name"], "morning");
     assert_eq!(rows[0]["cron_expr"], "0 30 12 * * * *");
     assert_eq!(rows[0]["timezone"], "America/Chicago");
-    assert_eq!(
-        rows[0]["local_time"],
-        liberado_cron::cron_to_english("0 30 12 * * * *", "America/Chicago")
-    );
-    let local = rows[0]["local_time"].as_str().unwrap();
-    assert!(
-        local.contains("AM") || local.contains("PM"),
-        "local_time must be a clock reading, not the raw cron: {local}"
-    );
+    let english = liberado_cron::cron_to_english("0 30 12 * * * *", "America/Chicago");
+    assert_eq!(rows[0]["local_time"], english);
+    assert_eq!(rows[0]["schedule_text"], english);
+    assert_eq!(rows[0]["cron_expr"], "0 30 12 * * * *");
+    let shown = rows[0]["next_fires"].as_array().expect("next_fires");
+    let computed = liberado_cron::next_fires("0 30 12 * * * *", "America/Chicago", 5).unwrap();
+    assert_eq!(shown.len(), computed.len());
+    assert_eq!(computed.len(), 5);
+    for (row, fire) in shown.iter().zip(computed) {
+        assert_eq!(row["weekday"], fire.weekday_name());
+        assert_eq!(row["display"], fire.display());
+        assert_eq!(row["utc"], fire.utc.to_rfc3339());
+        assert_eq!(row["local"], fire.local.to_rfc3339());
+    }
 }
 
 fn backup_count(dir: &Path) -> usize {

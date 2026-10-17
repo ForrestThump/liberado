@@ -50,8 +50,8 @@ They do not change the file. Wait for the human to tap Approve or Deny.
 after the service restarts. Cron and the schedules list keep the previous copy until then.
 
 You do not have delegate or create_agent. Do not claim a write happened before Approve. \
-Quote times in Central time (America/Chicago). \
-list_schedules rows include local_time and timezone. Quote local_time when the zone is Central time. \
+Judge timing only from next_fires and the code-generated description; never from names, comments or labels; compare them to what the user asked and say so if they disagree. \
+Quote times in Central time (America/Chicago) when that is the timezone. \
 cron_expr stays UTC, seconds first, and is only for edits. \
 Do not present the UTC hour as the local time. \
 Be concise.";
@@ -121,6 +121,18 @@ fn display_schedule(target: &EditorTarget) -> String {
     }
 }
 
+fn proposal_ack(sessions: &ChatSessions, tool: &str, args: &Value) -> String {
+    let Some(facts) = &sessions.schedule_facts else {
+        return SCHEDULE_PROPOSAL_ACK.to_string();
+    };
+    let extra = facts(tool, args);
+    if extra.trim().is_empty() {
+        SCHEDULE_PROPOSAL_ACK.to_string()
+    } else {
+        format!("{SCHEDULE_PROPOSAL_ACK}\n{extra}")
+    }
+}
+
 fn blank_as(value: &str, fallback: &str) -> String {
     if value.is_empty() {
         fallback.to_string()
@@ -132,10 +144,19 @@ fn blank_as(value: &str, fallback: &str) -> String {
 /// Re-read of `[[schedules]]` for `list_schedules`. The server wires the file reader.
 pub(super) type ScheduleList = Arc<dyn Fn() -> Result<String, String> + Send + Sync>;
 
+/// Code-computed timing for a schedule tool result. The server wires this.
+pub(super) type ScheduleFacts = Arc<dyn Fn(&str, &Value) -> String + Send + Sync>;
+
 impl ChatSessions {
     /// Install the file reader `list_schedules` calls. Boot wires this once.
     pub fn with_schedule_list(mut self, list: ScheduleList) -> Self {
         self.schedule_list = Some(list);
+        self
+    }
+
+    /// Install the timing text `propose_edit` appends. Boot wires this once.
+    pub fn with_schedule_facts(mut self, facts: ScheduleFacts) -> Self {
+        self.schedule_facts = Some(facts);
         self
     }
 
@@ -225,8 +246,8 @@ impl ScheduleEditorOps for ChatSessions {
         if !is_schedule_write_tool(tool) {
             return Err(format!("unknown schedule tool `{tool}`"));
         }
-        write_schedule_proposal(self, session_id, tool, args, rationale).await?;
-        Ok(SCHEDULE_PROPOSAL_ACK.to_string())
+        write_schedule_proposal(self, session_id, tool, args.clone(), rationale).await?;
+        Ok(proposal_ack(self, tool, &args))
     }
 }
 

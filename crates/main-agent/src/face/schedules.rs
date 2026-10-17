@@ -39,7 +39,9 @@ pub fn schedule_tool_defs() -> Vec<ToolDef> {
             LIST_SCHEDULES_TOOL_NAME,
             "List the schedules stored in topology.toml. This reads the file. \
              It does not use the boot snapshot. No approval card. \
-             Each row includes local_time in the operator timezone. Quote local_time. \
+             Each row includes cron_expr, schedule_text (code-generated English; do not rewrite it), \
+             and next_fires (the next 5 local times, each with weekday and UTC). \
+             Judge timing only from next_fires and schedule_text. \
              cron_expr is UTC, seconds first, and is only for edits.",
             json!({"type": "object", "properties": {}}),
         ),
@@ -250,13 +252,18 @@ mod tests {
     }
 
     #[test]
-    fn list_schedules_tool_tells_the_model_to_quote_local_time() {
+    fn list_schedules_tool_returns_code_computed_fire_times() {
         let list = schedule_tool_defs()
             .into_iter()
             .find(|tool| tool.name == LIST_SCHEDULES_TOOL_NAME)
             .expect("list tool");
         assert!(
-            list.description.contains("local_time"),
+            list.description.contains("next_fires"),
+            "{}",
+            list.description
+        );
+        assert!(
+            list.description.contains("schedule_text"),
             "{}",
             list.description
         );

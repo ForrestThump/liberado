@@ -15,6 +15,7 @@ mod dispatcher_guidance;
 mod main_agent_budget;
 mod schedule_card_text;
 mod schedule_cards;
+mod schedule_timing;
 use coding_pack::{build_coding_pack, load_server_config};
 use main_agent_budget::main_agent_budget;
 mod bindings;

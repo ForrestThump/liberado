@@ -28,8 +28,7 @@ use crate::state::AppState;
 
 /// `list_schedules` reads the file on disk, not the boot snapshot.
 ///
-/// Each row gains `timezone` and `local_time` from the file's `timezone`.
-/// `cron_expr` stays UTC. The editor is told to quote `local_time`.
+/// Each row includes `cron_expr`, code-generated `schedule_text`, and `next_fires`.
 pub fn list_from_disk() -> Result<String, String> {
     let path = schedule_topology_path().map_err(|err| err.to_string())?;
     let text = std::fs::read_to_string(&path)
@@ -39,7 +38,7 @@ pub fn list_from_disk() -> Result<String, String> {
     schedules_json_with_local_clock(&file)
 }
 
-/// JSON the editor model reads. `local_time` is the wall clock in `timezone`.
+/// JSON the editor model reads. Timing fields are computed here, not written by the model.
 fn schedules_json_with_local_clock(file: &ScheduleFile) -> Result<String, String> {
     let zone = file.timezone.trim();
     let mut rows = Vec::with_capacity(file.schedules.len());
@@ -54,17 +53,29 @@ fn schedule_row_with_local_clock(
     zone: &str,
 ) -> Result<serde_json::Value, String> {
     let mut value = serde_json::to_value(schedule).map_err(|err| err.to_string())?;
-    let local = if zone.is_empty() {
-        schedule.cron_expr.clone()
-    } else {
-        liberado_cron::cron_to_english(&schedule.cron_expr, zone)
-    };
+    let zone_name = crate::schedule_timing::zone_name(zone);
+    let schedule_text = liberado_cron::cron_to_english(&schedule.cron_expr, zone_name);
     if let Some(obj) = value.as_object_mut() {
         obj.insert(
             "timezone".to_string(),
-            serde_json::Value::String(zone.to_string()),
+            serde_json::Value::String(zone_name.to_string()),
         );
-        obj.insert("local_time".to_string(), serde_json::Value::String(local));
+        obj.insert(
+            "schedule_text".to_string(),
+            serde_json::Value::String(schedule_text.clone()),
+        );
+        obj.insert(
+            "local_time".to_string(),
+            serde_json::Value::String(schedule_text),
+        );
+        obj.insert(
+            "next_fires".to_string(),
+            serde_json::Value::Array(crate::schedule_timing::next_fire_rows(
+                &schedule.cron_expr,
+                zone_name,
+                5,
+            )),
+        );
     }
     Ok(value)
 }

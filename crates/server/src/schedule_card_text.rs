@@ -61,9 +61,14 @@ fn create_summary(
     book: &ScheduleBook,
 ) -> Option<String> {
     let after = proposed_schedule(args)?;
-    Some(pair(
-        &before_line(current, book),
-        &english_line(&after, book),
+    let before = match current {
+        Some(row) => timed_line(row, book),
+        None => "This automation does not exist.".to_string(),
+    };
+    Some(format!(
+        "{}\n{}",
+        pair(&before, &timed_line(&after, book)),
+        field_diff(&serde_json::json!({}), args)
     ))
 }
 
@@ -72,29 +77,39 @@ fn update_summary(
     current: &CronSchedule,
     book: &ScheduleBook,
 ) -> Option<String> {
-    let after = proposed_schedule(args)?;
-    Some(pair(
-        &english_line(current, book),
-        &english_line(&after, book),
+    let after = overlay_schedule(current, args)?;
+    Some(format!(
+        "{}\n{}",
+        pair(&timed_line(current, book), &timed_line(&after, book)),
+        field_diff(&serde_json::to_value(current).ok()?, args)
     ))
 }
 
 fn delete_summary(current: &CronSchedule, book: &ScheduleBook) -> String {
     pair(
-        &english_line(current, book),
+        &timed_line(current, book),
         "This automation will be removed.",
     )
+}
+
+/// Timing text the editor tool returns after it files a card.
+pub fn schedule_tool_facts(tool: &str, args: &serde_json::Value) -> String {
+    let Some(book) = load_schedule_book() else {
+        return String::new();
+    };
+    schedule_edit_summary(tool, args, &book).unwrap_or_default()
 }
 
 fn pair(before: &str, after: &str) -> String {
     format!("Before: {before}\nAfter: {after}")
 }
 
-fn before_line(current: Option<&CronSchedule>, book: &ScheduleBook) -> String {
-    match current {
-        Some(row) => english_line(row, book),
-        None => "This automation does not exist.".to_string(),
-    }
+fn timed_line(schedule: &CronSchedule, book: &ScheduleBook) -> String {
+    format!(
+        "{}\n{}",
+        english_line(schedule, book),
+        crate::schedule_timing::fire_lines(&schedule.cron_expr, &book.timezone)
+    )
 }
 
 fn english_line(schedule: &CronSchedule, book: &ScheduleBook) -> String {
@@ -103,9 +118,112 @@ fn english_line(schedule: &CronSchedule, book: &ScheduleBook) -> String {
     } else {
         "Disabled"
     };
-    let when = liberado_cron::cron_to_english(&schedule.cron_expr, book.timezone.trim());
+    let zone = crate::schedule_timing::zone_name(&book.timezone);
+    let when = liberado_cron::cron_to_english(&schedule.cron_expr, zone);
     let what = schedule_description(schedule);
-    format!("{} — {state}. {when}. {what}", schedule.name)
+    format!(
+        "{} — {state}. cron_expr: {}. {when}. {what}",
+        schedule.name, schedule.cron_expr
+    )
+}
+
+fn overlay_schedule(current: &CronSchedule, args: &serde_json::Value) -> Option<CronSchedule> {
+    let mut value = serde_json::to_value(current).ok()?;
+    let obj = value.as_object_mut()?;
+    apply_overlay(obj, args)?;
+    serde_json::from_value(value).ok()
+}
+
+fn apply_overlay(
+    obj: &mut serde_json::Map<String, serde_json::Value>,
+    args: &serde_json::Value,
+) -> Option<()> {
+    let patch = args.as_object()?;
+    for (key, item) in patch {
+        if key == "name" || key == "remove" {
+            continue;
+        }
+        if key == "new_name" {
+            insert_new_name(obj, item);
+            continue;
+        }
+        obj.insert(key.clone(), item.clone());
+    }
+    clear_removed(obj, patch.get("remove"));
+    Some(())
+}
+
+fn insert_new_name(obj: &mut serde_json::Map<String, serde_json::Value>, item: &serde_json::Value) {
+    let Some(name) = item.as_str().map(str::trim).filter(|text| !text.is_empty()) else {
+        return;
+    };
+    obj.insert("name".to_string(), serde_json::json!(name));
+}
+
+fn clear_removed(
+    obj: &mut serde_json::Map<String, serde_json::Value>,
+    remove: Option<&serde_json::Value>,
+) {
+    let Some(names) = remove.and_then(|value| value.as_array()) else {
+        return;
+    };
+    for name in names {
+        let Some(field) = name.as_str() else {
+            continue;
+        };
+        obj.insert(field.to_string(), serde_json::Value::Null);
+    }
+}
+
+fn field_diff(before: &serde_json::Value, args: &serde_json::Value) -> String {
+    let Some(patch) = args.as_object() else {
+        return "Changed: none".to_string();
+    };
+    let mut lines = Vec::new();
+    for (key, new_value) in patch {
+        if key == "name" || key == "remove" {
+            continue;
+        }
+        let field = if key == "new_name" {
+            "name"
+        } else {
+            key.as_str()
+        };
+        let old = before
+            .get(field)
+            .cloned()
+            .unwrap_or(serde_json::Value::Null);
+        if &old == new_value {
+            continue;
+        }
+        lines.push(format!("{field}: {old} → {new_value}"));
+    }
+    push_removals(&mut lines, before, patch.get("remove"));
+    if lines.is_empty() {
+        "Changed: none".to_string()
+    } else {
+        format!("Changed:\n{}", lines.join("\n"))
+    }
+}
+
+fn push_removals(
+    lines: &mut Vec<String>,
+    before: &serde_json::Value,
+    remove: Option<&serde_json::Value>,
+) {
+    let Some(names) = remove.and_then(|value| value.as_array()) else {
+        return;
+    };
+    for name in names {
+        let Some(field) = name.as_str() else {
+            continue;
+        };
+        let old = before
+            .get(field)
+            .cloned()
+            .unwrap_or(serde_json::Value::Null);
+        lines.push(format!("{field}: {old} → removed"));
+    }
 }
 
 fn proposed_schedule(args: &serde_json::Value) -> Option<CronSchedule> {
@@ -181,6 +299,12 @@ mod tests {
         assert!(summary.contains("Every 15 minutes"), "{summary}");
         assert!(summary.contains("Every 30 minutes"), "{summary}");
         assert!(summary.contains("open vault tasks"), "{summary}");
+        assert!(summary.contains("cron_expr: 0 */15 * * * *"), "{summary}");
+        assert!(summary.contains("cron_expr: 0 */30 * * * *"), "{summary}");
+        assert!(summary.contains("Changed:"), "{summary}");
+        assert!(summary.contains("cron_expr:"), "{summary}");
+        assert_fires(&summary, "0 */15 * * * *");
+        assert_fires(&summary, "0 */30 * * * *");
     }
 
     #[test]
@@ -198,6 +322,9 @@ mod tests {
         assert!(summary.contains("After: fresh — Disabled."));
         assert!(summary.contains("Every 15 minutes"));
         assert!(summary.contains("calendar events"));
+        assert!(summary.contains("cron_expr: 0 */15 * * * *"));
+        assert_fires(&summary, "0 */15 * * * *");
+        assert!(summary.contains("Changed:"), "{summary}");
     }
 
     #[test]
@@ -212,6 +339,8 @@ mod tests {
         .unwrap();
         assert!(summary.contains("Before: morning-tasks"));
         assert!(summary.contains("After: This automation will be removed."));
+        assert!(summary.contains("cron_expr: 0 */15 * * * *"), "{summary}");
+        assert_fires(&summary, "0 */15 * * * *");
     }
 
     #[test]
@@ -221,10 +350,12 @@ mod tests {
         assert!(
             schedule_edit_summary("update_schedule", &json!({"name": "missing"}), &book).is_none()
         );
-        assert!(
+        let named =
             schedule_edit_summary("update_schedule", &json!({"name": "morning-tasks"}), &book)
-                .is_none()
-        );
+                .unwrap();
+        assert!(named.contains("Changed: none"), "{named}");
+        assert!(named.contains("Every 15 minutes"), "{named}");
+        assert_fires(&named, "0 */15 * * * *");
         assert!(
             schedule_edit_summary("list_schedules", &json!({"name": "morning-tasks"}), &book)
                 .is_none()
@@ -241,5 +372,22 @@ mod tests {
         assert_eq!(book.timezone, "America/Chicago");
         assert_eq!(book.schedules.len(), 1);
         assert_eq!(book.schedules[0].name, "tick");
+    }
+
+    fn assert_fires(summary: &str, expr: &str) {
+        let fires = liberado_cron::next_fires(expr, "America/Chicago", 5).unwrap();
+        assert_eq!(fires.len(), 5, "{expr}");
+        for fire in fires {
+            assert!(
+                summary.contains(&fire.display()),
+                "missing {} in {summary}",
+                fire.display()
+            );
+            assert!(
+                summary.contains(&fire.utc.to_rfc3339()),
+                "missing utc {} in {summary}",
+                fire.utc
+            );
+        }
     }
 }

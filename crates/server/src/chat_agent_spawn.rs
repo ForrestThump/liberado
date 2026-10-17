@@ -69,7 +69,8 @@ pub(crate) fn install(
                 Err(e) => Err(e.to_string()),
             }
         }))
-        .with_schedule_list(Arc::new(crate::schedule_cards::list_from_disk));
+        .with_schedule_list(Arc::new(crate::schedule_cards::list_from_disk))
+        .with_schedule_facts(Arc::new(crate::schedule_card_text::schedule_tool_facts));
     let sessions = Arc::new(sessions);
     sessions.install_self_handle();
     sessions

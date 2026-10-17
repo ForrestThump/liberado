@@ -345,6 +345,8 @@ pub struct ChatSessions {
     approval_hooks: approval::ApprovalHooks,
     /// `list_schedules` for the Automation Editor. Absent unless boot wires it.
     schedule_list: Option<automation_editor::ScheduleList>,
+    /// Code-computed timing appended to a schedule-edit tool result.
+    schedule_facts: Option<automation_editor::ScheduleFacts>,
     /// Runs after an agent is created, renamed, or deleted. Empty unless Matrix is on.
     matrix_hook: Mutex<Option<agent_hooks::MatrixHook>>,
 }
@@ -413,6 +415,7 @@ impl ChatSessions {
             approval_hooks: approval::ApprovalHooks::new(),
             matrix_hook: Mutex::new(None),
             schedule_list: None,
+            schedule_facts: None,
         }
     }
 
