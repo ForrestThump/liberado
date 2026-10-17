@@ -81,6 +81,7 @@ mod agent_hooks;
 mod agent_profiles;
 #[path = "sessions/automation_editor.rs"]
 mod automation_editor;
+pub use automation_editor::{AUTOMATION_EDITOR_OPENER, EditorTarget};
 #[path = "sessions/face_gate.rs"]
 mod face_gate;
 pub use agent_hooks::is_agent_dm_session;
@@ -186,7 +187,7 @@ struct TurnSettings {
     /// Resolved here with everything else for the reason this struct exists: a profile switch must
     /// not land between two reads and give a turn one profile's model under another's tools.
     model: Option<String>,
-    /// The Automation Editor singleton. Its face catalog is the schedule tools only.
+    /// An Automation Editor chat. Its face catalog is the schedule tools only.
     automation_editor: bool,
 }
 

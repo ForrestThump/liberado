@@ -3499,10 +3499,45 @@ body {
     align-items: center;
     justify-content: space-between;
     gap: 0.75rem;
+    flex-wrap: wrap;
+}
+
+.automation-toolbar {
+    display: flex;
+    justify-content: flex-end;
+    margin: 0 0 0.75rem;
+}
+
+.automation-row-actions {
+    display: flex;
+    flex-shrink: 0;
+    margin-left: auto;
 }
 
 .automation-name {
+    min-width: 0;
     font-weight: 500;
+}
+
+@media (max-width: 420px) {
+    .automation-row-main {
+        align-items: flex-start;
+    }
+
+    .automation-toolbar,
+    .automation-row-actions {
+        width: 100%;
+    }
+
+    .automation-toolbar {
+        justify-content: stretch;
+    }
+
+    .automation-toolbar .approval-option,
+    .automation-row-actions .approval-option {
+        width: 100%;
+        min-height: 2.5rem;
+    }
 }
 
 .automation-badge {
@@ -3527,22 +3562,6 @@ body {
     overflow: hidden;
 }
 
-.automation-sheet {
-    flex: 1;
-    min-height: 0;
-    display: flex;
-    flex-direction: column;
-    overflow: hidden;
-}
-
-.automation-filled {
-    flex: 1;
-    min-height: 0;
-    display: flex;
-    flex-direction: column;
-    overflow: hidden;
-}
-
 .automations-page .grok-page-header {
     flex-shrink: 0;
 }
@@ -3558,192 +3577,14 @@ body {
     min-height: 0;
 }
 
-.automation-composer-reserve {
-    flex-shrink: 0;
-    min-height: 5.5rem;
-}
-
-/* The schedule list scrolls in the page. The editor dock sits under it. */
-.automations-stack {
-    flex: 1;
-    min-height: 0;
-    min-width: 0;
-    width: 100%;
-    max-width: 100%;
-    max-height: 100dvh;
-    display: flex;
-    flex-direction: column;
-    overflow: hidden;
-    box-sizing: border-box;
-}
-
-.automations-stack .automation-composer-reserve {
-    display: none;
-}
-
-.automation-editor-dock {
-    flex: 0 0 auto;
-    min-width: 0;
-    width: 100%;
-    max-width: 100%;
-    max-height: 42vh;
-    display: flex;
-    flex-direction: column;
-    overflow-x: hidden;
-    box-sizing: border-box;
-    border-top: 1px solid var(--grok-rail-border);
-    background: var(--grok-page-bg);
-}
-
-.automation-editor-dock.has-pending {
-    border-top-color: var(--lib-accent);
-}
-
-.automation-editor-split {
-    flex: none;
-    height: 8px;
-    margin: 0;
-    background: var(--grok-prompt, #f4f4f5);
-    position: relative;
-}
-
-.automation-editor-split::before {
-    content: "";
-    position: absolute;
-    left: 50%;
-    top: 50%;
-    width: 2.75rem;
-    height: 3px;
-    border-radius: 999px;
-    background: var(--grok-page-bg, #0a0a0a);
-    transform: translate(-50%, -50%);
-}
-
-.automation-editor-transcript {
-    flex: 1 1 0%;
-    min-width: 0;
-    min-height: 0;
-    max-height: 22vh;
-    overflow-x: hidden;
-    overflow-y: auto;
-    overscroll-behavior: contain;
-    -webkit-overflow-scrolling: touch;
-    padding: 0.35rem 0.75rem 0.25rem;
-    box-sizing: border-box;
-}
-
-.automation-editor-transcript .bubble-row,
-.automation-editor-transcript .bubble-wrap,
-.automation-editor-transcript .approval-card {
-    min-width: 0;
-    max-width: 100%;
-    box-sizing: border-box;
-}
-
-.automation-editor-composer {
-    display: flex;
-    flex: none;
-    align-items: flex-end;
-    gap: 0.5rem;
-    min-width: 0;
-    padding: 0.35rem 0.75rem 0.6rem;
-    box-sizing: border-box;
-}
-
-.automation-editor-input {
-    flex: 1;
-    min-width: 0;
-    width: 100%;
-    max-width: 100%;
-    box-sizing: border-box;
-    resize: none;
-    min-height: 2.5rem;
-    max-height: 6rem;
-    padding: 0.45rem 0.6rem;
-    border: 1px solid var(--lib-border);
-    border-radius: 0.75rem;
-    background: transparent;
-    color: var(--grok-prompt);
-    font: inherit;
-    font-size: 0.875rem;
-    line-height: 1.4;
-}
-
-.automation-editor-send {
-    flex-shrink: 0;
-    min-width: 2.5rem;
-    min-height: 2.5rem;
-    padding: 0.4rem 0.75rem;
-    border: 1px solid var(--lib-border);
-    border-radius: 0.75rem;
-    background: var(--lib-accent);
-    color: var(--grok-page-bg);
-    font: inherit;
-    font-size: 0.875rem;
-    cursor: pointer;
-}
-
-.automation-editor-send:disabled {
-    opacity: 0.55;
-    cursor: default;
-}
-
-.automation-editor-status {
-    flex: none;
-    margin: 0;
-    padding: 0 0.75rem 0.55rem;
-    color: var(--lib-tool-err);
-    font-size: 0.8125rem;
-    line-height: 1.4;
-    overflow-wrap: anywhere;
-}
-
-/* automation-editor-phone */
-@media (max-width: 768px) {
-    .automations-stack {
-        max-height: 100dvh;
-    }
-
-    .automations-stack,
-    .automation-editor-dock,
-    .automation-editor-transcript,
-    .automation-editor-input {
-        min-width: 0;
-        max-width: 100%;
-        overflow-x: hidden;
-        box-sizing: border-box;
-    }
-
-    .automation-editor-composer {
-        flex: none;
-        min-width: 0;
-        max-width: 100%;
-        box-sizing: border-box;
-        padding-bottom: max(0.6rem, env(safe-area-inset-bottom, 0px));
-    }
-
-    .automation-editor-dock {
-        padding-left: env(safe-area-inset-left, 0px);
-        padding-right: env(safe-area-inset-right, 0px);
-        max-height: 100%;
-    }
-
-    .automation-editor-send {
-        min-width: 2.5rem;
-        min-height: 2.5rem;
-    }
-}
-/* automation-editor-phone-end */
 
 /* phone-scroll-follow */
-/* The block above loses to later rules of equal specificity: `.automations-stack`
-   is `overflow: hidden`, and `.plugins-page .plugin-list` scrolls on its own.
-   These selectors are more specific and come after those scrollports, so the
-   phone top bar — the first child of the scroller — moves with the content. */
+/* Later rules of equal specificity would keep an inner scrollport. `.plugins-page
+   .plugin-list` scrolls on its own. These selectors come after those scrollports,
+   so the phone top bar — the first child of the scroller — moves with the content. */
 @media (max-width: 768px) {
     .messages > .app-header.app-header-in-scroll,
-    .grok-main-phone-scroll > .app-header.app-header-in-scroll,
-    .automations-list-pane > .app-header.app-header-in-scroll {
+    .grok-main-phone-scroll > .app-header.app-header-in-scroll {
         position: static;
         top: auto;
         z-index: auto;
@@ -3773,64 +3614,6 @@ body {
     }
 }
 
-/* The schedule list is at most about 38% of the column. The editor dock
-   takes the rest, on a phone and on a desk. */
-.automations-list-pane {
-    flex: 0 1 auto;
-    max-height: 38%;
-    min-height: 0;
-    min-width: 0;
-    width: 100%;
-    overflow-x: hidden;
-    overflow-y: auto;
-    overscroll-behavior: contain;
-    -webkit-overflow-scrolling: touch;
-}
-
-.automations-list-pane .automations-page,
-.automations-list-pane .automation-sheet,
-.automations-list-pane .automation-filled,
-.automations-list-pane .grok-page {
-    flex: none;
-    height: auto;
-    max-height: none;
-    min-height: 0;
-    overflow: visible;
-}
-
-.automations-list-pane .automations-page .grok-page-body,
-.automations-list-pane .grok-page-body {
-    overflow: visible;
-    flex: none;
-    max-height: none;
-    height: auto;
-    min-height: 0;
-}
-
-.automations-stack .automation-editor-dock {
-    flex: 1 1 0%;
-    min-height: 0;
-    max-height: none;
-    display: flex;
-    flex-direction: column;
-    position: static;
-    bottom: auto;
-    overflow: hidden;
-}
-
-.automations-stack .automation-editor-transcript {
-    flex: 1 1 0%;
-    min-height: 0;
-    max-height: none;
-    overflow-x: hidden;
-    overflow-y: auto;
-}
-
-.automations-stack .automation-editor-composer,
-.automations-stack .automation-editor-status,
-.automations-stack .automation-editor-split {
-    flex: none;
-}
 /* phone-scroll-follow-end */
 
 .automation-when {

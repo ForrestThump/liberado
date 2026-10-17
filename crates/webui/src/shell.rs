@@ -338,20 +338,16 @@ mod tests {
             "chat header must lead the transcript scroller"
         );
 
-        let pane_at = app.find("automations-list-pane").expect("list pane");
-        let header_at = app[pane_at..]
-            .find("GrokAppHeader")
-            .map(|at| at + pane_at)
-            .expect("header in the automations pane");
-        let list_at = app[pane_at..]
+        let scroll_at = app.find("Route::Automations").expect("automations route");
+        let pane = &app[scroll_at..];
+        let header_at = pane.find("GrokAppHeader").expect("header on automations");
+        let list_at = pane
             .find("automations::Automations")
-            .map(|at| at + pane_at)
             .expect("schedule list");
-        let dock_at = app[pane_at..]
-            .find("AutomationEditor")
-            .map(|at| at + pane_at)
-            .expect("editor dock");
-        assert!(pane_at < header_at && header_at < list_at && list_at < dock_at);
+        assert!(header_at < list_at);
+        assert!(pane.contains("grok-main-phone-scroll"));
+        assert!(!pane.contains("AutomationEditor"));
+        assert!(!pane.contains("automations-stack"));
 
         let follow = css
             .split(PHONE_SCROLL_FOLLOW_CSS_START)
@@ -374,17 +370,13 @@ mod tests {
             follow_at > body_rule && follow_at > plugin_rule,
             "follow rules must come after the inner scrollports they override"
         );
-        assert!(follow.contains(".automations-list-pane"), "{follow}");
-        assert!(follow.contains("max-height: 38%"), "{follow}");
-        assert!(follow.contains("overflow-y: auto"), "{follow}");
+        assert!(!follow.contains("automations-list-pane"), "{follow}");
+        assert!(!follow.contains("automation-editor"), "{follow}");
         assert!(follow.contains("overflow: visible"), "{follow}");
         assert!(follow.contains("position: static"), "{follow}");
-        assert!(
-            follow.contains(".automations-stack .automation-editor-transcript"),
-            "{follow}"
-        );
         assert!(follow.contains("max-height: none"), "{follow}");
         assert!(follow.contains(".plugins-page .plugin-list"), "{follow}");
+        assert!(follow.contains(".grok-main-phone-scroll"), "{follow}");
 
         let heading = ["Schedules and ", "automations"].concat();
         let note = ["Read-only. The time ", "is local"].concat();

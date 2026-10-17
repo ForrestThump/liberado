@@ -1,4 +1,4 @@
-//! Singleton Automation Editor over `POST /api/conversations`.
+//! Automation Editor chats over `POST /api/conversations`.
 
 use std::str::FromStr;
 use std::sync::Arc;
@@ -69,7 +69,7 @@ async fn delete(app: &Router, uri: &str) -> (StatusCode, String) {
 }
 
 #[tokio::test]
-async fn automation_editor_post_is_one_row_and_delete_is_refused() {
+async fn automation_editor_post_creates_a_fresh_chat_each_time() {
     let dir = tempfile::tempdir().unwrap();
     let sessions = Arc::new(SessionStore::open(dir.path()).await);
     let chat = Arc::new(
@@ -103,13 +103,13 @@ async fn automation_editor_post_is_one_row_and_delete_is_refused() {
     assert_eq!(created["automation_editor"], true);
     assert_ne!(created["agent_creator"], true);
     assert_eq!(created["surface_mode"], "chat");
-    assert_eq!(created["title"], "Automation Editor");
+    assert_eq!(created["title"], "New automation");
     assert_eq!(created["grant"]["profile"], "automation-editor");
 
     let (again_status, again_raw) = post(&app, body).await;
-    assert_eq!(again_status, StatusCode::OK, "{again_raw}");
+    assert_eq!(again_status, StatusCode::CREATED, "{again_raw}");
     let again: serde_json::Value = serde_json::from_str(&again_raw).unwrap();
-    assert_eq!(again["id"], id);
+    assert_ne!(again["id"], id);
 
     let both = r#"{"automation_editor":true,"agent_creator":true}"#;
     let (both_status, both_raw) = post(&app, both).await;
@@ -124,7 +124,7 @@ async fn automation_editor_post_is_one_row_and_delete_is_refused() {
     assert_eq!(visible.len(), 1);
     assert_eq!(
         visible[0].message.content,
-        "Which schedule should I list or change?"
+        liberado_main_agent::AUTOMATION_EDITOR_OPENER
     );
     let system = nodes
         .iter()
@@ -135,11 +135,70 @@ async fn automation_editor_post_is_one_row_and_delete_is_refused() {
         "{system:?}"
     );
     assert!(system.message.content.contains("Approve"), "{system:?}");
+    assert!(
+        system.message.content.contains("Central time"),
+        "{system:?}"
+    );
+    assert!(
+        !system.message.content.contains("Name (id):"),
+        "a new automation has no target seed: {system:?}"
+    );
 
-    let (del_status, del_raw) = delete(&app, &format!("/api/conversations/{id}")).await;
-    assert_eq!(del_status, StatusCode::CONFLICT, "{del_raw}");
-    assert!(del_raw.contains("cannot be deleted"), "{del_raw}");
-    assert!(sessions.session(ulid).await.unwrap().automation_editor);
+    let (del_status, _) = delete(&app, &format!("/api/conversations/{id}")).await;
+    assert_eq!(del_status, StatusCode::NO_CONTENT);
+    assert!(sessions.session(ulid).await.is_none());
+}
+
+#[tokio::test]
+async fn an_edit_post_hides_the_target_in_the_system_prompt() {
+    let dir = tempfile::tempdir().unwrap();
+    let sessions = Arc::new(SessionStore::open(dir.path()).await);
+    let chat = Arc::new(
+        ChatSessions::new(
+            sessions.clone(),
+            Executor::new(
+                Arc::new(MockProvider::with_script("mock", vec![])),
+                Budget::default(),
+            ),
+            Arc::new(NoopRuntime),
+        )
+        .with_profile_resolver(Arc::new(|name: &str| {
+            Ok(SessionGrant {
+                profile: Some(name.to_owned()),
+                delegation: Some(false),
+                ..SessionGrant::default()
+            })
+        })),
+    );
+    let state = Arc::new(crate::state::AppState::for_test(
+        sessions,
+        Some(chat.clone()),
+        dir.path().to_path_buf(),
+    ));
+    let app = router(state);
+    let body = r#"{"automation_editor":true,"target":{"name":"morning","enabled":true,"schedule_text":"Every day at 6:30 AM","cron_expr":"0 30 12 * * * *","timezone":"America/Chicago","description":"Sends a reminder."}}"#;
+    let (status, raw) = post(&app, body).await;
+    assert_eq!(status, StatusCode::CREATED, "{raw}");
+    let created: serde_json::Value = serde_json::from_str(&raw).unwrap();
+    assert_eq!(created["title"], "Edit morning");
+    let ulid =
+        liberado_conversation_store::Ulid::from_str(created["id"].as_str().unwrap()).unwrap();
+    let nodes = chat.history_nodes(ulid).await.unwrap();
+    let visible: Vec<_> = nodes
+        .iter()
+        .filter(|node| !matches!(node.author, liberado_conversation_store::Author::System))
+        .collect();
+    assert_eq!(visible.len(), 1);
+    assert_eq!(
+        visible[0].message.content,
+        liberado_main_agent::AUTOMATION_EDITOR_OPENER
+    );
+    let system = nodes
+        .iter()
+        .find(|node| matches!(node.author, liberado_conversation_store::Author::System))
+        .unwrap();
+    assert!(system.message.content.contains("Name (id): morning."));
+    assert!(system.message.content.contains("Every day at 6:30 AM"));
 }
 
 #[tokio::test]
@@ -175,8 +234,7 @@ async fn editor_open_and_a_later_turn_resolve_without_a_topology_row() {
         ),
         crate::surfaces::ProfileCatalog::memory(Arc::new(cfg)),
     );
-    let (id, created) = chat.open_automation_editor().await.unwrap();
-    assert!(created);
+    let id = chat.open_automation_editor(None).await.unwrap();
     let header = sessions.session(id).await.unwrap();
     assert!(header.automation_editor);
     assert!(!header.agent_creator);

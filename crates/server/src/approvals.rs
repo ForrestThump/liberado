@@ -40,11 +40,12 @@ impl ApprovalHub {
             .background_session()
             .await
             .map(|id| id.to_string());
+        let book = crate::schedule_card_text::load_schedule_book();
         self.resolver
             .list_for_session(session_id, bound.as_deref())
             .await
             .iter()
-            .map(card_from_proposal)
+            .map(|proposal| card_from_proposal(proposal, book.as_ref()))
             .collect()
     }
 }
@@ -103,19 +104,30 @@ fn permission_zone(proposal: &Proposal) -> Option<String> {
     }
 }
 
-fn card_from_proposal(proposal: &Proposal) -> ApprovalCard {
+fn card_from_proposal(
+    proposal: &Proposal,
+    book: Option<&crate::schedule_card_text::ScheduleBook>,
+) -> ApprovalCard {
     let action = recorded_action(proposal, Utc::now());
     let pending = action == "pending";
     ApprovalCard {
         id: proposal.id.clone(),
         title: "Permission".into(),
-        summary: proposal.rationale.clone(),
+        summary: card_summary(proposal, book),
         options: crate::schedule_cards::card_options(proposal),
         pending,
         decision: (!pending).then(|| action.to_string()),
         decision_label: (!pending).then(|| decided_phrase(action).to_string()),
         created_at: proposal.created.to_rfc3339(),
     }
+}
+
+fn card_summary(
+    proposal: &Proposal,
+    book: Option<&crate::schedule_card_text::ScheduleBook>,
+) -> String {
+    book.and_then(|book| crate::schedule_card_text::proposal_schedule_summary(proposal, book))
+        .unwrap_or_else(|| proposal.rationale.clone())
 }
 
 /// Build the shared resolver and hub, and point chat at the binding snapshot.

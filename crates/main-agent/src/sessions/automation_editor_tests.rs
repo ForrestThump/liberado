@@ -13,7 +13,8 @@ use serde_json::json;
 use super::super::TurnSettings;
 use super::{
     AUTOMATION_EDITOR_OPENER, AUTOMATION_EDITOR_PROFILE, AUTOMATION_EDITOR_SYSTEM_PROMPT,
-    AUTOMATION_EDITOR_TITLE, SCHEDULE_PROPOSAL_ACK,
+    EditorTarget, SCHEDULE_PROPOSAL_ACK, editor_chat_title, editor_system_prompt,
+    editor_target_context,
 };
 use crate::ChatSessions;
 use crate::face::{
@@ -68,7 +69,7 @@ fn the_editor_profile_is_not_an_agent_creator() {
 async fn editor_catalog_is_the_four_tools_and_another_profile_does_not_see_them() {
     let store = Arc::new(SessionStore::new());
     let sessions = sessions(store);
-    let (id, _) = sessions.open_automation_editor().await.unwrap();
+    let id = sessions.open_automation_editor(None).await.unwrap();
     let editor = sessions.build_face_runtime(
         "user",
         id,
@@ -103,31 +104,70 @@ async fn editor_catalog_is_the_four_tools_and_another_profile_does_not_see_them(
 }
 
 #[test]
-fn editor_prompt_quotes_local_time_and_keeps_cron_in_utc() {
+fn editor_prompt_quotes_central_time_and_keeps_cron_in_utc() {
     assert!(
         AUTOMATION_EDITOR_SYSTEM_PROMPT.contains("local_time"),
         "{AUTOMATION_EDITOR_SYSTEM_PROMPT}"
     );
     assert!(AUTOMATION_EDITOR_SYSTEM_PROMPT.contains("timezone"));
     assert!(AUTOMATION_EDITOR_SYSTEM_PROMPT.contains("UTC"));
+    assert!(AUTOMATION_EDITOR_SYSTEM_PROMPT.contains("Central time"));
+    assert!(AUTOMATION_EDITOR_SYSTEM_PROMPT.contains("service restarts"));
+    assert!(AUTOMATION_EDITOR_SYSTEM_PROMPT.contains("first assistant message"));
+    assert!(AUTOMATION_EDITOR_SYSTEM_PROMPT.contains("already given"));
     assert!(
         AUTOMATION_EDITOR_SYSTEM_PROMPT.contains("Do not present the UTC hour as the local time")
     );
+    assert_eq!(
+        AUTOMATION_EDITOR_OPENER,
+        "What automation changes do you want to make?"
+    );
+}
+
+fn sample_target() -> EditorTarget {
+    EditorTarget {
+        name: "morning".into(),
+        enabled: true,
+        schedule_text: "Every day at 6:30 AM".into(),
+        cron_expr: "0 30 12 * * * *".into(),
+        timezone: "America/Chicago".into(),
+        description: "Sends a reminder listing calendar events.".into(),
+    }
+}
+
+#[test]
+fn edit_context_names_the_schedule_and_new_has_no_seed() {
+    let target = sample_target();
+    let context = editor_target_context(&target);
+    assert!(context.contains("Name (id): morning."));
+    assert!(context.contains("Every day at 6:30 AM"));
+    assert!(context.contains("0 30 12 * * * *"));
+    assert!(context.contains("America/Chicago"));
+    assert!(context.contains("Sends a reminder listing calendar events."));
+    assert!(context.contains("already given"));
+    let seeded = editor_system_prompt(Some(&target));
+    assert!(seeded.contains("Name (id): morning."));
+    assert!(seeded.starts_with(AUTOMATION_EDITOR_SYSTEM_PROMPT));
+    let fresh = editor_system_prompt(None);
+    assert!(!fresh.contains("Name (id):"));
+    assert_eq!(editor_chat_title(None), "New automation");
+    assert_eq!(editor_chat_title(Some(&target)), "Edit morning");
 }
 
 #[tokio::test]
-async fn open_is_a_singleton_and_seeds_one_opener() {
+async fn each_open_is_a_new_chat_and_seeds_one_opener() {
     let store = Arc::new(SessionStore::new());
     let sessions = sessions(store);
-    let (id, created) = sessions.open_automation_editor().await.unwrap();
-    let (again, created_again) = sessions.open_automation_editor().await.unwrap();
-    assert!(created);
-    assert!(!created_again);
-    assert_eq!(id, again);
+    let id = sessions.open_automation_editor(None).await.unwrap();
+    let again = sessions
+        .open_automation_editor(Some(sample_target()))
+        .await
+        .unwrap();
+    assert_ne!(id, again);
     let header = sessions.store.header(id).await.unwrap();
     assert!(header.automation_editor);
     assert!(!header.agent_creator);
-    assert_eq!(header.title.as_deref(), Some(AUTOMATION_EDITOR_TITLE));
+    assert_eq!(header.title.as_deref(), Some("New automation"));
     assert_eq!(
         header.grant.profile.as_deref(),
         Some(AUTOMATION_EDITOR_PROFILE)
@@ -143,13 +183,21 @@ async fn open_is_a_singleton_and_seeds_one_opener() {
         .collect();
     assert_eq!(visible.len(), 1);
     assert_eq!(visible[0].message.content, AUTOMATION_EDITOR_OPENER);
-    sessions.open_automation_editor().await.unwrap();
-    let nodes = sessions.store.leaf_path(id, None).await.unwrap();
-    let visible: Vec<_> = nodes
+    let edit = sessions.store.header(again).await.unwrap();
+    assert_eq!(edit.title.as_deref(), Some("Edit morning"));
+    let edit_nodes = sessions.store.leaf_path(again, None).await.unwrap();
+    let edit_visible: Vec<_> = edit_nodes
         .iter()
         .filter(|node| !matches!(node.author, Author::System))
         .collect();
-    assert_eq!(visible.len(), 1);
+    assert_eq!(edit_visible.len(), 1);
+    assert_eq!(edit_visible[0].message.content, AUTOMATION_EDITOR_OPENER);
+    let system = edit_nodes
+        .iter()
+        .find(|node| matches!(node.author, Author::System))
+        .unwrap();
+    assert!(system.message.content.contains("Name (id): morning."));
+    assert!(!system.message.content.contains(AUTOMATION_EDITOR_OPENER));
 }
 
 #[tokio::test]
@@ -273,8 +321,7 @@ async fn a_later_editor_turn_keeps_schedule_tools_and_the_policy_grant() {
         })),
     );
     sessions.install_self_handle();
-    let (id, created) = sessions.open_automation_editor().await.unwrap();
-    assert!(created);
+    let id = sessions.open_automation_editor(None).await.unwrap();
 
     let first = sessions.turn_settings(id).await;
     let listed = Capability::ExecuteTool("automation-editor:list_schedules".into());

@@ -51,7 +51,7 @@ pub(super) struct ConversationCreate {
     pub explicit_surface: Option<SurfaceMode>,
     /// Singleton Agent Creator marker. Ordinary creates pass false.
     pub agent_creator: bool,
-    /// Singleton Automation Editor marker. Ordinary creates pass false.
+    /// Automation Editor chat. Ordinary creates pass false.
     pub automation_editor: bool,
     /// Root system text. `None` uses [`ChatSessions`]'s configured prompt.
     pub system_prompt: Option<String>,

@@ -617,11 +617,6 @@ async fn delete_conversation_inner(
     {
         return (status, body).into_response();
     }
-    if let Some(blocked) =
-        crate::chat_delete_guard::refuse_automation_editor(&state.sessions, id).await
-    {
-        return blocked.into_response();
-    }
 
     // Stop any turn still running for this conversation *before* removing it, so the two cannot
     // interleave. Turns outlive their connection now, which turned this from a narrow race into the

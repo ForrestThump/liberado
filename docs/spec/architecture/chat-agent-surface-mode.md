@@ -357,22 +357,25 @@ of the creator transcript, and TUI shelf parity.
 
 ## 6f. Automation Editor session
 
-The Automations page find-or-creates one **Automation Editor** conversation. A second open
-focuses the same row. The marker is `automation_editor: true` on the session and conversation
-headers (serde default false, omitted when false). A fork clears the flag. The title
-`"Automation Editor"` is display-only.
+Each Edit or New click on the Automations page creates a **new** Automation Editor
+chat. The marker is `automation_editor: true` on the session and conversation headers
+(serde default false, omitted when false). A fork clears the flag. The chat is a normal
+conversation (`surface_mode: chat`). It appears on the Chats shelf and can be deleted.
 
-The row runs as profile `automation-editor` with explicit `surface_mode: chat`. That name is
-not an agent-creator profile, so `create_agent` stays off. It is not listed in
-`[chat] agent_profiles`. `delegation` is false. The policy grant for component
-`automation-editor` is an empty capability list: the four schedule tools are face builtins,
-not policy capabilities. The profile has no `domain` and no vault write.
+The row runs as profile `automation-editor`. That name is not an agent-creator profile,
+so `create_agent` stays off. It is not listed in `[chat] agent_profiles`. `delegation`
+is false. The policy grant for component `automation-editor` is an empty capability
+list: the four schedule tools are face builtins, not policy capabilities. The profile
+has no `domain` and no vault write.
 
-`POST /api/conversations` accepts `automation_editor: true`. `profile` and `title` on that
-body are ignored. The response is 201 the first time and 200 when the flagged row already
-exists. Sending `agent_creator` and `automation_editor` together is 400. The opener
-`Which schedule should I list or change?` is appended only while every node is still
-`Author::System`.
+`POST /api/conversations` accepts `automation_editor: true`. `profile` and `title` on
+that body are ignored. Every such post returns 201 and a new id. Optional `target`
+names the automation an Edit click opened (name, schedule text, cron expression,
+timezone, description, enabled). That text is appended to the system prompt. It is not
+a visible turn. A new automation omits `target`. Sending `agent_creator` and
+`automation_editor` together is 400. The opener
+`What automation changes do you want to make?` is the first assistant message. The
+store writes it. There is no model call for that line.
 
 The face catalog for that flag is only `list_schedules`, `create_schedule`,
 `update_schedule`, and `delete_schedule`. Another profile does not see them.
@@ -383,19 +386,15 @@ without editing the file.
 The card offers **Approve** and **Deny**. A tap of once, session, or everywhere is treated
 as Approve for this one edit. None of those taps sets `approved_scope` or writes
 `grants.overlay.toml`. Approve calls `liberado_config`'s schedule writer once. Deny writes
-nothing. The model-facing success text is the writer's summary: the file is on disk, and
-cron and the schedules list keep the boot copy until the process is recreated. A refused
-write is the writer error, in plain text. `DELETE` of this row returns 409.
+nothing. When the current row and the proposed row can both be read, the card summary is
+a plain-English before/after (the cron English helper and the schedule description).
+Otherwise the card keeps the stored rationale. The model-facing success text is the
+writer's summary. The editor prompt tells the model to say the edit takes effect after
+the service restarts, and to quote Central time. A refused write is the writer error,
+in plain text.
 
-The Automations page stacks the schedule list above an editor dock. The dock posts
-`{"automation_editor": true}` once when it opens, then shows that session's transcript
-and its Approve/Deny cards. The composer posts `POST /api/chat` with that session id.
-The page states that edits land in `topology.toml` and that the schedule list updates
-after the service restarts. A refused write is an assistant message in the transcript.
-
-The sidebar does not list this conversation on the Chats shelf, the Agents shelf, or
-in search. If a row is still drawn, Delete is blocked the same way as the Agent Creator:
-the control stays, and it does not call `DELETE`.
+The Automations page is the schedule list only. Edit and New navigate to the new chat.
+The page does not embed a composer and does not state the restart rule.
 
 ## 7. Follow-ups
 

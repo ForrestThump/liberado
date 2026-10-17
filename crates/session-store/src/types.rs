@@ -88,7 +88,7 @@ pub struct SessionHeader {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub agent_creator: bool,
 
-    /// Singleton Automation Editor conversation. See
+    /// Automation Editor chat. See
     /// [`ConversationHeader::automation_editor`](liberado_conversation_store::ConversationHeader::automation_editor).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub automation_editor: bool,
@@ -254,7 +254,7 @@ pub struct NewSession {
     /// Singleton Agent Creator marker. Default false. Forks pass false even
     /// when the source is the creator — a branch is not a second creator.
     pub agent_creator: bool,
-    /// Singleton Automation Editor marker. Default false. A fork is not a
+    /// Automation Editor chat marker. Default false. A fork is not a
     /// second editor.
     pub automation_editor: bool,
     /// Coding project to stamp on the new session. Default none. A fork copies

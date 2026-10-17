@@ -43,13 +43,8 @@ pub(super) fn agent_delete_block(agent_creator: bool) -> Option<&'static str> {
     }
 }
 
-pub(super) fn delete_block_for(
-    id: &str,
-    creator_ids: &[String],
-    editor_ids: &[String],
-) -> Option<&'static str> {
-    let creator = agent_delete_block(creator_ids.iter().any(|row| row == id));
-    super::editor_row::with_editor_block(creator, id, editor_ids)
+pub(super) fn delete_block_for(id: &str, creator_ids: &[String]) -> Option<&'static str> {
+    agent_delete_block(creator_ids.iter().any(|row| row == id))
 }
 
 /// Profile names match the daemon: trimmed, non-empty, at most 64 characters,
@@ -370,12 +365,9 @@ mod tests {
     }
 
     #[test]
-    fn the_automation_editor_hides_delete() {
-        let editors = vec!["01EDITOR".to_string()];
-        let block = delete_block_for("01EDITOR", &[], &editors);
-        assert_eq!(block, Some("The Automation Editor cannot be deleted."));
-        assert_eq!(delete_block_for("01CHAT", &[], &editors), None);
-        let creator = delete_block_for("01CREATOR", &["01CREATOR".into()], &[]);
+    fn an_ordinary_chat_can_be_deleted_and_the_creator_cannot() {
+        assert_eq!(delete_block_for("01CHAT", &[]), None);
+        let creator = delete_block_for("01CREATOR", &["01CREATOR".into()]);
         assert_eq!(creator, Some(BUILTIN_AGENT_DELETE_REASON));
     }
 

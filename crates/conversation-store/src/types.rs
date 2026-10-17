@@ -307,7 +307,7 @@ pub struct ConversationHeader {
     /// byte-identical until a creator row is written. Not copied on fork.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub agent_creator: bool,
-    /// Singleton Automation Editor row. False on every other conversation.
+    /// Automation Editor chat. False on every other conversation.
     /// `#[serde(default)]` so older logs read as ordinary rows. False is omitted
     /// so those files stay byte-identical until an editor row is written.
     /// Not copied on fork. This name is not an agent-creator profile.
@@ -373,7 +373,7 @@ pub struct NewConversation {
     /// Stamp the singleton Agent Creator marker. Default false. See
     /// [`ConversationHeader::agent_creator`](ConversationHeader::agent_creator).
     pub agent_creator: bool,
-    /// Stamp the singleton Automation Editor marker. Default false. See
+    /// Stamp an Automation Editor chat. Default false. See
     /// [`ConversationHeader::automation_editor`](ConversationHeader::automation_editor).
     pub automation_editor: bool,
 }

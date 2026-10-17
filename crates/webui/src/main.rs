@@ -332,29 +332,31 @@ fn App() -> Element {
                             }
                         },
                         Route::Automations => rsx! {
-                            div {
-                                class: "automations-stack",
-                                div {
-                                    class: "automations-list-pane",
-                                    if is_narrow() {
-                                        GrokAppHeader {
-                                            shell_class: PHONE_SCROLL_APP_HEADER_CLASS,
-                                            bar_title: shell_route_title(route()),
-                                            drawer_open: drawer_open(),
-                                            sidebar_collapsed,
-                                            active_project,
-                                            active_profile,
-                                            active_surface,
-                                            on_profile_open: open_profile_picker,
-                                            incognito,
-                                            api_base: base.clone(),
-                                            active_conv_id,
-                                            tools_open,
-                                        }
+                            div { class: "grok-main-phone-scroll",
+                                if is_narrow() {
+                                    GrokAppHeader {
+                                        shell_class: PHONE_SCROLL_APP_HEADER_CLASS,
+                                        bar_title: shell_route_title(route()),
+                                        drawer_open: drawer_open(),
+                                        sidebar_collapsed,
+                                        active_project,
+                                        active_profile,
+                                        active_surface,
+                                        on_profile_open: open_profile_picker,
+                                        incognito,
+                                        api_base: base.clone(),
+                                        active_conv_id,
+                                        tools_open,
                                     }
-                                    crate::components::automations::Automations { api_base: base.clone() }
                                 }
-                                crate::components::automation_editor::AutomationEditor { api_base: base.clone() }
+                                crate::components::automations::Automations {
+                                    api_base: base.clone(),
+                                    active_conv_id,
+                                    active_surface,
+                                    list_epoch,
+                                    route,
+                                    collapsed: sidebar_collapsed,
+                                }
                             }
                         },
                         Route::Projects => rsx! {
