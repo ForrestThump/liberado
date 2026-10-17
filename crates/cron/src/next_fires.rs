@@ -81,7 +81,7 @@ fn display_local(local: &DateTime<Tz>) -> String {
     format!(
         "{weekday} {month} {day}, {hour}:{minute:02} {suffix} {zone}",
         weekday = short_weekday(local.weekday()),
-        month = short_month(local.month()),
+        month = local.format("%b"),
         day = local.day(),
         minute = local.minute(),
         zone = local.format("%Z"),
@@ -118,23 +118,6 @@ fn short_weekday(day: Weekday) -> &'static str {
         Weekday::Fri => "Fri",
         Weekday::Sat => "Sat",
         Weekday::Sun => "Sun",
-    }
-}
-
-fn short_month(month: u32) -> &'static str {
-    match month {
-        1 => "Jan",
-        2 => "Feb",
-        3 => "Mar",
-        4 => "Apr",
-        5 => "May",
-        6 => "Jun",
-        7 => "Jul",
-        8 => "Aug",
-        9 => "Sep",
-        10 => "Oct",
-        11 => "Nov",
-        _ => "Dec",
     }
 }
 

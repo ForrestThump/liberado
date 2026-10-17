@@ -35,6 +35,23 @@ fn tuesday_utc_in_summer_is_monday_evening_in_chicago() {
 }
 
 #[test]
+fn display_abbreviates_every_month() {
+    let fires = next_fires_after("0 0 20 15 * * *", "UTC", 12, at(2025, 12, 31)).unwrap();
+    let months = [
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    ];
+    assert_eq!(fires.len(), months.len());
+    for (fire, month) in fires.iter().zip(months) {
+        let needle = format!(" {month} 15, 8:00 PM UTC");
+        assert!(
+            fire.display().contains(&needle),
+            "{} does not contain {needle}",
+            fire.display()
+        );
+    }
+}
+
+#[test]
 fn an_empty_count_returns_no_fires() {
     let fires = next_fires_after("0 0 1 * * * *", "UTC", 0, at(2026, 1, 1)).unwrap();
     assert!(fires.is_empty());
