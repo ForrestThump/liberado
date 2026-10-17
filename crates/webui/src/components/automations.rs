@@ -24,6 +24,8 @@ pub(crate) struct ScheduleRow {
     schedule_text: String,
     #[serde(default)]
     timezone: String,
+    #[serde(default)]
+    next_fire: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -143,6 +145,16 @@ pub(crate) fn schedule_secondary(row: &ScheduleRow) -> String {
         row.cron_expr.clone()
     } else {
         format!("{} · {}", row.cron_expr, timezone)
+    }
+}
+
+/// `Next: Mon Oct 19, 8:00 PM CDT` when the API sent a fire time.
+pub(crate) fn next_fire_line(row: &ScheduleRow) -> Option<String> {
+    let text = row.next_fire.as_deref().unwrap_or("").trim();
+    if text.is_empty() {
+        None
+    } else {
+        Some(format!("Next: {text}"))
     }
 }
 
@@ -288,6 +300,7 @@ fn ScheduleRowView(row: ScheduleRow, open: OpenChat) -> Element {
     let primary = schedule_primary(&row);
     let secondary = schedule_secondary(&row);
     let body = schedule_body(&row);
+    let next_line = next_fire_line(&row);
     let show_profile = row.description.trim().is_empty();
     let profile = row
         .profile
@@ -320,6 +333,9 @@ fn ScheduleRowView(row: ScheduleRow, open: OpenChat) -> Element {
                 }
             }
             p { class: "automation-when", "{primary}" }
+            if let Some(next_line) = next_line {
+                p { class: "automation-next", "{next_line}" }
+            }
             if secondary != primary {
                 p { class: "automation-when-raw", "{secondary}" }
             }
@@ -349,6 +365,7 @@ mod tests {
             description: "Sends a reminder listing calendar events.".into(),
             schedule_text: "Every day at 6:30 AM".into(),
             timezone: "America/Chicago".into(),
+            next_fire: Some("Mon Oct 19, 8:00 PM CDT".into()),
         }
     }
 
@@ -360,6 +377,7 @@ mod tests {
         assert!(!rows[0].enabled);
         assert_eq!(rows[0].cron_expr, "0 * * * * * *");
         assert_eq!(schedule_snippet(&rows[0]), "ping");
+        assert!(next_fire_line(&rows[0]).is_none());
     }
 
     #[test]
@@ -374,6 +392,7 @@ mod tests {
             description: String::new(),
             schedule_text: String::new(),
             timezone: String::new(),
+            next_fire: None,
         };
         assert_eq!(schedule_snippet(&row), "habit-ping");
         assert_eq!(schedule_body(&row), "habit-ping");
@@ -391,6 +410,10 @@ mod tests {
             schedule_body(&row),
             "Sends a reminder listing calendar events."
         );
+        assert_eq!(
+            next_fire_line(&row).as_deref(),
+            Some("Next: Mon Oct 19, 8:00 PM CDT")
+        );
     }
 
     #[test]
@@ -405,6 +428,7 @@ mod tests {
             description: String::new(),
             schedule_text: String::new(),
             timezone: String::new(),
+            next_fire: None,
         };
         assert_eq!(schedule_primary(&row), "0 * * * * *");
         assert_eq!(schedule_secondary(&row), "0 * * * * *");

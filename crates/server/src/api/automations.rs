@@ -10,8 +10,9 @@ use super::schedule_description::schedule_description;
 
 /// `GET /api/schedules` — configured cron entries from in-memory topology (read-only).
 ///
-/// Does not expose `next_fire` until the cron runtime surfaces it; the field is always `null`.
-/// `description`, `schedule_text`, and `timezone` are additive display fields.
+/// `next_fire` is the next local reading in `topology.timezone`, or null when
+/// the expression does not parse. `description`, `schedule_text`, and `timezone`
+/// are additive display fields.
 pub async fn list_schedules(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let timezone = state.config.topology.timezone.clone();
     let schedules: Vec<serde_json::Value> = state
@@ -27,7 +28,7 @@ pub async fn list_schedules(State(state): State<Arc<AppState>>) -> impl IntoResp
                 "goal": s.goal,
                 "job": s.job,
                 "profile": s.profile,
-                "next_fire": serde_json::Value::Null,
+                "next_fire": next_fire_value(&s.cron_expr, &timezone),
                 "description": schedule_description(s),
                 "schedule_text": liberado_cron::cron_to_english(&s.cron_expr, &timezone),
                 "timezone": &timezone,
@@ -35,6 +36,16 @@ pub async fn list_schedules(State(state): State<Arc<AppState>>) -> impl IntoResp
         })
         .collect();
     Json(serde_json::json!({ "schedules": schedules }))
+}
+
+fn next_fire_value(expr: &str, timezone: &str) -> serde_json::Value {
+    match liberado_cron::next_fires(expr, timezone, 1) {
+        Ok(fires) => match fires.first() {
+            Some(fire) => serde_json::Value::String(fire.display()),
+            None => serde_json::Value::Null,
+        },
+        Err(_) => serde_json::Value::Null,
+    }
 }
 
 /// `GET /api/hooks` — webhook hook names from topology. Never returns secrets or `secret_ref`.

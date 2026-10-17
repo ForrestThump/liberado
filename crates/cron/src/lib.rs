@@ -23,7 +23,9 @@ use liberado_common::{Event, EventPayload, EventSource, event_source};
 use tokio::sync::mpsc::UnboundedSender;
 
 mod english;
+mod next_fires;
 pub use english::{cron_to_english, cron_to_english_at};
+pub use next_fires::{FireInstant, next_fires, next_fires_after};
 
 /// A configured cron schedule: fire on `cron_expr` and dispatch `goal` when it does. `cron_expr`
 /// uses the `cron` crate's 6/7-field syntax (**seconds first** — not standard 5-field cron), e.g.

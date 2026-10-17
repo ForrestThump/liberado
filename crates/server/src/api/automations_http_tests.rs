@@ -104,7 +104,8 @@ async fn list_schedules_reflects_topology_rows() {
     assert_eq!(rows[0]["name"], "morning-brief");
     assert_eq!(rows[0]["cron_expr"], "0 0 9 * * * *");
     assert_eq!(rows[0]["profile"], "maintenance");
-    assert!(rows[0]["next_fire"].is_null());
+    let fires = liberado_cron::next_fires("0 0 9 * * * *", "America/Chicago", 1).unwrap();
+    assert_eq!(rows[0]["next_fire"], fires[0].display());
     assert_eq!(rows[0]["timezone"], "America/Chicago");
     assert_eq!(
         rows[0]["description"],
