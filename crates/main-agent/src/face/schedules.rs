@@ -16,11 +16,14 @@ pub const UPDATE_SCHEDULE_TOOL_NAME: &str = "update_schedule";
 pub const DELETE_SCHEDULE_TOOL_NAME: &str = "delete_schedule";
 
 const SCHEDULE_FIELDS: &str = "\
-Fields match a topology.toml [[schedules]] row: name, enabled, cron_expr \
+Optional fields, all omitted unless you mean to change them: enabled, cron_expr \
 (7-field cron, seconds first, UTC), goal, pool, profile, deliver, max_turns, \
 job, habit_text, task_limit, capture_path, git_remote, git_branch, \
 git_user_name, git_user_email, run_on_start, direct. \
-update_schedule may set new_name to rename the row.";
+update_schedule is a field patch: only named keys change. \
+new_name renames the row. \
+To remove job, habit_text, or deliver, list that name in remove. \
+An empty goal is refused when the row has a job.";
 
 /// The three tools that file a card. `list_schedules` is not one of them.
 pub fn is_schedule_write_tool(name: &str) -> bool {
@@ -55,18 +58,13 @@ pub fn schedule_tool_defs() -> Vec<ToolDef> {
         ToolDef::new(
             UPDATE_SCHEDULE_TOOL_NAME,
             format!(
-                "File a card to replace the [[schedules]] row named `name`. \
+                "File a card to patch the [[schedules]] row named `name`. \
+                 Only keys you send are written. Every other field stays, \
+                 including job, habit_text, and deliver. \
                  The file is not changed until the human taps Approve. {SCHEDULE_FIELDS} \
-                 name is the row to replace."
+                 name is the row to patch."
             ),
-            json!({
-                "type": "object",
-                "properties": {
-                    "name": {"type": "string"},
-                    "new_name": {"type": "string"}
-                },
-                "required": ["name"]
-            }),
+            update_patch_schema(),
         ),
         ToolDef::new(
             DELETE_SCHEDULE_TOOL_NAME,
@@ -97,6 +95,36 @@ pub fn describe_schedule_edit(tool: &str, args: &Value) -> Result<String, String
         "{verb} schedule '{name}'. {}",
         field_sentence(args)
     ))
+}
+
+fn update_patch_schema() -> Value {
+    json!({
+        "type": "object",
+        "additionalProperties": true,
+        "properties": {
+            "name": {"type": "string"},
+            "new_name": {"type": "string"},
+            "enabled": {"type": "boolean"},
+            "cron_expr": {"type": "string"},
+            "goal": {"type": "string"},
+            "pool": {"type": "string"},
+            "profile": {"type": "string"},
+            "deliver": {"type": "boolean"},
+            "max_turns": {"type": "integer"},
+            "job": {"type": "string"},
+            "habit_text": {"type": "string"},
+            "task_limit": {"type": "integer"},
+            "capture_path": {"type": "string"},
+            "git_remote": {"type": "string"},
+            "git_branch": {"type": "string"},
+            "git_user_name": {"type": "string"},
+            "git_user_email": {"type": "string"},
+            "run_on_start": {"type": "boolean"},
+            "direct": {"type": "boolean"},
+            "remove": {"type": "array", "items": {"type": "string"}}
+        },
+        "required": ["name"]
+    })
 }
 
 fn required_name(tool: &str, args: &Value) -> Result<String, String> {
@@ -277,6 +305,36 @@ mod tests {
         let deleted =
             describe_schedule_edit(DELETE_SCHEDULE_TOOL_NAME, &json!({"name": "evening"})).unwrap();
         assert_eq!(deleted, "Delete schedule 'evening'.");
+    }
+
+    #[test]
+    fn update_schedule_schema_is_a_patch_of_optional_fields() {
+        let update = schedule_tool_defs()
+            .into_iter()
+            .find(|tool| tool.name == UPDATE_SCHEDULE_TOOL_NAME)
+            .expect("update tool");
+        assert!(
+            update.description.contains("patch"),
+            "{}",
+            update.description
+        );
+        assert!(
+            update.description.contains("only named keys")
+                || update.description.contains("Only keys"),
+            "{}",
+            update.description
+        );
+        let required = update.parameters["required"].as_array().expect("required");
+        assert_eq!(required, &vec![json!("name")]);
+        assert!(update.parameters["properties"].get("cron_expr").is_some());
+        assert!(update.parameters["properties"].get("remove").is_some());
+        assert!(
+            update.parameters["required"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|item| item != "cron_expr")
+        );
     }
 
     #[test]

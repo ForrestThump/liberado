@@ -21,7 +21,7 @@ const SECONDS_PER_DAY: u64 = 86_400;
 pub enum ScheduleWriteAction {
     /// A new `[[schedules]]` row was appended.
     Created,
-    /// The row with the given name was replaced.
+    /// The named keys on the row were patched. Other keys stayed.
     Updated,
     /// The row with the given name was removed.
     Deleted,
@@ -180,24 +180,24 @@ pub fn create_schedule(
     path: &Path,
     schedule: CronSchedule,
 ) -> Result<ScheduleWriteReport, ScheduleWriteError> {
-    apply_schedule_edit(path, ScheduleEdit::Create(schedule))
+    apply_schedule_edit(path, ScheduleEdit::Create(Box::new(schedule)))
 }
 
-/// Replace the `[[schedules]]` row named `name`.
+/// Patch the `[[schedules]]` row named `name`.
 ///
-/// `schedule.name` is the name written into the file. It may differ from `name`
-/// (a rename). A missing row is refused. Validation still rejects a name that
-/// collides with a different row.
+/// Starts from the row on disk and changes only the keys in `patch`. A missing
+/// row is refused. `patch` may rename the row. Validation still rejects a name
+/// that collides with a different row.
 pub fn update_schedule(
     path: &Path,
     name: &str,
-    schedule: CronSchedule,
+    patch: &crate::schedule_patch::SchedulePatch,
 ) -> Result<ScheduleWriteReport, ScheduleWriteError> {
     apply_schedule_edit(
         path,
         ScheduleEdit::Update {
             name: name.to_string(),
-            schedule,
+            patch: patch.clone(),
         },
     )
 }
@@ -213,10 +213,10 @@ pub fn delete_schedule(path: &Path, name: &str) -> Result<ScheduleWriteReport, S
 }
 
 enum ScheduleEdit {
-    Create(CronSchedule),
+    Create(Box<CronSchedule>),
     Update {
         name: String,
-        schedule: CronSchedule,
+        patch: crate::schedule_patch::SchedulePatch,
     },
     Delete {
         name: String,
@@ -311,7 +311,7 @@ fn splice_text(original: &str, edit: &ScheduleEdit) -> Result<String, String> {
         .map_err(|err| format!("topology.toml is not valid TOML: {err}"))?;
     match edit {
         ScheduleEdit::Create(schedule) => create_row(&mut doc, schedule)?,
-        ScheduleEdit::Update { name, schedule } => update_row(&mut doc, name, schedule)?,
+        ScheduleEdit::Update { name, patch } => update_row(&mut doc, name, patch)?,
         ScheduleEdit::Delete { name } => delete_row(&mut doc, name)?,
     }
     Ok(doc.to_string())
@@ -327,8 +327,11 @@ fn create_row(doc: &mut DocumentMut, schedule: &CronSchedule) -> Result<(), Stri
     Ok(())
 }
 
-fn update_row(doc: &mut DocumentMut, name: &str, schedule: &CronSchedule) -> Result<(), String> {
-    let table = schedule_table(schedule)?;
+fn update_row(
+    doc: &mut DocumentMut,
+    name: &str,
+    patch: &crate::schedule_patch::SchedulePatch,
+) -> Result<(), String> {
     let array = schedules_mut(doc, false, name)?;
     let Some(index) = find_index(array, name) else {
         return Err(format!("schedule '{name}' was not found"));
@@ -336,10 +339,7 @@ fn update_row(doc: &mut DocumentMut, name: &str, schedule: &CronSchedule) -> Res
     let Some(slot) = array.get_mut(index) else {
         return Err(format!("schedule '{name}' was not found"));
     };
-    let decor = slot.decor().clone();
-    *slot = table;
-    *slot.decor_mut() = decor;
-    Ok(())
+    crate::schedule_patch::apply(slot, patch)
 }
 
 fn delete_row(doc: &mut DocumentMut, name: &str) -> Result<(), String> {
@@ -453,7 +453,10 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
 fn report(path: &Path, backup: PathBuf, edit: ScheduleEdit) -> ScheduleWriteReport {
     let (action, name) = match edit {
         ScheduleEdit::Create(schedule) => (ScheduleWriteAction::Created, schedule.name),
-        ScheduleEdit::Update { schedule, .. } => (ScheduleWriteAction::Updated, schedule.name),
+        ScheduleEdit::Update { name, patch } => (
+            ScheduleWriteAction::Updated,
+            patch.resulting_name(&name).to_string(),
+        ),
         ScheduleEdit::Delete { name } => (ScheduleWriteAction::Deleted, name),
     };
     ScheduleWriteReport {

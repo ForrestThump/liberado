@@ -33,8 +33,10 @@ use std::path::{Path, PathBuf};
 use liberado_common::{Capability, CapabilityCatalog, WriteClass, Zone};
 use thiserror::Error;
 
+mod schedule_patch;
 mod schedule_write;
 
+pub use schedule_patch::SchedulePatch;
 pub use schedule_write::{
     ScheduleWriteAction, ScheduleWriteError, ScheduleWriteReport, create_schedule, delete_schedule,
     schedule_topology_path, update_schedule,

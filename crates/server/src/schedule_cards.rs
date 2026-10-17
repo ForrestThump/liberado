@@ -12,8 +12,8 @@ use axum::response::IntoResponse;
 use chat_client_contract::{ApprovalOption, ApprovalResolveResponse};
 use liberado_common::{DecisionVia, Proposal, ProposedAction, ToolCall};
 use liberado_config::{
-    CronSchedule, ScheduleWriteError, ScheduleWriteReport, create_schedule, delete_schedule,
-    schedule_topology_path, update_schedule,
+    CronSchedule, SchedulePatch, ScheduleWriteError, ScheduleWriteReport, create_schedule,
+    delete_schedule, schedule_topology_path, update_schedule,
 };
 use liberado_conversation_store::Ulid;
 use liberado_main_agent::{
@@ -161,8 +161,8 @@ fn run_edit(path: &Path, call: &ToolCall) -> Result<ScheduleWriteReport, EditErr
         }
         UPDATE_SCHEDULE_TOOL_NAME => {
             let lookup = required_name(&call.args)?;
-            let schedule = schedule_from_args(&call.args)?;
-            update_schedule(path, &lookup, schedule).map_err(EditError::Write)
+            let patch = SchedulePatch::from_tool_args(&call.args).map_err(EditError::Shape)?;
+            update_schedule(path, &lookup, &patch).map_err(EditError::Write)
         }
         DELETE_SCHEDULE_TOOL_NAME => {
             let name = required_name(&call.args)?;

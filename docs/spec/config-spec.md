@@ -197,8 +197,11 @@ On apply, in order:
    mount (`/config:ro` in the homelab compose file) fails here.
 2. Copy the file to a sibling `topology.toml.bak-<utc>`. If the copy fails, stop. The original
    stays.
-3. Splice a `toml_edit` document. Touch only the `[[schedules]]` array: create a row, replace
-   the row with that name, or delete it. Leave comments and every other table in place. A
+3. Splice a `toml_edit` document. Touch only the `[[schedules]]` array: create a row, patch
+   the named keys of the row with that name, or delete it. An update starts from the existing
+   row and changes only the keys in the patch. It keeps every other key, unknown keys, and
+   comments. Removing `job`, `habit_text`, or `deliver` requires those names in `remove`.
+   An empty `goal` on a job row is refused. Leave comments and every other table in place. A
    serde rewrite of the whole file is not allowed — it drops the comment blocks and can move
    keys relative to tables.
 4. Load the edited text with `load_config` (the boot loader) and therefore `Config::validate`

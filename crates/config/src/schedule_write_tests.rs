@@ -5,6 +5,7 @@ use super::{
     utc_stamp_from_unix,
 };
 use crate::CronSchedule;
+use crate::schedule_patch::SchedulePatch;
 
 const POLICY: &str = r#"
 [[zones]]
@@ -180,14 +181,23 @@ fn create_schedule_inserts_one_row_and_keeps_comments() {
     });
 }
 
+fn strings(pairs: &[(&str, &str)]) -> SchedulePatch {
+    let mut patch = SchedulePatch::default();
+    for (key, value) in pairs {
+        patch.set_string(*key, value);
+    }
+    patch
+}
+
 #[test]
-fn update_schedule_replaces_the_named_row() {
+fn update_schedule_patches_only_the_named_fields() {
     with_config(|dir| {
         let before = read_topology(dir);
-        let mut schedule = bare("morning");
-        schedule.goal = "review the queue".into();
-        schedule.cron_expr = "0 30 8 * * * *".into();
-        let report = update_schedule(&topology(dir), "morning", schedule).expect("update");
+        let patch = strings(&[
+            ("goal", "review the queue"),
+            ("cron_expr", "0 30 8 * * * *"),
+        ]);
+        let report = update_schedule(&topology(dir), "morning", &patch).expect("update");
         let after = read_topology(dir);
 
         assert_eq!(report.action, ScheduleWriteAction::Updated);
@@ -225,11 +235,8 @@ fn delete_schedule_removes_the_named_row() {
 fn validate_failure_leaves_the_original_and_keeps_the_backup() {
     with_config(|dir| {
         let before = read_topology(dir);
-        let mut schedule = bare("evening");
-        schedule.goal = "close the day".into();
-        schedule.cron_expr = "0 0 20 * * * *".into();
-        schedule.profile = Some("no-such-profile".into());
-        let err = update_schedule(&topology(dir), "evening", schedule).unwrap_err();
+        let patch = strings(&[("profile", "no-such-profile")]);
+        let err = update_schedule(&topology(dir), "evening", &patch).unwrap_err();
         let message = err.to_string();
         assert!(message.contains("failed validation"), "{message}");
         assert!(message.contains("profile"), "{message}");
