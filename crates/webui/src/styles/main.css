@@ -346,6 +346,7 @@ body {
 /* Read-only Tools list. It scrolls inside the popover, not in the transcript. */
 .tools-popover-wrap {
     position: relative;
+    z-index: 40;
 }
 
 .tools-btn {
@@ -504,22 +505,8 @@ body {
     transition: width 0.2s ease;
 }
 
-/* On phone widths an open sidebar takes over the whole content area rather than squeezing chat into
-   a sliver beside it — the standard mobile chat-app pattern (list OR chat, never both). The header's
-   menu button stays above it (.app-header is a sibling with a higher z-index), so it also closes.
-
-   Must stay AFTER the .sidebar rule above. It used to sit further up the file and win on the extra
-   specificity of `:not(.sidebar-collapsed)`; with that class gone the selectors tie, so source order
-   is all that decides, and from up there the 280px silently won on phones. */
-@media (max-width: 768px) {
-    .sidebar {
-        position: absolute;
-        inset: 0;
-        width: 100%;
-        z-index: 5;
-        border-right: none;
-    }
-}
+/* Phone drawer lives in the Grok block (`phone-sidebar-drawer`). An earlier full-bleed rule here
+   also matched `.sidebar-collapsed`, so the closed rail stayed on screen and covered the chat. */
 
 .sidebar-header {
     display: flex;
@@ -951,50 +938,62 @@ body {
 
 }
 
-/* ── Response copy button (mobile only) ──────────────────────────────────── */
+/* ── Response copy button ────────────────────────────────────────────────── */
 
-/* The button is desktop-hidden by default. A desktop user has the broader toolbar; on a phone the
-   only way to grab a response is the markdown selection, which breaks links and strips code-block
-   structure, so a single tap target is worth the screen real estate it costs. */
+/* Always in the row for user and assistant messages. A phone or a touch screen keeps it
+   visible. A desktop hover pointer fades it until the row is hovered or focused, so the
+   transcript stays quiet until the reader wants the control. */
 .response-copy-row {
-    display: none;
+    display: flex;
+    justify-content: flex-start;
+    margin-top: 0.25rem;
 }
 
-@media (max-width: 768px) {
+.bubble-row.user .response-copy-row {
+    justify-content: flex-end;
+}
+
+.response-copy-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+    padding: 0.25rem 0.6rem;
+    border: 1px solid var(--lib-border);
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--lib-surface) 60%, transparent);
+    color: var(--lib-sidebar-text);
+    font-family: inherit;
+    font-size: 0.6875rem;
+    cursor: pointer;
+    transition: background 0.12s, color 0.12s, border-color 0.12s, opacity 0.12s;
+}
+
+.response-copy-btn:hover,
+.response-copy-btn:active,
+.response-copy-btn:focus-visible {
+    background: color-mix(in srgb, var(--lib-surface) 90%, transparent);
+    color: var(--lib-chat-assistant-text);
+    border-color: var(--lib-sidebar-border-unfocused);
+}
+
+.response-copy-btn:focus-visible {
+    outline: 2px solid var(--lib-accent);
+    outline-offset: 2px;
+}
+
+.response-copy-btn .icon {
+    width: 0.75rem;
+    height: 0.75rem;
+}
+
+@media (hover: hover) and (min-width: 769px) {
     .response-copy-row {
-        /* Sits below the bubble, inside the same .bubble-wrap so it stays left-aligned with the
-           bubble's leading edge — a row outside the wrap would float to the screen edge on narrow
-           viewports and look like it belonged to the next message. */
-        display: flex;
-        justify-content: flex-start;
-        margin-top: 0.25rem;
+        opacity: 0;
     }
 
-    .response-copy-btn {
-        display: inline-flex;
-        align-items: center;
-        gap: 0.3rem;
-        padding: 0.25rem 0.6rem;
-        border: 1px solid var(--lib-border);
-        border-radius: 999px;
-        background: color-mix(in srgb, var(--lib-surface) 60%, transparent);
-        color: var(--lib-sidebar-text);
-        font-family: inherit;
-        font-size: 0.6875rem;
-        cursor: pointer;
-        transition: background 0.12s, color 0.12s, border-color 0.12s;
-    }
-
-    .response-copy-btn:hover,
-    .response-copy-btn:active {
-        background: color-mix(in srgb, var(--lib-surface) 90%, transparent);
-        color: var(--lib-chat-assistant-text);
-        border-color: var(--lib-sidebar-border-unfocused);
-    }
-
-    .response-copy-btn .icon {
-        width: 0.75rem;
-        height: 0.75rem;
+    .bubble-row:hover .response-copy-row,
+    .bubble-row:focus-within .response-copy-row {
+        opacity: 1;
     }
 }
 
@@ -1153,9 +1152,10 @@ body {
 
 .input-bar {
     display: flex;
-    align-items: flex-end;
-    gap: 0.5rem;
-    padding: 0.4rem 0.4rem 0.4rem 0.85rem;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.15rem;
+    padding: 0.45rem 0.55rem 0.35rem;
     border: 1px solid var(--lib-border);
     border-radius: 1.5rem;
     background: color-mix(in srgb, var(--lib-app-bg) 82%, var(--lib-surface));
@@ -1199,13 +1199,16 @@ body {
 
 .input-wrap {
     position: relative;
-    flex: 1;
+    flex: none;
     display: flex;
+    width: 100%;
     min-width: 0;
 }
 
 .input-wrap .input {
-    /* Transparent so the mirror behind it shows through; the pill `.input-bar` is the surface. */
+    /* Transparent so the mirror behind it shows through; the pill `.input-bar` is the surface.
+       Full width: the action row sits under this box, not beside it. */
+    width: 100%;
     background: transparent;
     border-color: transparent;
     position: relative;
@@ -2469,3 +2472,1496 @@ body {
     color: var(--lib-tool-err);
     font-size: 0.75rem;
 }
+
+/* -- Grok-style redesign ---------------------------------------------------
+ *
+ * The pre-existing styles above were organised around the old dashboard header + chat layout.
+ * The redesign commits to a Grok-like vertical rail on the left and a centered chat canvas with
+ * a thin composer toolbar. The selectors below are deliberately namespaced under `.app-layout`
+ * and `.grok-*` so they cannot accidentally override an old rule that still matters for the chat
+ * transcript itself. New tokens (`--dot-*`, `--grok-*`) live alongside the old `--lib-*` palette.
+ */
+
+:root {
+    --dot-accent: #f5a623;
+    --dot-orange: #f47b53;
+    --dot-green: #4caf50;
+    --dot-cyan: #3aa6c0;
+    --dot-neutral: #8c8c8c;
+
+    /* Shell colors (`--grok-rail-*`, `--grok-page-bg`, `--grok-card-*`) come from the
+       theme style block so Light and Nord are not pinned to the dark shell. */
+    --grok-row-gap: 0.25rem;
+    --grok-section-gap: 1.25rem;
+}
+
+/* -- Top header in Grok layout ---------------------------------------------- */
+
+.grok-header {
+    border-bottom: 1px solid var(--grok-rail-border);
+}
+
+.grok-header-inner {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    height: 3rem;
+    padding: 0 1rem;
+    width: 100%;
+}
+
+.grok-header-brand {
+    font-size: 1rem;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    color: var(--lib-chat-assistant-text);
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    margin-left: 0.5rem;
+}
+
+.grok-header-project {
+    font-size: 0.75rem;
+    line-height: 1.2;
+    color: var(--grok-subtitle);
+    border: 1px solid var(--grok-rail-border);
+    border-radius: 999px;
+    padding: 0.1rem 0.55rem;
+    max-width: 10rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* Shown only inside the phone query. On a desk the icon rail is the sidebar control. */
+.sidebar-menu-btn {
+    display: none;
+}
+
+.header-right-cluster {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex-shrink: 0;
+}
+
+.agent-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.3rem 0.7rem;
+    border: 1px solid var(--grok-rail-border);
+    border-radius: 999px;
+    background: var(--grok-rail-active);
+    color: var(--grok-rail-text);
+    font-family: inherit;
+    font-size: 0.8125rem;
+    cursor: pointer;
+    transition: background 0.12s, border-color 0.12s;
+}
+
+.agent-pill:hover {
+    background: var(--grok-rail-hover);
+    border-color: var(--lib-accent, #f5a623);
+}
+
+.agent-pill-dot {
+    display: inline-block;
+    width: 0.5rem;
+    height: 0.5rem;
+    border-radius: 999px;
+    background: var(--dot-accent);
+}
+
+.agent-pill-label {
+    font-weight: 500;
+}
+
+/* -- Sidebar (vertical rail) ------------------------------------------------ */
+
+.grok-layout .sidebar {
+    width: 260px;
+    flex-shrink: 0;
+    background: var(--grok-rail-bg);
+    color: var(--grok-rail-text);
+    border-right: 1px solid var(--grok-rail-border);
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    /* Above the chat pane (the composer is z-index 4) and below the header
+       (z-index 10) and modals (z-index 50). Visible overflow lets the theme
+       list hang into the chat. Hidden overflow clips that list at the rail
+       edge and leaves only its shadow. The phone drawer sets hidden again. */
+    position: relative;
+    z-index: 5;
+    overflow: visible;
+    font-size: 0.8125rem;
+}
+
+.sidebar-brand {
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+    padding: 0.5rem 0.75rem;
+    border-bottom: 1px solid var(--grok-rail-border);
+    flex-shrink: 0;
+}
+
+.sidebar-brand-btn {
+    background: none;
+    border: none;
+    padding: 0.25rem;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 0.5rem;
+    color: var(--grok-rail-text);
+    transition: background 0.12s;
+}
+
+.sidebar-brand-btn:hover {
+    background: var(--grok-rail-hover);
+}
+
+.sidebar-brand-glyph {
+    width: 1.25rem;
+    height: 1.25rem;
+}
+
+.sidebar-icon-btn {
+    background: none;
+    border: none;
+    width: 2rem;
+    height: 2rem;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 0.5rem;
+    color: var(--grok-rail-text-muted);
+    transition: background 0.12s, color 0.12s;
+}
+
+.sidebar-icon-btn:hover {
+    background: var(--grok-rail-hover);
+    color: var(--grok-rail-text);
+}
+
+.sidebar-search {
+    padding: 0.5rem 0.75rem;
+    flex-shrink: 0;
+}
+
+.sidebar-search-input {
+    width: 100%;
+    padding: 0.4rem 0.6rem;
+    border: 1px solid var(--grok-rail-border);
+    border-radius: 0.5rem;
+    background: var(--grok-rail-active);
+    color: var(--grok-rail-text);
+    font-family: inherit;
+    font-size: 0.8125rem;
+    outline: none;
+}
+
+.sidebar-search-input:focus {
+    border-color: var(--lib-accent, #f5a623);
+}
+
+.sidebar-search-input::placeholder {
+    color: var(--grok-rail-text-muted);
+}
+
+/* -- Primary nav (Chat, Imagine, Library, Automations) ---------------------- */
+
+.sidebar-nav {
+    display: flex;
+    flex-direction: column;
+    gap: 0.125rem;
+    padding: 0.5rem 0.5rem;
+    border-bottom: 1px solid var(--grok-rail-border);
+    flex-shrink: 0;
+}
+
+.sidebar-nav-row {
+    display: flex;
+    align-items: center;
+    gap: 0.65rem;
+    width: 100%;
+    padding: 0.45rem 0.65rem;
+    border: none;
+    background: transparent;
+    color: var(--grok-rail-text);
+    font-family: inherit;
+    font-size: 0.8125rem;
+    text-align: left;
+    cursor: pointer;
+    border-radius: 0.5rem;
+    transition: background 0.12s, color 0.12s;
+}
+
+.sidebar-nav-row:hover {
+    background: var(--grok-rail-hover);
+}
+
+.sidebar-nav-row.active {
+    background: var(--grok-rail-active);
+    color: var(--grok-prompt);
+}
+
+.sidebar-nav-row .sidebar-icon {
+    flex-shrink: 0;
+    color: var(--grok-rail-text);
+}
+
+.sidebar-nav-row.active .sidebar-icon {
+    color: var(--grok-prompt);
+}
+
+.sidebar-nav-label {
+    flex: 1;
+    font-weight: 500;
+}
+
+/* -- Body scroll container ------------------------------------------------ */
+
+.sidebar-scroll {
+    flex: 1;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: var(--grok-section-gap);
+    padding: 0.75rem 0;
+}
+
+.sidebar-section {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+}
+
+.sidebar-section-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.25rem 0.75rem 0.25rem 0.75rem;
+    flex-shrink: 0;
+}
+
+.sidebar-section-toggle {
+    background: none;
+    border: none;
+    padding: 0;
+    cursor: pointer;
+    color: var(--grok-rail-text-muted);
+    font-family: inherit;
+    font-size: 0.6875rem;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+}
+
+.sidebar-section-toggle:hover {
+    color: var(--grok-rail-text);
+}
+
+.sidebar-section-label {
+    font-size: 0.6875rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--grok-rail-text-muted);
+}
+
+.sidebar-section-add {
+    background: transparent;
+    border: none;
+    color: var(--grok-rail-text-muted);
+    font-family: inherit;
+    font-size: 1.125rem;
+    line-height: 1;
+    cursor: pointer;
+    padding: 0 0.25rem;
+}
+
+.sidebar-section-add:hover {
+    color: var(--grok-rail-text);
+}
+
+.sidebar-subheader {
+    padding: 0.25rem 0.75rem 0.125rem 0.75rem;
+    color: var(--grok-rail-text-muted);
+    font-size: 0.6875rem;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+}
+
+.grok-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+}
+
+.grok-row {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    display: flex;
+    align-items: center;
+    min-width: 0;
+}
+
+.grok-row-btn {
+    width: auto;
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.35rem 0.75rem;
+    border: none;
+    background: transparent;
+    color: var(--grok-rail-text);
+    font-family: inherit;
+    font-size: 0.8125rem;
+    cursor: pointer;
+    text-align: left;
+    border-radius: 0.5rem;
+    transition: background 0.12s, color 0.12s;
+}
+
+.grok-row-btn:hover {
+    background: var(--grok-rail-hover);
+    color: var(--grok-prompt);
+}
+
+.grok-row-active .grok-row-btn,
+.grok-row-active .grok-row-btn:hover {
+    background: var(--grok-rail-active);
+    color: var(--grok-prompt);
+}
+
+.grok-row-dot {
+    width: 0.45rem;
+    height: 0.45rem;
+    border-radius: 999px;
+    display: inline-block;
+    flex-shrink: 0;
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--grok-rail-text) 12%, transparent);
+}
+
+.grok-row-title {
+    flex: 1;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.grok-row-time {
+    color: var(--grok-rail-text-muted);
+    font-size: 0.6875rem;
+    flex-shrink: 0;
+}
+
+/* Always visible. A phone cannot rely on hover to reach rename or delete. */
+.grok-row-options {
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 2rem;
+    height: 2rem;
+    margin-right: 0.25rem;
+    border: none;
+    border-radius: 0.375rem;
+    background: transparent;
+    color: var(--grok-rail-text-muted);
+    font-family: inherit;
+    font-size: 1.125rem;
+    line-height: 1;
+    cursor: pointer;
+}
+
+.grok-row-options:hover,
+.grok-row-options[aria-expanded="true"] {
+    background: var(--grok-rail-hover);
+    color: var(--grok-prompt);
+}
+
+.grok-row-options:focus-visible {
+    outline: 2px solid var(--lib-accent);
+    outline-offset: 2px;
+}
+
+.conv-menu-btn:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+}
+
+.grok-row .sidebar-icon {
+    flex-shrink: 0;
+}
+
+/* -- Show more row (Agents catch-all) --------------------------------------- */
+
+.sidebar-show-more {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    width: 100%;
+    background: transparent;
+    border: none;
+    color: var(--grok-rail-text-muted);
+    font-family: inherit;
+    font-size: 0.75rem;
+    cursor: pointer;
+    padding: 0.25rem 0.75rem;
+    text-align: left;
+    white-space: nowrap;
+}
+
+.sidebar-show-more:hover {
+    color: var(--grok-rail-text);
+}
+
+/* -- Sidebar empty/error --------------------------------------------------- */
+
+.sidebar-empty {
+    padding: 0.25rem 0.75rem;
+    color: var(--grok-rail-text-muted);
+    font-size: 0.75rem;
+}
+
+.sidebar-error {
+    padding: 0.5rem 0.75rem;
+    border-top: 1px solid var(--grok-rail-border);
+    color: var(--grok-rail-text-muted);
+    font-size: 0.75rem;
+    flex-shrink: 0;
+}
+
+.sidebar-retry-btn {
+    margin-top: 0.4rem;
+    padding: 0.25rem 0.6rem;
+    border: 1px solid var(--grok-rail-border);
+    border-radius: 0.4rem;
+    background: transparent;
+    color: var(--grok-rail-text);
+    font-family: inherit;
+    font-size: 0.75rem;
+    cursor: pointer;
+}
+
+.sidebar-retry-btn:hover {
+    border-color: var(--lib-accent, #f5a623);
+    color: var(--grok-prompt);
+}
+
+/* phone-scroll-header */
+/* On a phone the Liberado bar scrolls with content. A fixed FAB keeps the drawer reachable. */
+@media (max-width: 768px) {
+    .app-header-desktop-root {
+        display: none;
+    }
+
+    .app-header.app-header-in-scroll {
+        position: static;
+        top: auto;
+        z-index: auto;
+        flex-shrink: 0;
+        backdrop-filter: none;
+        background: var(--lib-app-bg);
+    }
+
+    /* The menu button stays in the flex row. The title follows it. The fixed
+       FAB covers that button and remains after the row scrolls away. */
+    .app-header-in-scroll .grok-header-inner {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+    }
+
+    .app-header-in-scroll .grok-header-brand {
+        position: static;
+        margin-left: 0;
+    }
+
+    .messages .app-header-in-scroll {
+        margin: -0.5rem -0.75rem 0;
+        width: calc(100% + 1.5rem);
+    }
+
+    .phone-menu-fab {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        position: fixed;
+        top: calc(env(safe-area-inset-top, 0px) + 0.25rem);
+        left: max(0.5rem, env(safe-area-inset-left, 0px));
+        z-index: 35;
+        width: 2.5rem;
+        height: 2.5rem;
+        padding: 0;
+        border: 1px solid var(--grok-rail-border);
+        border-radius: 0.5rem;
+        background: color-mix(in srgb, var(--lib-app-bg) 92%, transparent);
+        color: var(--grok-rail-text);
+        box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+        cursor: pointer;
+        touch-action: manipulation;
+    }
+
+    .phone-menu-fab:hover,
+    .phone-menu-fab:focus-visible {
+        background: var(--grok-rail-hover);
+        color: var(--grok-prompt);
+    }
+
+    .grok-main-phone-scroll {
+        display: flex;
+        flex-direction: column;
+        flex: 1;
+        min-height: 0;
+        min-width: 0;
+        overflow-y: auto;
+        overscroll-behavior: contain;
+        -webkit-overflow-scrolling: touch;
+    }
+
+    .grok-main-phone-scroll > .grok-page {
+        flex: none;
+        min-height: 0;
+        overflow: visible;
+    }
+
+    .grok-main-phone-scroll .grok-page-body,
+    .grok-main-phone-scroll .plugin-list {
+        overflow: visible;
+        flex: none;
+        max-height: none;
+    }
+}
+
+@media (min-width: 769px) {
+    .phone-menu-fab {
+        display: none;
+    }
+
+    .grok-main-phone-scroll {
+        display: contents;
+    }
+}
+/* phone-scroll-header-end */
+
+/* phone-sidebar-drawer */
+/* At max-width 768px the sidebar is an overlay. Closed (`.sidebar-collapsed`) it takes no
+   width, so the greeting and composer use the full screen. Open (`.drawer-open`) it is fixed
+   over the chat (the shell header scrolls away, so the drawer is full-height). From 769px up
+   the in-flow icon rail is unchanged. */
+@media (max-width: 768px) {
+    .app {
+        --phone-header-offset: calc(3rem + env(safe-area-inset-top, 0px));
+    }
+
+    .app-header {
+        z-index: 30;
+    }
+
+    .grok-header-inner {
+        height: auto;
+        min-height: var(--phone-header-offset);
+        padding-top: env(safe-area-inset-top, 0px);
+        padding-left: max(0.5rem, env(safe-area-inset-left, 0px));
+        padding-right: max(0.5rem, env(safe-area-inset-right, 0px));
+    }
+
+    .sidebar-menu-btn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        flex-shrink: 0;
+        width: 2.5rem;
+        height: 2.5rem;
+        min-width: 2.5rem;
+        min-height: 2.5rem;
+        padding: 0;
+        border: none;
+        border-radius: 0.5rem;
+        background: transparent;
+        color: var(--grok-rail-text);
+        cursor: pointer;
+        touch-action: manipulation;
+    }
+
+    .sidebar-menu-btn:hover,
+    .sidebar-menu-btn:focus-visible {
+        background: var(--grok-rail-hover);
+        color: var(--grok-prompt);
+    }
+
+    .grok-layout .sidebar.sidebar-collapsed {
+        display: none;
+        width: 0;
+        max-width: 0;
+        padding: 0;
+        border: none;
+    }
+
+    .sidebar-backdrop {
+        position: fixed;
+        top: 0;
+        right: 0;
+        bottom: 0;
+        left: 0;
+        z-index: 20;
+        margin: 0;
+        padding: 0;
+        border: none;
+        background: rgba(0, 0, 0, 0.55);
+        cursor: pointer;
+    }
+
+    .grok-layout.drawer-open .sidebar {
+        position: fixed;
+        /* `inset` first: the shorthand clears every edge, then the offsets below stick. */
+        inset: auto;
+        top: 0;
+        right: auto;
+        bottom: 0;
+        left: 0;
+        z-index: 25;
+        padding-top: env(safe-area-inset-top, 0px);
+        /* Keep the overlay clipped. The theme list on a phone is position:fixed,
+           so it still paints above the chat. */
+        overflow: hidden;
+        width: min(20rem, calc(100vw - 2.5rem));
+        max-width: min(20rem, calc(100vw - 2.5rem));
+        height: auto;
+        max-height: 100dvh;
+        border-right: 1px solid var(--grok-rail-border);
+        box-shadow: 8px 0 28px rgba(0, 0, 0, 0.45);
+        padding-bottom: env(safe-area-inset-bottom, 0px);
+        padding-left: env(safe-area-inset-left, 0px);
+        animation: sidebar-drawer-in 0.18s ease;
+    }
+
+    .grok-main {
+        padding-left: env(safe-area-inset-left, 0px);
+        padding-right: env(safe-area-inset-right, 0px);
+    }
+
+    .grok-chat-empty {
+        padding: 1rem 0.75rem;
+        gap: 1rem;
+        min-height: 0;
+        min-width: 0;
+        width: 100%;
+    }
+
+    .composer-dock {
+        padding-bottom: max(0.5rem, env(safe-area-inset-bottom, 0px));
+        padding-left: max(0.5rem, env(safe-area-inset-left, 0px));
+        padding-right: max(0.5rem, env(safe-area-inset-right, 0px));
+    }
+
+    .sidebar-icon-btn,
+    .sidebar-brand-btn,
+    .sidebar-section-add,
+    .sidebar-shelf-btn,
+    .sidebar-menu-btn,
+    .toolbar-icon-btn,
+    .toolbar-mode-btn,
+    .input-toolbar .send-btn,
+    .incognito-btn,
+    .tools-btn,
+    .profile-chip,
+    .grok-row-options {
+        min-width: 2.5rem;
+        min-height: 2.5rem;
+    }
+
+    .sidebar-nav-row,
+    .grok-row-btn,
+    .sidebar-section-toggle {
+        min-height: 2.5rem;
+    }
+}
+
+@media (max-width: 768px) and (prefers-reduced-motion: reduce) {
+    .grok-layout.drawer-open .sidebar {
+        animation: none;
+    }
+}
+
+@keyframes sidebar-drawer-in {
+    from {
+        transform: translateX(-100%);
+    }
+    to {
+        transform: translateX(0);
+    }
+}
+
+/* phone-sidebar-drawer-end */
+
+/* -- Main canvas in Grok layout -------------------------------------------- */
+
+.grok-main {
+    flex: 1;
+    min-width: 0;
+    background: var(--grok-page-bg);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+/* Centered empty-chat landing. The prompt sits in the middle of the canvas, the composer below
+   the prompt — a calmer take than the old text-on-left layout. */
+
+.grok-chat-empty {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 1.5rem;
+    padding: 2rem;
+}
+
+.grok-chat-empty-prompt {
+    font-size: 1.5rem;
+    font-weight: 500;
+    color: var(--grok-prompt);
+    text-align: center;
+    max-width: 100%;
+    overflow-wrap: break-word;
+}
+
+/* The composer shell when empty. Treats the input as a big centered card, not a thin strip at the
+   bottom — the same control, just framed differently while the conversation is empty. The
+   rebalance is CSS-only; the actual input/text signals stay in `Chat`. */
+
+.grok-chat-empty-shell {
+    width: 100%;
+    max-width: 640px;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+/* -- Composer action row (under the text box) ------------------------------ */
+
+.input-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+    width: 100%;
+    min-width: 0;
+    padding: 0;
+    margin-top: 0;
+}
+
+.toolbar-icon-btn {
+    background: transparent;
+    border: none;
+    color: var(--grok-rail-text);
+    width: 2rem;
+    height: 2rem;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 0.5rem;
+    cursor: pointer;
+    transition: background 0.12s, color 0.12s;
+}
+
+.toolbar-icon-btn:hover {
+    background: var(--grok-rail-hover);
+    color: var(--grok-prompt);
+}
+
+.toolbar-mode-btn,
+.toolbar-mode-btn-static {
+    background: transparent;
+    border: 1px solid var(--grok-rail-border);
+    color: var(--grok-rail-text);
+    font-family: inherit;
+    font-size: 0.8125rem;
+    font-weight: 500;
+    border-radius: 999px;
+    padding: 0.3rem 0.7rem;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+}
+
+/* The model chip shares the action row with the icon buttons. It may shrink so
+   the row stays one line on a phone. Icon buttons keep their 2.5rem hit target. */
+.input-toolbar .toolbar-mode-btn,
+.input-toolbar .toolbar-mode-btn-static {
+    min-width: 0;
+    flex-shrink: 1;
+}
+
+.toolbar-mode-btn:hover {
+    border-color: var(--lib-accent, #f5a623);
+    color: var(--grok-prompt);
+}
+
+.toolbar-mode-caret {
+    font-size: 0.625rem;
+    line-height: 1;
+    color: var(--grok-rail-text-muted);
+}
+
+.toolbar-mode-label {
+    max-width: 7.5rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.composer-project {
+    margin: 0;
+    padding: 0 0.25rem 0.35rem;
+    font-size: 0.75rem;
+    line-height: 1.35;
+    color: var(--grok-subtitle);
+}
+
+.composer-project-detach {
+    margin-left: 0.5rem;
+    border: none;
+    background: transparent;
+    color: var(--grok-subtitle);
+    font: inherit;
+    text-decoration: underline;
+    cursor: pointer;
+}
+
+.project-chats {
+    margin: 0 0 0.25rem 1.25rem;
+    padding: 0;
+}
+
+.toolbar-spacer {
+    flex: 1;
+}
+
+/* Send / Stop buttons share the rest of the toolbar's vertical baseline. The up-arrow is the
+   "send" glyph — lighter than the old word "Send", matches the icons around it. */
+
+.input-toolbar .send-btn {
+    width: 2.25rem;
+    height: 2.25rem;
+    border-radius: 999px;
+    border: none;
+    background: var(--lib-accent, #f5a623);
+    color: var(--lib-app-bg);
+    font-family: inherit;
+    font-size: 0.9375rem;
+    font-weight: 700;
+    line-height: 1;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 0.12s, opacity 0.12s;
+}
+
+.input-toolbar .send-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+
+.input-toolbar .send-btn.stop {
+    background: transparent;
+    border: 1px solid var(--grok-rail-border);
+    color: var(--grok-rail-text);
+}
+
+/* -- Generic page surfaces (Imagine, Library, Automations, Projects, Plugins) -- */
+
+.grok-page {
+    flex: 1;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+}
+
+.grok-page-empty {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    padding: 3rem 2rem;
+    gap: 0.75rem;
+}
+
+.grok-page-eyebrow {
+    color: var(--grok-rail-text-muted);
+    font-size: 0.6875rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+}
+
+.grok-page-title {
+    font-size: 1.5rem;
+    font-weight: 500;
+    color: var(--grok-prompt);
+    margin: 0;
+}
+
+.grok-page-subtitle {
+    font-size: 0.875rem;
+    color: var(--grok-subtitle);
+    max-width: 480px;
+    line-height: 1.5;
+}
+
+.grok-page-header {
+    padding: 2rem 2rem 1rem;
+    border-bottom: 1px solid var(--grok-rail-border);
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+.grok-page-body {
+    padding: 1rem 2rem;
+    flex: 1;
+    overflow: auto;
+}
+
+/* Plugins: the server list is the page scrollport. It takes the space under the
+   header and scrolls only when the rows do not fit. Other pages keep the shared
+   body scroll above. */
+.plugins-page {
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+}
+
+.plugins-page .grok-page-header {
+    flex-shrink: 0;
+}
+
+.plugins-page .grok-page-body {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    overflow: hidden;
+}
+
+.plugins-page .plugin-list {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+}
+
+.project-list,
+.plugin-list,
+.automation-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+.automation-row {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+    padding: 0.75rem 0.9rem;
+    border: 1px solid var(--grok-rail-border);
+    border-radius: 0.75rem;
+}
+
+.automation-row-main {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+}
+
+.automation-toolbar {
+    display: flex;
+    justify-content: flex-end;
+    margin: 0 0 0.75rem;
+}
+
+.automation-row-actions {
+    display: flex;
+    flex-shrink: 0;
+    margin-left: auto;
+}
+
+.automation-name {
+    min-width: 0;
+    font-weight: 500;
+}
+
+@media (max-width: 420px) {
+    .automation-row-main {
+        align-items: flex-start;
+    }
+
+    .automation-toolbar,
+    .automation-row-actions {
+        width: 100%;
+    }
+
+    .automation-toolbar {
+        justify-content: stretch;
+    }
+
+    .automation-toolbar .approval-option,
+    .automation-row-actions .approval-option {
+        width: 100%;
+        min-height: 2.5rem;
+    }
+}
+
+.automation-badge {
+    font-size: 0.75rem;
+    padding: 0.15rem 0.5rem;
+    border-radius: 999px;
+    border: 1px solid var(--grok-rail-border);
+}
+
+.automation-badge.on {
+    color: var(--lib-accent);
+    border-color: var(--lib-accent);
+}
+
+.automation-badge.off {
+    color: var(--grok-subtitle);
+}
+
+.automations-page {
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+}
+
+.automations-page .grok-page-header {
+    flex-shrink: 0;
+}
+
+.automations-page .grok-page-body {
+    flex: 1;
+    min-height: 0;
+    overflow: auto;
+}
+
+.automations-page .grok-page-empty {
+    flex: 1;
+    min-height: 0;
+}
+
+
+/* phone-scroll-follow */
+/* Later rules of equal specificity would keep an inner scrollport. `.plugins-page
+   .plugin-list` scrolls on its own. These selectors come after those scrollports,
+   so the phone top bar — the first child of the scroller — moves with the content. */
+@media (max-width: 768px) {
+    .messages > .app-header.app-header-in-scroll,
+    .grok-main-phone-scroll > .app-header.app-header-in-scroll {
+        position: static;
+        top: auto;
+        z-index: auto;
+    }
+
+    .grok-main-phone-scroll > .grok-page,
+    .grok-main-phone-scroll > .plugins-page,
+    .grok-main-phone-scroll > .library-page,
+    .grok-main-phone-scroll > .projects-page,
+    .grok-main-phone-scroll > .imagine-page {
+        flex: 0 0 auto;
+        height: auto;
+        max-height: none;
+        overflow: visible;
+    }
+
+    .grok-main-phone-scroll .grok-page-body,
+    .grok-main-phone-scroll .plugins-page .grok-page-body,
+    .grok-main-phone-scroll .plugins-page .plugin-list,
+    .grok-main-phone-scroll .library-page .grok-page-body,
+    .grok-main-phone-scroll .projects-page .grok-page-body {
+        overflow: visible;
+        flex: 0 0 auto;
+        max-height: none;
+        height: auto;
+        min-height: 0;
+    }
+}
+
+/* phone-scroll-follow-end */
+
+.automation-when {
+    margin: 0;
+    color: var(--grok-prompt);
+    font-size: 0.9375rem;
+}
+
+.automation-when-raw {
+    margin: 0;
+    color: var(--grok-subtitle);
+    font-size: 0.75rem;
+}
+
+.automation-description,
+.automation-snippet,
+.automation-meta {
+    margin: 0;
+    color: var(--grok-subtitle);
+    font-size: 0.8125rem;
+}
+
+.automation-description,
+.automation-snippet {
+    line-height: 1.45;
+    overflow-wrap: anywhere;
+}
+
+.library-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(16rem, 1fr));
+    gap: 0.75rem;
+}
+
+.library-row {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    padding: 0.75rem 0.9rem;
+    border: 1px solid var(--grok-rail-border);
+    border-radius: 0.75rem;
+    min-width: 0;
+}
+
+.library-title {
+    font-weight: 500;
+    color: var(--grok-prompt);
+    overflow-wrap: anywhere;
+}
+
+.project-select {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.75rem 0.9rem;
+    border: 1px solid var(--grok-rail-border);
+    border-radius: 0.75rem;
+    background: transparent;
+    color: var(--grok-prompt);
+    font-family: inherit;
+    text-align: left;
+    cursor: pointer;
+}
+
+.project-select.active {
+    border-color: var(--lib-accent);
+}
+
+.project-select-text {
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+}
+
+.project-select-name {
+    font-weight: 500;
+}
+
+.project-root,
+.project-status,
+.library-status,
+.library-meta,
+.plugin-status,
+.plugin-meta,
+.plugin-tools {
+    color: var(--grok-subtitle);
+    font-size: 0.8125rem;
+}
+
+.project-root,
+.plugin-tools {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.plugin-row {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    padding: 0.75rem 0;
+    border-bottom: 1px solid var(--grok-rail-border);
+}
+
+.plugin-row-main {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+}
+
+.plugin-name {
+    font-weight: 500;
+    color: var(--grok-prompt);
+}
+
+.plugin-switch {
+    width: 2.5rem;
+    height: 1.4rem;
+    border-radius: 999px;
+    border: 1px solid var(--grok-rail-border);
+    background: transparent;
+    position: relative;
+    flex-shrink: 0;
+    cursor: pointer;
+}
+
+.plugin-switch::after {
+    content: "";
+    position: absolute;
+    top: 0.15rem;
+    left: 0.15rem;
+    width: 1rem;
+    height: 1rem;
+    border-radius: 999px;
+    background: var(--grok-subtitle);
+}
+
+.plugin-switch.on {
+    background: color-mix(in srgb, var(--lib-accent) 35%, transparent);
+}
+
+.plugin-switch.on::after {
+    left: 1.2rem;
+    background: var(--lib-accent);
+}
+
+/* ── Collapsed icon rail ──────────────────────────────────────────────────
+ *
+ * Each row is a square hit target for the matching primary nav item.
+ * `.grok-layout .sidebar` is 260px and beats a lone `.sidebar-collapsed`,
+ * so the live desktop width is the query below. The phone drawer query
+ * hides this rail.
+ */
+
+.sidebar-collapsed {
+    width: 44px;
+    background: var(--grok-rail-bg);
+    border-right: 1px solid var(--grok-rail-border);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 0.4rem 0;
+    gap: 0.15rem;
+    flex-shrink: 0;
+    overflow: hidden;
+}
+
+/* desktop-collapsed-rail */
+@media (min-width: 769px) {
+    .grok-layout .sidebar.sidebar-collapsed {
+        width: 44px;
+        min-width: 44px;
+        max-width: 44px;
+    }
+}
+
+.sidebar-rail-brand {
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    margin-bottom: 0.25rem;
+    padding: 0.25rem;
+    border-radius: 0.4rem;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.sidebar-rail-brand:hover {
+    background: var(--grok-rail-hover);
+}
+
+.sidebar-rail-btn {
+    background: transparent;
+    border: none;
+    width: 2rem;
+    height: 2rem;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 0.4rem;
+    color: var(--grok-rail-text-muted);
+    transition: background 0.12s, color 0.12s;
+}
+
+.sidebar-rail-btn:hover {
+    background: var(--grok-rail-hover);
+    color: var(--grok-prompt);
+}
+
+.sidebar-rail-btn.active {
+    background: var(--grok-rail-active);
+    color: var(--lib-accent, #f5a623);
+}
+
+.sidebar-rail-spacer {
+    flex: 1;
+}
+
+/* The collapse button in the brand row sits flush right and points the obvious
+   direction (left when expanded). */
+
+.sidebar-icon-btn.collapse-btn {
+    color: var(--grok-rail-text);
+}
+
+.sidebar-brand-spacer {
+    flex: 1;
+}
+
+/* ── Static (non-link) project rows ─────────────────────────────────────── */
+
+.grok-row-static {
+    cursor: default;
+}
+
+.grok-row-static-btn {
+    cursor: default;
+    color: var(--grok-rail-text);
+}
+
+.grok-row-static-btn:hover {
+    color: var(--grok-prompt);
+    background: var(--grok-rail-hover);
+}
+
+/* ── Theme picker popover ───────────────────────────────────────────────── */
+
+.theme-swatch-shell {
+    margin: 0.5rem 0.5rem 0.75rem 0.5rem;
+    border-top: 1px solid var(--grok-rail-border);
+    padding-top: 0.5rem;
+    position: relative;
+    display: flex;
+    justify-content: center;
+    flex-shrink: 0;
+}
+
+.theme-swatch-toggle {
+    background: transparent;
+    border: none;
+    color: var(--grok-rail-text-muted);
+    width: 2.25rem;
+    height: 2.25rem;
+    cursor: pointer;
+    border-radius: 0.5rem;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 0.12s, color 0.12s;
+}
+
+.theme-swatch-toggle:hover,
+.theme-swatch-toggle.open {
+    background: var(--grok-rail-hover);
+    color: var(--grok-prompt);
+}
+
+.theme-swatch-pop {
+    position: absolute;
+    left: calc(100% + 0.5rem);
+    bottom: 0;
+    min-width: 12rem;
+    padding: 0.35rem;
+    background: var(--grok-rail-active);
+    border: 1px solid var(--grok-card-border);
+    border-radius: 0.5rem;
+    box-shadow: 0 4px 18px rgba(0, 0, 0, 0.35);
+    display: flex;
+    flex-direction: column;
+    gap: 0.1rem;
+    z-index: 30;
+}
+
+.theme-swatch-row {
+    background: transparent;
+    border: none;
+    color: var(--grok-rail-text);
+    text-align: left;
+    display: flex;
+    align-items: center;
+    gap: 0.55rem;
+    padding: 0.35rem 0.55rem;
+    border-radius: 0.35rem;
+    font-family: inherit;
+    font-size: 0.8125rem;
+    cursor: pointer;
+}
+
+.theme-swatch-row:hover {
+    background: var(--grok-rail-hover);
+    color: var(--grok-prompt);
+}
+
+.theme-swatch-row.active {
+    color: var(--lib-accent, #f5a623);
+}
+
+.theme-swatch-dot {
+    width: 0.55rem;
+    height: 0.55rem;
+    border-radius: 999px;
+    display: inline-block;
+    flex-shrink: 0;
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--grok-rail-text) 16%, transparent);
+}
+
+.theme-swatch-name {
+    text-transform: capitalize;
+}
+
+@media (max-width: 768px) {
+    .theme-swatch-shell {
+        margin: 0.5rem;
+    }
+    .theme-swatch-pop {
+        position: fixed;
+        left: 50%;
+        bottom: 1rem;
+        transform: translateX(-50%);
+        min-width: 14rem;
+    }
+}
+

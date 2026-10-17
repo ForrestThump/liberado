@@ -8,13 +8,13 @@ use super::message_row::MessageList;
 use crate::components::chat_submission::unanswered_turn_note;
 use crate::components::chat_submission::{bubble_role, profile_switched_note, submission_text};
 use crate::components::model_browser::ModelBrowser;
+use crate::components::model_chip::ModelChip;
 use crate::components::picker::Picker;
 use crate::components::profile_browser::ProfileBrowser;
-use crate::components::profile_surface::show_profile_browser;
 #[cfg(target_arch = "wasm32")]
-use crate::components::profile_surface::{
-    handle_slash_for_surface, maybe_open_profile_browser, set_surface,
-};
+use crate::components::profile_surface::{handle_slash_for_surface, maybe_open_profile_browser};
+use crate::components::profile_surface::{profile_for_new_chat, set_surface, show_profile_browser};
+use crate::components::project_data::ProjectContextChip;
 use crate::components::slash_palette::SlashPalette;
 use crate::icons::{IconGlasses, IconStop};
 
@@ -31,12 +31,19 @@ mod chat_tool_events;
 pub(super) mod chat_fold;
 
 #[path = "chat_reasoning.rs"]
-mod chat_reasoning;
+pub(super) mod chat_reasoning;
 
 #[path = "chat_scroll.rs"]
 mod chat_scroll;
 
 use self::chat_scroll::TranscriptScroll;
+
+#[path = "chat_input.rs"]
+mod chat_input;
+
+use chat_input::resize_input_to_content;
+#[cfg(any(test, target_arch = "wasm32"))]
+use chat_input::{stream_url, truncate_title};
 
 // ── Data types ──────────────────────────────────────────────────────────────
 
@@ -92,11 +99,13 @@ impl ChatMsg {
 
     fn from_wire(msg: &ChatMessage) -> Self {
         let role = bubble_role(&msg.role);
+        let (content, reasoning) =
+            chat_reasoning::fold_thinking(&msg.content, msg.reasoning.as_deref());
         ChatMsg {
             role,
-            content: msg.content.clone(),
+            content,
             thinking_steps: Vec::new(),
-            reasoning: chat_reasoning::kept(msg.reasoning.as_deref()),
+            reasoning,
         }
     }
 }
@@ -190,6 +199,10 @@ pub fn Chat(
     active_surface: Signal<Option<chat_client_contract::SurfaceMode>>,
     /// Bumped when `create_agent` succeeds so the Agents shelf refetches.
     list_epoch: Signal<u64>,
+    /// Coding project remembered for this window. The chip says it is not sent on a chat message.
+    active_project: Signal<Option<String>>,
+    /// On a phone, the Liberado bar rendered at the top of `#chat-messages`.
+    phone_scroll_header: Option<Element>,
 ) -> Element {
     // The SSE listener that writes this is wasm-only. Native still has the prop.
     #[cfg(not(target_arch = "wasm32"))]
@@ -325,8 +338,8 @@ pub fn Chat(
                 approvals.set(Vec::new());
                 session.set(None);
                 // A new chat starts on the default grant; leaving a stale chip up would claim
-                // otherwise.
-                active_profile.set(None);
+                // otherwise. Same value Chats + and `/new` assign.
+                active_profile.set(profile_for_new_chat());
                 set_surface(active_surface, None);
             }
             // No conversation id. An incognito chat never has one (it is not in the sidebar, so
@@ -386,6 +399,13 @@ pub fn Chat(
             messages.set(Vec::new());
             approvals.set(Vec::new());
             session.set(None);
+            // Do not read `active_profile` here: a read would re-run this effect when the
+            // chip changes and would wipe a profile the history load just applied.
+            active_profile.set(profile_for_new_chat());
+            set_surface(
+                active_surface,
+                Some(chat_client_contract::SurfaceMode::Chat),
+            );
             if active_conv_id.read().is_some() {
                 active_conv_id.set(None);
             }
@@ -488,6 +508,11 @@ pub fn Chat(
                             approvals.set(Vec::new());
                             session.set(None);
                             active_conv_id.set(None);
+                            active_profile.set(profile_for_new_chat());
+                            set_surface(
+                                active_surface,
+                                Some(chat_client_contract::SurfaceMode::Chat),
+                            );
                         }
                         CommandResult::ChatCleared => {
                             messages.set(Vec::new());
@@ -569,6 +594,7 @@ pub fn Chat(
             // Unlike the profile, this is honoured with or without a session id — a model is a
             // property of a turn. Taken (not read) so it applies once and then lives on the log.
             pending_model.take(),
+            active_project.read().clone(),
         );
         #[cfg(not(target_arch = "wasm32"))]
         {
@@ -629,14 +655,18 @@ pub fn Chat(
 
                 div {
                     class: "messages",
-                    // `MessageList` scrolls `#response-copy-{index}` into this node.
                     id: "chat-messages",
+                    if let Some(header) = phone_scroll_header.clone() {
+                        {header}
+                    }
                     TranscriptScroll { follow: transcript_follow, messages, sending }
                     if messages.read().is_empty() && conv_id.is_none() && !sending() && ghost_session.read().is_none() {
+                        // Grok-style centered landing: a single prompt to focus the user. The
+                        // composer lives below this block (same textarea, same submit), so the
+                        // chrome stays unified and there is only one place to wire a send.
                         div {
-                            class: "empty-state",
-                            p { "Start a conversation with Liberado." }
-                            p { "It has access to your tools." }
+                            class: "grok-chat-empty",
+                            div { class: "grok-chat-empty-prompt", "What should we explore?" }
                         }
                     }
                     MessageList { messages }
@@ -696,12 +726,10 @@ pub fn Chat(
                         // creates the conversation.
                         conversation: session(),
                         on_switched: move |model: String| {
-                            // Held for the next message when there is no conversation yet. Dropping it
-                            // here is what sent the pick to the daemon-wide default instead, which
-                            // retuned every other chat.
-                            if session().is_none() {
-                                pending_model.set(Some(model.clone()));
-                            }
+                            // Held for the next message. Dropping it here is what sent the pick to the
+                            // daemon-wide default instead, which retuned every other chat. An existing
+                            // chat keeps it too, so the chip matches the pick before the log is stamped.
+                            pending_model.set(Some(model.clone()));
                             messages.write().push(ChatMsg {
                                 role: "system",
                                 content: format!(
@@ -716,6 +744,12 @@ pub fn Chat(
 
                 div {
                     class: "composer-dock",
+                    ProjectContextChip {
+                        api_base: base_for_models.clone(),
+                        active_project,
+                        session,
+                        list_epoch,
+                    }
                     if palette_open() {
                     SlashPalette {
                         input: input(),
@@ -832,73 +866,67 @@ pub fn Chat(
                             },
                         }
                     }
-                    if sending() {
+                    // Action row under the text box. Attach, model, mic, voice, and send
+                    // share this row so the textarea spans the pill.
+                    div {
+                        class: "input-toolbar",
                         button {
-                            class: "stop-btn",
+                            class: "toolbar-icon-btn",
                             r#type: "button",
-                            onclick: move |_| stop_stream(),
-                            title: "Stop generating",
-                            IconStop {}
+                            title: "Attach files",
+                            "aria-label": "Attach files",
+                            crate::icons::IconAttach {}
                         }
-                    }
-                    button {
-                        class: "send-btn",
-                        r#type: "submit",
-                        disabled: sending(),
-                        "Send"
+                        ModelChip {
+                            api_base: base_for_models.clone(),
+                            pending: pending_model,
+                            profile: active_profile,
+                            session,
+                            sending,
+                            on_open: move |_| model_browser_open.set(true),
+                        }
+                        div { class: "toolbar-spacer" }
+                        button {
+                            class: "toolbar-icon-btn",
+                            r#type: "button",
+                            title: "Voice mode",
+                            "aria-label": "Voice mode",
+                            crate::icons::IconMic {}
+                        }
+                        button {
+                            class: "toolbar-icon-btn",
+                            r#type: "button",
+                            title: "Dictation",
+                            "aria-label": "Dictation",
+                            crate::icons::IconVoice {}
+                        }
+                        if sending() {
+                            button {
+                                class: "send-btn stop",
+                                r#type: "button",
+                                onclick: move |evt: MouseEvent| {
+                                    evt.prevent_default();
+                                    stop_stream();
+                                },
+                                title: "Stop generating",
+                                IconStop {}
+                            }
+                        } else {
+                            button {
+                                class: "send-btn",
+                                r#type: "submit",
+                                disabled: input.read().trim().is_empty(),
+                                title: "Send",
+                                "aria-label": "Send",
+                                "↑"
+                            }
+                        }
                     }
                     }
                 }
             }
         }
 }
-
-// ── Input auto-grow (browser-only) ──────────────────────────────────────────
-
-/// Grow the `#chat-input` textarea to fit its content. Resets to `auto` first so deleting text
-/// shrinks it back down (reading `scroll_height` without that reset would just echo the current,
-/// already-grown height). The CSS `max-height` on `.input` silently caps the visible box and
-/// turns on the scrollbar once content exceeds it — this only needs to set the natural height.
-#[cfg(target_arch = "wasm32")]
-fn resize_input_to_content() {
-    use wasm_bindgen::JsCast;
-
-    let Some(el) = web_sys::window()
-        .and_then(|w| w.document())
-        .and_then(|d| d.get_element_by_id("chat-input"))
-        .and_then(|el| el.dyn_into::<web_sys::HtmlElement>().ok())
-    else {
-        return;
-    };
-    let style = el.style();
-    let _ = style.set_property("height", "auto");
-    let _ = style.set_property("height", &format!("{}px", el.scroll_height()));
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn resize_input_to_content() {}
-
-/// Put the caret back in the chat box after tapping a palette row.
-///
-/// The row's `onmousedown` already prevents the blur on desktop, but a touch tap on a phone can
-/// still take focus away — and being dropped out of the input right after asking for a completion is
-/// the opposite of helpful.
-#[cfg(target_arch = "wasm32")]
-fn focus_chat_input() {
-    use wasm_bindgen::JsCast;
-
-    let Some(el) = web_sys::window()
-        .and_then(|w| w.document())
-        .and_then(|d| d.get_element_by_id("chat-input"))
-        .and_then(|el| el.dyn_into::<web_sys::HtmlElement>().ok())
-    else {
-        return;
-    };
-    let _ = el.focus();
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn focus_chat_input() {}
 
 // ── SSE streaming (browser-only) ────────────────────────────────────────────
 
@@ -938,67 +966,6 @@ struct StreamTargets {
     list_epoch: Signal<u64>,
 }
 
-/// The `/api/chat/stream` URL for one turn.
-///
-/// Deliberately **not** `cfg(wasm32)` and deliberately pure: this is where a request parameter goes
-/// missing, and on the wasm-only path that can only be found by deploying and watching what the
-/// daemon does. `message` arrives already percent-encoded, since the caller needs it anyway.
-///
-/// The shape that matters: `session` / `incognito` / `profile` are mutually exclusive — the first
-/// says *which* conversation, the other two say how to open one — while `model` is orthogonal to all
-/// three and appends to whichever applied.
-fn stream_url(
-    api_base: &str,
-    encoded_message: &str,
-    session: Option<&str>,
-    incognito: bool,
-    pending_profile: Option<&str>,
-    pending_model: Option<&str>,
-) -> String {
-    let mut url = match session {
-        Some(id) => format!("{api_base}/api/chat/stream?message={encoded_message}&session={id}"),
-        // `true`, not `1`: axum's `Query` deserializes a bool through `FromStr`, which accepts only
-        // "true"/"false". `incognito=1` fails the whole extraction, so the request would 400 and the
-        // chat would simply not answer — a loud failure, but for a silly reason.
-        None if incognito => {
-            format!("{api_base}/api/chat/stream?message={encoded_message}&incognito=true")
-        }
-        // A profile picked before the first message has nowhere to be applied yet — the session it
-        // scopes does not exist. Carrying it on the request that *creates* the session is what makes
-        // the first turn run under it, which for a "basic chat" profile is the turn that matters.
-        None if pending_profile.is_some() => format!(
-            "{api_base}/api/chat/stream?message={encoded_message}&profile={}",
-            urlencoding::encode(pending_profile.unwrap_or_default())
-        ),
-        None => format!("{api_base}/api/chat/stream?message={encoded_message}"),
-    };
-    // Appended rather than folded into the match above, which is the whole point: as a fifth arm it
-    // would be dropped silently whenever a session id or a profile was also present — and a model
-    // that goes missing does not fail, it just answers on the wrong one.
-    if let Some(model) = pending_model.filter(|m| !m.is_empty()) {
-        url.push_str(&format!("&model={}", urlencoding::encode(model)));
-    }
-    url
-}
-
-/// Truncate a conversation title to 60 bytes, walking back to a char boundary so the cut never
-/// lands mid-codepoint (any curly quote, em-dash, etc.), and appending an ellipsis.
-///
-/// Bytes, not chars, because this is a display cap; the walk-back is what makes the byte cut
-/// safe for non-ASCII text.
-fn truncate_title(text: &str) -> String {
-    let t = text.trim();
-    if t.len() > 60 {
-        let mut cut = 57;
-        while cut > 0 && !t.is_char_boundary(cut) {
-            cut -= 1;
-        }
-        format!("{}…", &t[..cut])
-    } else {
-        t.to_string()
-    }
-}
-
 #[cfg(target_arch = "wasm32")]
 fn open_stream(
     api_base: &str,
@@ -1011,6 +978,7 @@ fn open_stream(
     // A model chosen for this turn. Unlike the profile, applies whether or not the conversation
     // already exists — see `ChatRequest::model`.
     pending_model: Option<String>,
+    pending_project: Option<String>,
 ) {
     let encoded = urlencoding::encode(message);
     let url = stream_url(
@@ -1033,6 +1001,7 @@ fn open_stream(
         api_base_for_title,
         opened_incognito,
         None,
+        pending_project,
     );
 }
 
@@ -1051,6 +1020,7 @@ fn attach_stream(api_base: &str, conv_id: &str, targets: StreamTargets, api_base
         api_base_for_title,
         false,
         Some(conv_id.to_string()),
+        None,
     );
 }
 
@@ -1066,6 +1036,7 @@ fn connect_stream(
     // Conversation to re-read from the store if this stream ends badly. Set for an *attach*, where
     // the answer may already be on disk and the stream failing says nothing about the turn.
     reconcile: Option<String>,
+    pending_project: Option<String>,
 ) {
     let StreamTargets {
         mut messages,
@@ -1122,8 +1093,14 @@ fn connect_stream(
         let on_token = Closure::<dyn FnMut(MessageEvent)>::new(move |e: MessageEvent| {
             if let Some(data) = e.data().as_string() {
                 messages.with_mut(|m| match m.last_mut() {
-                    Some(last) if last.role == "assistant" => last.content.push_str(&data),
-                    _ => m.push(ChatMsg::new_assistant(data)),
+                    Some(last) if last.role == "assistant" => {
+                        chat_reasoning::append_token(last, &data);
+                    }
+                    _ => {
+                        let mut created = ChatMsg::new_assistant(String::new());
+                        chat_reasoning::append_token(&mut created, &data);
+                        m.push(created);
+                    }
                 });
             }
         });
@@ -1210,12 +1187,16 @@ fn connect_stream(
                 let conv_id_opt = session.read().clone();
                 if let (Some(title), Some(conv_id)) = (title_opt, conv_id_opt) {
                     let base = title_base.clone();
+                    let project_for_title = pending_project.clone();
                     web_sys::console::log_1(
                         &format!("[title] setting title for {}: {}", conv_id, title).into(),
                     );
                     wasm_bindgen_futures::spawn_local(async move {
                         let url = format!("{base}/api/conversations/{conv_id}");
-                        let body = serde_json::json!({ "title": title });
+                        let body = crate::components::project_data::title_patch_body(
+                            &title,
+                            project_for_title.as_deref(),
+                        );
                         let client = reqwest::Client::new();
                         match client.patch(&url).json(&body).send().await {
                             Ok(resp) => {

@@ -436,10 +436,14 @@ async fn uses_face_agent_requires_both_delegation_and_a_bridge() {
     );
     let bare = ChatSessions::new(store, executor, Arc::new(no_tools_runtime()));
     assert!(
-        !bare.uses_face_agent(true),
+        !bare.face_turn(&face_settings(true, false)),
         "delegation with no hub is still the direct path"
     );
-    assert!(!bare.uses_face_agent(false));
+    assert!(!bare.face_turn(&face_settings(false, false)));
+    assert!(
+        bare.face_turn(&face_settings(false, true)),
+        "the editor flag selects the face path with delegation off"
+    );
 
     let store2 = Arc::new(SessionStore::open(dir.path().join("b")).await);
     let executor2 = Executor::new(
@@ -454,8 +458,19 @@ async fn uses_face_agent_requires_both_delegation_and_a_bridge() {
             liberado_session::GoalSessionStore::new(),
         )))
         .with_delegation_mode(true);
-    assert!(bridged.uses_face_agent(true));
-    assert!(!bridged.uses_face_agent(false));
+    assert!(bridged.face_turn(&face_settings(true, false)));
+    assert!(!bridged.face_turn(&face_settings(false, false)));
+}
+
+fn face_settings(delegation: bool, editor: bool) -> super::super::TurnSettings {
+    super::super::TurnSettings {
+        capabilities: liberado_common::CapabilitySet::empty(),
+        delegation,
+        prompt_append: None,
+        profile: None,
+        model: None,
+        automation_editor: editor,
+    }
 }
 
 /// The streamed face turn keeps the human-interface prompt — an inverted `!face_agent` guard

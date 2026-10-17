@@ -434,8 +434,9 @@ writes_vault = false             # writes code workspaces, not the Obsidian vaul
 
 # Cron schedules (Decision 18/19) — each fires on its own timer and dispatches `goal` through the
 # exact same reactive pipeline a vault change does (the same dispatcher, same capability boundary,
-# same guards). `cron_expr` uses the `cron` crate's 6/7-FIELD syntax — SECONDS FIRST, not standard
-# 5-field cron: sec min hour day-of-month month day-of-week [year], and times are **UTC**.
+# same guards). `cron_expr` uses the Rust `cron` crate's 6/7-field syntax — SECONDS FIRST, not
+# standard 5-field cron and not croner. Fields: sec min hour day-of-month month day-of-week [year].
+# Times are UTC. Weekday numbers are 1=Sun, 2=Mon, 3=Tue, 4=Wed, 5=Thu, 6=Fri, 7=Sat.
 # Convert from your local zone yourself (topology.timezone is for agent context, not for parsing
 # cron_expr). Example: 21:00 America/Chicago CDT (UTC-5) → 02:00 UTC next day → "0 0 2 * * * *".
 # When a schedule fires, the daemon prepends "Local time: YYYY-MM-DD HH:MM CDT (America/Chicago)."
@@ -605,6 +606,15 @@ name = "operator"
 component = "main-agent"
 description = "Privileged face that may create_agent other Agents-shelf chats"
 enabled = true
+
+# Built-in Automation Editor. Not in [chat] agent_profiles. The header flag opens it.
+# delegation is off. The four schedule tools are face builtins, not this grant.
+[[session_profiles]]
+name = "automation-editor"
+description = "Built-in Automation Editor chat. Schedule tools only. Not on the Agents shelf."
+enabled = true
+delegation = false
+component = "automation-editor"
 
 # Optional inference routing on any profile. `model` pins the slug sent each turn.
 # `provider` names a [[providers]] entry and sends that slug there. Omit `provider`

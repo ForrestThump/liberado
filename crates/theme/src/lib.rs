@@ -24,6 +24,8 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+mod themes;
+
 /// A flat set of semantic color tokens. Consumers map these to their own rendering
 /// primitives — ratatui `Color` for the TUI, CSS variables for the web UI, escape codes
 /// for terminal output.
@@ -147,185 +149,6 @@ pub struct Theme {
 }
 
 impl Theme {
-    /// Return the built-in default theme (dark terminal palette).
-    pub fn default_dark() -> Self {
-        Self {
-            name: "dark".into(),
-            chat_user_prefix: Some("#00ffff".into()),
-            chat_user_text: Some("#ffffff".into()),
-            // Slightly lifted from app_bg — readable strip without high contrast.
-            chat_user_bg: Some("#16162a".into()),
-            chat_assistant_text: Some("#c0c0c0".into()),
-            chat_system_text: Some("#808080".into()),
-            chat_streaming_cursor: Some("#00ffff".into()),
-            tool_label: Some("#ffff00".into()),
-            tool_name: Some("#ffff00".into()),
-            tool_args: Some("#808080".into()),
-            tool_ok: Some("#00ff00".into()),
-            tool_err: Some("#ff0000".into()),
-            code_block_header: Some("#808000".into()),
-            code_block_bg: Some("#303030".into()),
-            code_block_fg: Some("#c0c0c0".into()),
-            input_border_focused: Some("#00ffff".into()),
-            input_border_unfocused: Some("#404040".into()),
-            input_placeholder: Some("#404040".into()),
-            input_text: Some("#ffffff".into()),
-            input_bg: Some("#1a1a2e".into()),
-            status_bar_text: Some("#808080".into()),
-            status_dot_online: Some("#00ff00".into()),
-            status_dot_offline: Some("#ff0000".into()),
-            status_dot_connecting: Some("#ffff00".into()),
-            reaction_observed: Some("#00ffff".into()),
-            reaction_dispatched: Some("#ffff00".into()),
-            reaction_acted: Some("#00ff00".into()),
-            reaction_unknown: Some("#808080".into()),
-            sidebar_selected_bg: Some("#00ffff".into()),
-            sidebar_selected_fg: Some("#000000".into()),
-            sidebar_text: Some("#c0c0c0".into()),
-            sidebar_border_focused: Some("#00ffff".into()),
-            sidebar_border_unfocused: Some("#808080".into()),
-            sidebar_item_bg: Some("#101010".into()),
-            md_bold: Some("#ffffff".into()),
-            md_italic: Some("#c0c0c0".into()),
-            md_code: Some("#ffff00".into()),
-            md_link: Some("#8080ff".into()),
-            md_bullet: Some("#00ffff".into()),
-            md_heading: Some("#ffffff".into()),
-            md_rule: Some("#404040".into()),
-            accent: Some("#00ffff".into()),
-            border: Some("#808080".into()),
-            app_bg: Some("#0d0d1a".into()),
-        }
-    }
-
-    /// Return the built-in light theme.
-    pub fn default_light() -> Self {
-        Self {
-            name: "light".into(),
-            chat_user_prefix: Some("#008080".into()),
-            chat_user_text: Some("#1a1a1a".into()),
-            // Soft cool wash on white — separates user turns without glare.
-            chat_user_bg: Some("#eef6f6".into()),
-            chat_assistant_text: Some("#404040".into()),
-            chat_system_text: Some("#808080".into()),
-            chat_streaming_cursor: Some("#008080".into()),
-            tool_label: Some("#808000".into()),
-            tool_name: Some("#808000".into()),
-            tool_args: Some("#808080".into()),
-            tool_ok: Some("#008000".into()),
-            tool_err: Some("#cc0000".into()),
-            code_block_header: Some("#606000".into()),
-            code_block_bg: Some("#f0f0f0".into()),
-            code_block_fg: Some("#404040".into()),
-            input_border_focused: Some("#008080".into()),
-            input_border_unfocused: Some("#c0c0c0".into()),
-            input_placeholder: Some("#c0c0c0".into()),
-            input_text: Some("#1a1a1a".into()),
-            input_bg: Some("#f5f5f5".into()),
-            status_bar_text: Some("#808080".into()),
-            status_dot_online: Some("#008000".into()),
-            status_dot_offline: Some("#cc0000".into()),
-            status_dot_connecting: Some("#808000".into()),
-            reaction_observed: Some("#008080".into()),
-            reaction_dispatched: Some("#808000".into()),
-            reaction_acted: Some("#008000".into()),
-            reaction_unknown: Some("#808080".into()),
-            sidebar_selected_bg: Some("#008080".into()),
-            sidebar_selected_fg: Some("#ffffff".into()),
-            sidebar_text: Some("#404040".into()),
-            sidebar_border_focused: Some("#008080".into()),
-            sidebar_border_unfocused: Some("#808080".into()),
-            sidebar_item_bg: Some("#f0f0f0".into()),
-            md_bold: Some("#1a1a1a".into()),
-            md_italic: Some("#404040".into()),
-            md_code: Some("#808000".into()),
-            md_link: Some("#0066cc".into()),
-            md_bullet: Some("#008080".into()),
-            md_heading: Some("#1a1a1a".into()),
-            md_rule: Some("#c0c0c0".into()),
-            accent: Some("#008080".into()),
-            border: Some("#c0c0c0".into()),
-            app_bg: Some("#ffffff".into()),
-        }
-    }
-
-    /// Built-in [Nord](https://www.nordtheme.com/) polar-night theme.
-    ///
-    /// Colors from the official palettes
-    /// ([docs](https://www.nordtheme.com/docs/colors-and-palettes)):
-    /// polar night `nord0`–`nord3`, snow storm `nord4`–`nord6`, frost `nord7`–`nord10`,
-    /// aurora `nord11`–`nord15`.
-    pub fn default_nord() -> Self {
-        // Polar Night
-        const N0: &str = "#2e3440";
-        const N1: &str = "#3b4252";
-        const N2: &str = "#434c5e";
-        const N3: &str = "#4c566a";
-        // Snow Storm
-        const N4: &str = "#d8dee9";
-        const N5: &str = "#e5e9f0";
-        const N6: &str = "#eceff4";
-        // Frost
-        const N7: &str = "#8fbcbb";
-        const N8: &str = "#88c0d0";
-        const N9: &str = "#81a1c1";
-        const N10: &str = "#5e81ac";
-        // Aurora
-        const N11: &str = "#bf616a";
-        const N12: &str = "#d08770";
-        const N13: &str = "#ebcb8b";
-        const N14: &str = "#a3be8c";
-        const N15: &str = "#b48ead";
-
-        Self {
-            name: "nord".into(),
-            chat_user_prefix: Some(N8.into()),
-            chat_user_text: Some(N6.into()),
-            // nord1 elevated panel — one step up from polar-night app_bg (nord0).
-            chat_user_bg: Some(N1.into()),
-            chat_assistant_text: Some(N4.into()),
-            chat_system_text: Some(N3.into()),
-            chat_streaming_cursor: Some(N8.into()),
-            tool_label: Some(N13.into()),
-            tool_name: Some(N12.into()),
-            tool_args: Some(N3.into()),
-            tool_ok: Some(N14.into()),
-            tool_err: Some(N11.into()),
-            code_block_header: Some(N10.into()),
-            code_block_bg: Some(N1.into()),
-            code_block_fg: Some(N4.into()),
-            input_border_focused: Some(N8.into()),
-            input_border_unfocused: Some(N3.into()),
-            input_placeholder: Some(N3.into()),
-            input_text: Some(N6.into()),
-            input_bg: Some(N1.into()),
-            status_bar_text: Some(N3.into()),
-            status_dot_online: Some(N14.into()),
-            status_dot_offline: Some(N11.into()),
-            status_dot_connecting: Some(N13.into()),
-            reaction_observed: Some(N8.into()),
-            reaction_dispatched: Some(N13.into()),
-            reaction_acted: Some(N14.into()),
-            reaction_unknown: Some(N15.into()),
-            sidebar_selected_bg: Some(N2.into()),
-            sidebar_selected_fg: Some(N6.into()),
-            sidebar_text: Some(N4.into()),
-            sidebar_border_focused: Some(N8.into()),
-            sidebar_border_unfocused: Some(N3.into()),
-            sidebar_item_bg: Some(N0.into()),
-            md_bold: Some(N6.into()),
-            md_italic: Some(N5.into()),
-            md_code: Some(N13.into()),
-            md_link: Some(N9.into()),
-            md_bullet: Some(N8.into()),
-            md_heading: Some(N7.into()),
-            md_rule: Some(N3.into()),
-            accent: Some(N8.into()),
-            border: Some(N3.into()),
-            app_bg: Some(N0.into()),
-        }
-    }
-
     /// Resolve a color token: return the override if `Some`, otherwise the `fallback` hex
     /// string.
     pub fn resolve(&self, value: &Option<String>, fallback: &str) -> String {
@@ -499,14 +322,11 @@ pub struct ThemeRegistry {
 }
 
 impl ThemeRegistry {
-    /// Create a registry populated with the built-in dark, light, and nord themes.
+    /// Create a registry populated with the built-in themes (dark, light, nord, sunset,
+    /// forest, plum, mono).
     pub fn new() -> Self {
         let mut themes = HashMap::new();
-        for theme in [
-            Theme::default_dark(),
-            Theme::default_light(),
-            Theme::default_nord(),
-        ] {
+        for theme in Theme::builtins() {
             themes.insert(theme.name.clone(), theme);
         }
         Self { themes }
@@ -559,11 +379,7 @@ impl ThemeRegistry {
 
     /// Reload user themes from disk, restoring built-ins to factory defaults first.
     pub fn reload(&mut self, dir: &Path) -> Vec<LoadError> {
-        for theme in [
-            Theme::default_dark(),
-            Theme::default_light(),
-            Theme::default_nord(),
-        ] {
+        for theme in Theme::builtins() {
             self.themes.insert(theme.name.clone(), theme);
         }
         self.load_user_themes(dir)
@@ -794,17 +610,24 @@ mod tests {
     #[test]
     fn registry_has_builtins() {
         let reg = ThemeRegistry::new();
-        assert!(reg.get("dark").is_some());
-        assert!(reg.get("light").is_some());
-        assert!(reg.get("nord").is_some());
-        assert_eq!(reg.len(), 3);
+        let builtins = Theme::builtins();
+        for theme in &builtins {
+            assert!(
+                reg.get(&theme.name).is_some(),
+                "missing built-in {}",
+                theme.name
+            );
+        }
+        assert_eq!(reg.len(), builtins.len());
     }
 
     #[test]
     fn registry_names_sorted() {
         let reg = ThemeRegistry::new();
-        let names = reg.names();
-        assert_eq!(names, vec!["dark", "light", "nord"]);
+        let builtins = Theme::builtins();
+        let mut expected: Vec<&str> = builtins.iter().map(|theme| theme.name.as_str()).collect();
+        expected.sort_unstable();
+        assert_eq!(reg.names(), expected);
     }
 
     #[test]
@@ -818,7 +641,7 @@ mod tests {
 
         let mut reg = ThemeRegistry::new();
         reg.load_user_themes(dir.path());
-        assert_eq!(reg.len(), 4); // 3 builtins + mocha
+        assert_eq!(reg.len(), Theme::builtins().len() + 1); // builtins + mocha
         assert!(reg.get("mocha").is_some());
         assert_eq!(
             reg.get("mocha").unwrap().chat_user_text,
@@ -884,7 +707,7 @@ mod tests {
         let mut reg = ThemeRegistry::new();
         let errors = reg.load_user_themes(dir.path());
         assert!(errors.is_empty());
-        assert_eq!(reg.len(), 3); // builtins only
+        assert_eq!(reg.len(), Theme::builtins().len());
     }
 
     #[test]

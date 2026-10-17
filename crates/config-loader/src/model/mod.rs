@@ -8,6 +8,7 @@
 
 mod builder;
 mod config;
+mod config_builtin_editor;
 mod config_profile_provider;
 mod config_turn_budgets;
 mod policy;
@@ -19,6 +20,7 @@ mod vault_reminders;
 
 pub use builder::ConfigBuilder;
 pub use config::{CodingAuthError, CodingWorkspaceAuth, Config, GrantParts, ResolvedProfile};
+pub use config_builtin_editor::BUILTIN_AUTOMATION_EDITOR_PROFILE;
 pub use policy::{Grant, Policy, ZonePolicy};
 pub use shepherd::{
     ShepherdAuthConfig, ShepherdConfig, ShepherdProjectConfig, ShepherdReviewConfig,

@@ -361,15 +361,15 @@ mod tests {
 mod face_env_tests {
     use super::*;
 
-    /// One lock for all three env tests: function-local statics would be three
-    /// distinct mutexes guarding the same process-global variable — exclusion
-    /// in name only.
+    /// One lock for every face-client env test, including the stream tests in
+    /// the sibling module. Function-local statics would be distinct mutexes
+    /// guarding the same process-global variable — exclusion in name only.
     static ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
     /// Restores LIBERADO_SERVER on drop. Tests assert with `expect_err`, whose
     /// panic must not leave a foreign value behind for every later test in
     /// this binary.
-    struct ServerEnvGuard {
+    pub(super) struct ServerEnvGuard {
         saved: Option<String>,
     }
 
@@ -394,7 +394,8 @@ mod face_env_tests {
         }
     }
 
-    async fn lock_server_env() -> (tokio::sync::MutexGuard<'static, ()>, ServerEnvGuard) {
+    pub(super) async fn lock_server_env() -> (tokio::sync::MutexGuard<'static, ()>, ServerEnvGuard)
+    {
         let guard = ENV_LOCK.lock().await;
         let env = ServerEnvGuard::capture();
         (guard, env)
@@ -456,3 +457,7 @@ mod face_env_tests {
         assert!(err.contains("503"), "{err}");
     }
 }
+
+#[cfg(test)]
+#[path = "face_client_stream_tests.rs"]
+mod stream_tests;

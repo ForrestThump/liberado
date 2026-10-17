@@ -13,8 +13,10 @@ liberado-common = { workspace = true }
 liberado-config-loader = { workspace = true }
 dirs = { workspace = true }
 toml = { workspace = true }
+toml_edit = { workspace = true }
 thiserror = { workspace = true }
 serde = { workspace = true }
+serde_json = { workspace = true }
 tracing = { workspace = true }
 rand = { workspace = true }
 
@@ -29,7 +31,6 @@ liberado-coder-core = { workspace = true }
 liberado-executor = { workspace = true }
 liberado-provider = { workspace = true }
 liberado-test-support = { workspace = true }
-serde_json = { workspace = true }
 tokio = { workspace = true }
 
 [package.metadata.liberado]

@@ -36,6 +36,9 @@ use tracing::warn;
 use ulid::Ulid;
 
 use crate::types::{NewSession, SessionHeader};
+
+#[path = "jsonl_chat_meta.rs"]
+mod chat_meta;
 use liberado_session::Visibility;
 
 #[path = "agent_profiles.rs"]
@@ -296,6 +299,9 @@ impl SessionStore {
             // profile class, not goal-ness.
             surface_mode: new.surface_mode,
             agent_creator: new.agent_creator,
+            automation_editor: new.automation_editor,
+            project: new.project,
+            pending_model: None,
         };
         self.append_line(id, &Record::Header(Box::new(header.clone())));
         let (bus, _) = broadcast::channel(EVENT_CHANNEL_CAPACITY);
@@ -465,7 +471,12 @@ impl SessionStore {
                 // conversation, not a reclassification.
                 surface_mode: parent.surface_mode,
                 // A fork of the Agent Creator is an ordinary branch, not a second creator.
+                // A fork of the Automation Editor is not a second editor.
                 agent_creator: false,
+                automation_editor: false,
+                // The fork stays on the same project. A pending model pick belongs to the
+                // source's next turn, so it is not copied.
+                project: parent.project.clone(),
             })
             .await;
 
@@ -610,6 +621,8 @@ impl ConversationStore for SessionStore {
                 // Reading B: shelf stamp is create-time / profile-class, not goal.
                 surface_mode: new.surface_mode,
                 agent_creator: new.agent_creator,
+                automation_editor: new.automation_editor,
+                project: None,
             })
             .await;
         // Chat-lens projection uses this store's `agent_profiles` so a
@@ -763,6 +776,14 @@ impl ConversationStore for SessionStore {
         // one invariant (never mutate what was written) intact.
         self.append_line(conversation, &Record::Header(Box::new(header)));
         Ok(())
+    }
+
+    async fn set_chat_meta(
+        &self,
+        conversation: Ulid,
+        update: liberado_conversation_store::ChatMetaUpdate,
+    ) -> StoreResult<()> {
+        chat_meta::apply(self, conversation, update).await
     }
 
     async fn set_grant(&self, conversation: Ulid, grant: SessionGrant) -> StoreResult<()> {

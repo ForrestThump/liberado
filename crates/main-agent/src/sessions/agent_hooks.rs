@@ -15,7 +15,11 @@ use super::{ChatSessions, SessionResult};
 /// An agent DM is an Agents-shelf session. The Agent Creator session is not one:
 /// it is the shelf's make-an-agent chat, and it keeps no puppet.
 pub fn is_agent_dm_session(header: &ConversationHeader) -> bool {
-    header.surface_mode == SurfaceMode::Agent && !header.agent_creator
+    header.surface_mode == SurfaceMode::Agent && !is_built_in_chat(header)
+}
+
+fn is_built_in_chat(header: &ConversationHeader) -> bool {
+    header.agent_creator || header.automation_editor
 }
 
 pub(super) type MatrixHook = Arc<dyn Fn() + Send + Sync>;
@@ -61,6 +65,18 @@ impl ChatSessions {
     pub async fn set_title(&self, session: Ulid, title: String) -> SessionResult<()> {
         self.store.set_title(session, title).await?;
         self.schedule_matrix_reconcile();
+        Ok(())
+    }
+
+    /// Set the chat's project, its pending model, or both.
+    ///
+    /// Does not schedule a Matrix reconcile. Neither field is a display name.
+    pub async fn set_chat_meta(
+        &self,
+        session: Ulid,
+        update: liberado_conversation_store::ChatMetaUpdate,
+    ) -> SessionResult<()> {
+        self.store.set_chat_meta(session, update).await?;
         Ok(())
     }
 }

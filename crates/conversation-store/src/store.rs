@@ -9,7 +9,7 @@ use liberado_session::SessionGrant;
 use ulid::Ulid;
 
 use crate::error::StoreResult;
-use crate::types::{ConversationHeader, MessageNode, NewConversation, NewNode};
+use crate::types::{ChatMetaUpdate, ConversationHeader, MessageNode, NewConversation, NewNode};
 
 /// A persistent store of conversation logs. Implementors must honor the concurrency contract:
 /// appends to one conversation are serialized and atomic (no torn or interleaved writes), different
@@ -48,6 +48,12 @@ pub trait ConversationStore: Send + Sync {
     /// Used by: first-message default, future flash-title agent, `PATCH /api/conversations/{id}`,
     /// and a future `/title` slash command. Titles are display-only and always overwritable.
     async fn set_title(&self, conversation: Ulid, title: String) -> StoreResult<()>;
+
+    /// Update the chat's project and/or the model pick for its next turn.
+    ///
+    /// Same append-only header rewrite as [`set_title`](Self::set_title): replay keeps the last
+    /// header. A field left `None` on the update is not touched.
+    async fn set_chat_meta(&self, conversation: Ulid, update: ChatMetaUpdate) -> StoreResult<()>;
 
     /// Replace the authority a conversation runs under — its session profile.
     ///

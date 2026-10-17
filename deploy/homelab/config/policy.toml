@@ -98,6 +98,12 @@ write_class = "human_only"
 
 # --- Capability grants -------------------------------------------------------------------------
 
+# Automation Editor. Empty on purpose. Schedule tools are face builtins.
+# A schedule-edit card must not add capabilities here or in grants.overlay.toml.
+[[grants]]
+component = "automation-editor"
+capabilities = []
+
 # Face: human interfacer + built-in delegate. Reads so it can answer directly; no writes — real
 # work goes through `delegate` to the dispatcher. No ExecuteMcp: specialists stay on dispatcher.
 [[grants]]

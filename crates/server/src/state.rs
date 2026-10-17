@@ -70,6 +70,8 @@ pub struct AppState {
     /// The *server* owns this resolution because the session kernel must stay free of the config
     /// stack: the kernel is handed an already-resolved authority, never a config key to look up.
     pub config: Arc<Config>,
+    /// Live profile names and chat plugin switches. Topology is not rewritten.
+    pub surfaces: crate::surfaces::LiveSurfaces,
     /// Boot-time model id snapshot. Prefer [`Provider::model`] via `state.provider` for the live
     /// hot-swapped face model (`POST /api/models/select`).
     pub model_name: Option<String>,
@@ -229,10 +231,23 @@ impl AppState {
         chat: Option<Arc<ChatSessions>>,
         root: PathBuf,
     ) -> Self {
+        Self::for_test_with_config(sessions, chat, root, Config::default())
+    }
+
+    /// [`for_test`](Self::for_test) with a caller-supplied config, so profile routes can see
+    /// `[[session_profiles]]` without a topology file.
+    pub(crate) fn for_test_with_config(
+        sessions: Arc<liberado_session_store::SessionStore>,
+        chat: Option<Arc<ChatSessions>>,
+        root: PathBuf,
+        config: Config,
+    ) -> Self {
         let (hook_tx, _hook_rx) = tokio::sync::mpsc::unbounded_channel();
         // Leaked so the receiver never drops: a closed channel would make `hook_tx.send` fail in a
         // way no test here is about.
         std::mem::forget(_hook_rx);
+        let config = Arc::new(config);
+        let data_dir = root.clone();
         Self {
             start_time: Instant::now(),
             reactions: Arc::new(Mutex::new(Vec::new())),
@@ -247,12 +262,13 @@ impl AppState {
             chat_tools: 0,
             chat_tool_names: Vec::new(),
             catalog: Arc::new(CapabilityCatalog::new()),
-            data_dir: root.clone(),
+            data_dir: data_dir.clone(),
             sessions_root: root,
             main_agent_capabilities: CapabilitySet::empty(),
             dispatcher_capabilities: CapabilitySet::empty(),
             sessions,
-            config: Arc::new(Config::default()),
+            config: Arc::clone(&config),
+            surfaces: crate::surfaces::LiveSurfaces::open(config, &data_dir),
             model_name: None,
             provider: None,
             hooks: HashMap::new(),

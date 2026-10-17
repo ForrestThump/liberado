@@ -149,6 +149,46 @@ fn public_file_exists(name: &str) -> bool {
     crate_root().join("public").join(name).is_file()
 }
 
+/// Slice between the phone-drawer markers. None when either marker is missing.
+fn phone_drawer_block(css: &str) -> Option<&str> {
+    let start = css.find("/* phone-sidebar-drawer */")?;
+    let rest = &css[start..];
+    let end = rest.find("/* phone-sidebar-drawer-end */")?;
+    Some(&rest[..end])
+}
+
+/// The phone layout must hide the collapsed rail and draw the open panel as a fixed overlay.
+/// A block that still uses the old 86% in-flow width fails: that is the rail that covered chat.
+fn phone_drawer_css_errors(css: &str) -> Vec<String> {
+    let mut errors = Vec::new();
+    let Some(block) = phone_drawer_block(css) else {
+        return vec!["missing phone-sidebar-drawer markers".into()];
+    };
+    for needle in [
+        "max-width: 768px",
+        ".sidebar.sidebar-collapsed",
+        "display: none",
+        "position: fixed",
+        ".sidebar-backdrop",
+        ".drawer-open",
+        "100dvh",
+        "safe-area-inset-top",
+        "safe-area-inset-bottom",
+        "safe-area-inset-left",
+        "min-width: 2.5rem",
+        "min-height: 2.5rem",
+        ".sidebar-menu-btn",
+    ] {
+        if !block.contains(needle) {
+            errors.push(format!("phone drawer CSS missing {needle}"));
+        }
+    }
+    if block.contains("width: 86%") {
+        errors.push("phone sidebar still uses the 86% overlay width".into());
+    }
+    errors
+}
+
 fn css_rule<'a>(text: &'a str, selector: &str) -> &'a str {
     let needle = format!("{selector} {{");
     let start = text
@@ -226,9 +266,10 @@ mod tests {
             !css.contains(".brand-version"),
             "version next to the brand costs header width the chip now needs"
         );
+        let shell = read_crate_file("src/shell.rs");
         assert!(
-            app.contains("ProfileChip"),
-            "the chip is a header control, owned by App"
+            shell.contains("ProfileChip") && app.contains("GrokAppHeader"),
+            "the chip is a header control, owned by the shell header App mounts"
         );
         assert!(
             !app.contains("brand-version"),
@@ -349,5 +390,47 @@ mod tests {
     fn png_dimensions_rejects_non_png() {
         assert_eq!(png_dimensions(b"not a png"), None);
         assert_eq!(png_dimensions(b""), None);
+    }
+
+    #[test]
+    fn shipped_phone_sidebar_is_an_overlay_drawer() {
+        let css = read_crate_file("src/styles/main.css");
+        let errors = phone_drawer_css_errors(&css);
+        assert!(errors.is_empty(), "{errors:?}");
+        assert!(
+            css.contains(".sidebar-collapsed {\n    width: 44px;"),
+            "desktop icon rail must keep its narrow width"
+        );
+        let html = read_crate_file("index.html");
+        assert!(
+            html.contains("name=\"viewport\""),
+            "index.html needs a viewport meta so the phone query uses device width"
+        );
+        assert!(html.contains("width=device-width"));
+        let app = read_crate_file("src/main.rs");
+        let shell = read_crate_file("src/shell.rs");
+        assert!(
+            shell.contains("sidebar-menu-btn") && app.contains("PhoneMenuFab"),
+            "phone drawer controls live in the shell header and the fixed FAB"
+        );
+        assert!(app.contains("sidebar-backdrop"));
+        assert!(app.contains("sidebar_drawer_open"));
+    }
+
+    #[test]
+    fn phone_drawer_css_that_keeps_the_wide_rail_fails() {
+        let css = "/* phone-sidebar-drawer */\n@media (max-width: 768px) {\n  .sidebar { width: 86%; position: absolute; }\n}\n/* phone-sidebar-drawer-end */";
+        let errors = phone_drawer_css_errors(css);
+        assert!(
+            errors.iter().any(|e| e.contains("display: none")),
+            "{errors:?}"
+        );
+        assert!(errors.iter().any(|e| e.contains("86%")), "{errors:?}");
+    }
+
+    #[test]
+    fn phone_drawer_css_without_markers_fails() {
+        let errors = phone_drawer_css_errors(".sidebar { width: 86%; }");
+        assert!(errors.iter().any(|e| e.contains("markers")), "{errors:?}");
     }
 }

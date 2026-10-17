@@ -12,7 +12,7 @@
 //! leaves the bottom clears it, so a reply does not pull the reader back down.
 
 #[cfg(target_arch = "wasm32")]
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 
 use dioxus::prelude::*;
 
@@ -149,7 +149,7 @@ pub(super) fn TranscriptScroll(
 #[cfg(target_arch = "wasm32")]
 thread_local! {
     static SUPPRESS_SCROLL_NOTE: Cell<u32> = const { Cell::new(0) };
-    static SCROLL_LISTENER_INSTALLED: Cell<bool> = const { Cell::new(false) };
+    static SCROLL_PANE: RefCell<Option<web_sys::Element>> = const { RefCell::new(None) };
 }
 
 pub(super) fn schedule_scroll_to_latest(follow: Signal<TranscriptStick>) {
@@ -229,6 +229,17 @@ fn apply_latest() -> Apply {
 }
 
 #[cfg(target_arch = "wasm32")]
+fn listener_already_bound() -> bool {
+    let Some(pane) = messages_pane() else {
+        return false;
+    };
+    SCROLL_PANE.with(|cell| match cell.borrow().as_ref() {
+        Some(bound) => bound.is_same_node(Some(&pane)),
+        None => false,
+    })
+}
+
+#[cfg(target_arch = "wasm32")]
 fn install_transcript_scroll_listener_wasm(follow: Signal<TranscriptStick>) {
     attach_scroll_listener(follow, true);
 }
@@ -238,7 +249,7 @@ fn attach_scroll_listener(follow: Signal<TranscriptStick>, retry: bool) {
     use wasm_bindgen::JsCast;
     use wasm_bindgen::closure::Closure;
 
-    if SCROLL_LISTENER_INSTALLED.with(Cell::get) {
+    if listener_already_bound() {
         return;
     }
     let Some(pane) = messages_pane() else {
@@ -253,7 +264,7 @@ fn attach_scroll_listener(follow: Signal<TranscriptStick>, retry: bool) {
         return;
     };
     callback.forget();
-    SCROLL_LISTENER_INSTALLED.with(|cell| cell.set(true));
+    SCROLL_PANE.with(|cell| *cell.borrow_mut() = Some(pane));
 }
 
 #[cfg(target_arch = "wasm32")]

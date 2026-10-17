@@ -13,6 +13,9 @@ mod coding_pack;
 mod cron_delivery;
 mod dispatcher_guidance;
 mod main_agent_budget;
+mod schedule_card_text;
+mod schedule_cards;
+mod schedule_timing;
 use coding_pack::{build_coding_pack, load_server_config};
 use main_agent_budget::main_agent_budget;
 mod bindings;
@@ -32,6 +35,7 @@ mod pr_review_publish_flow;
 mod profile_providers;
 mod shutdown;
 mod state;
+mod surfaces;
 mod telegram;
 mod workspace_surface;
 
@@ -93,6 +97,46 @@ pub async fn run(vault_path: String) -> Result<(), Box<dyn std::error::Error>> {
     // an empty argument falls back to `topology.vault_path`. Both empty is a hard error.
     let vault_path = resolve_vault_path(vault_path, &config)?;
 
+    let (daemon_handle, app, state) = assemble_daemon(config, coder_tuning, vault_path).await?;
+    let addr = format!("0.0.0.0:{port}");
+    finish_serve(daemon_handle, app, state, &addr).await
+}
+
+/// Serve until drain, then stop the vault-watch task.
+///
+/// The abort stays after `serve_with_drain` so cron and vault reactions do not keep the process
+/// alive past the grace budget.
+async fn finish_serve(
+    daemon_handle: tokio::task::JoinHandle<()>,
+    app: Router,
+    state: Arc<AppState>,
+    addr: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    serve_with_drain(app, &state, addr).await?;
+    daemon_handle.abort();
+    Ok(())
+}
+
+/// Live profile names and the chat plugin mask, opened from the data-dir ledgers.
+///
+/// A missing ledger is an empty overlay. Callers pass the deployment data dir; tests pass a
+/// scratch directory so boot wiring does not touch the operator's files.
+fn open_live_surfaces(
+    config: &liberado_bootstrap::Config,
+    data_dir: &Path,
+) -> crate::surfaces::LiveSurfaces {
+    crate::surfaces::LiveSurfaces::open(Arc::new(config.clone()), data_dir)
+}
+
+/// Build chat, the vault daemon, approvals, and the HTTP router, then spawn the reaction loop.
+///
+/// Split from [`run`] so profile, plugin, library, and schedule wiring does not sit in the
+/// fail-fast preamble. [`finish_serve`] owns the drain and the post-drain abort.
+async fn assemble_daemon(
+    config: liberado_bootstrap::Config,
+    coder_tuning: liberado_coder_core::CoderTuning,
+    vault_path: String,
+) -> Result<(tokio::task::JoinHandle<()>, Router, Arc<AppState>), Box<dyn std::error::Error>> {
     // One live catalog + shared MCP registry (boot apply + hot-reload). Every consumer (API,
     // daemon pools, chat, dispatch pack) uses the same cloneable registry handle.
     let live_mcp = liberado_bootstrap::live_mcp_from_config(&config, None);
@@ -143,6 +187,7 @@ pub async fn run(vault_path: String) -> Result<(), Box<dyn std::error::Error>> {
     )
     .await;
 
+    let surfaces = open_live_surfaces(&config, &liberado_config::data_dir());
     let (chat, chat_tools, chat_tool_names) = build_chat(
         &providers,
         mcp_registry.clone(),
@@ -153,6 +198,7 @@ pub async fn run(vault_path: String) -> Result<(), Box<dyn std::error::Error>> {
         SessionEngine {
             store: sessions.clone(),
             goals: goals.clone(),
+            surfaces: surfaces.clone(),
         },
     )
     .await;
@@ -223,6 +269,7 @@ pub async fn run(vault_path: String) -> Result<(), Box<dyn std::error::Error>> {
         main_agent_capabilities,
         dispatcher_capabilities,
         config: Arc::new(config.clone()),
+        surfaces,
         model_name,
         provider: provider.clone(),
         hooks: resolved_hooks,
@@ -248,14 +295,7 @@ pub async fn run(vault_path: String) -> Result<(), Box<dyn std::error::Error>> {
     });
 
     let app = build_app_router(&state);
-
-    let addr = format!("0.0.0.0:{port}");
-    serve_with_drain(app, &state, &addr).await?;
-
-    // Vault-watch / reaction loop: stop after chat drain so cron/vault reactions do not keep the
-    // process alive past the grace budget.
-    daemon_handle.abort();
-    Ok(())
+    Ok((daemon_handle, app, state))
 }
 
 /// The converged Session store (S5′ / D7): ONE store under `<data_dir>/sessions/`, handed to
@@ -349,6 +389,7 @@ fn build_app_router(state: &Arc<AppState>) -> Router {
         )
         .route("/api/reactions", axum::routing::get(api::reactions))
         .route("/api/vault", axum::routing::get(api::vault))
+        .route("/api/library", axum::routing::get(api::list_library))
         .route(
             "/api/conversations",
             axum::routing::get(api::list_conversations).post(api::create_conversation),
@@ -406,9 +447,19 @@ fn build_app_router(state: &Arc<AppState>) -> Router {
         )
         .route("/api/profiles", axum::routing::get(api::list_profiles))
         .route(
+            "/api/profiles/{name}",
+            axum::routing::patch(api::rename_profile).delete(api::delete_profile),
+        )
+        .route(
+            "/api/plugins/{id}",
+            axum::routing::put(api::set_plugin_enabled),
+        )
+        .route(
             "/api/hooks/{name}",
             axum::routing::post(hooks::trigger_hook),
         )
+        .route("/api/hooks", axum::routing::get(api::list_hooks))
+        .route("/api/schedules", axum::routing::get(api::list_schedules))
         // The one unified list (S5′): chats and goal sessions, same rows.
         .route("/api/sessions", axum::routing::get(api::sessions_list))
         // Branch a conversation, keeping the original (copy semantics — a snapshot, not a pointer).
@@ -635,6 +686,7 @@ fn log_endpoint_summary() {
         "API endpoints:\n  GET /api/status  — daemon status\n  GET /api/models  — live provider \
          model catalog\n  POST /api/models/select  — hot-swap active model\n  \
          GET /api/reactions?limit=20  — recent reactions\n  GET /api/vault  — vault info\n  \
+         GET /api/library?limit=50  — vault files the default profile may read\n  \
          GET /api/goals  — list goal sessions; POST /api/goals starts one (drain-gated)\n  \
          GET /api/goals/{{id}}/stream  — SSE goal session events\n  /  — static frontend (build \
          with `dx build` from crates/webui/)"
@@ -737,6 +789,8 @@ struct SessionEngine {
     store: Arc<SessionStore>,
     /// Goal sessions — including `delegate` — run here, not in a second inline orchestrator.
     goals: Arc<liberado_session::GoalSessionHub>,
+    /// Live profile names and the chat plugin mask. Not an extra `build_chat` argument.
+    surfaces: crate::surfaces::LiveSurfaces,
 }
 
 async fn build_chat(
@@ -748,7 +802,11 @@ async fn build_chat(
     guidance: Option<Arc<dyn liberado_common::ToolGuidanceSource>>,
     engine: SessionEngine,
 ) -> (Option<Arc<ChatSessions>>, usize, Vec<String>) {
-    let SessionEngine { store, goals } = engine;
+    let SessionEngine {
+        store,
+        goals,
+        surfaces,
+    } = engine;
     // The chat face runs on the `main_agent` role provider; its `delegate` classifier uses the
     // `dispatcher` role provider (falling back to the face provider if somehow unset).
     let Some(face_provider) = providers.face.clone() else {
@@ -772,7 +830,8 @@ async fn build_chat(
 
     // Face-agent tool surface: live registry (refresh on peer-set change). Specialist work goes
     // through `delegate` → hub → dispatch pack, not the face agent's own tool list.
-    let runtime = connect_chat_runtime(mcp);
+    let runtime =
+        crate::surfaces::mask_chat_runtime(connect_chat_runtime(mcp), surfaces.plugins.clone());
 
     let workspace = liberado_main_agent::WorkspaceSettings::resolve(
         config.tuning.agent_workspace.max_bytes,
@@ -878,7 +937,7 @@ async fn build_chat(
     );
     sessions = sessions.with_dispatch(dispatcher, catalog);
 
-    let sessions = chat_agent_spawn::install(sessions, config);
+    let sessions = chat_agent_spawn::install(sessions, surfaces.profiles.clone());
     (Some(sessions), tool_count, tool_names)
 }
 

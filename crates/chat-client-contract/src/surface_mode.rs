@@ -60,6 +60,7 @@ mod tests {
             parent_conversation: None,
             spawned_by: None,
             surface_mode: SurfaceMode::Agent,
+            ..Default::default()
         };
         let json = serde_json::to_value(&h).unwrap();
         assert_eq!(json["surface_mode"], "agent");

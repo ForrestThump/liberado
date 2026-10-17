@@ -194,6 +194,16 @@ goal = """…"""                   # the prompt; the daemon prepends "Local time
 `cron_expr` has **no timezone field** — it is UTC, and `topology.timezone` only affects the local-time
 string stamped onto the goal. Re-check the offset when DST flips.
 
+`liberado-config` can create, update, or delete one `[[schedules]]` row without rewriting the
+rest of the file (`docs/spec/config-spec.md` §4.5). It first copies `topology.toml` to
+`topology.toml.bak-<utc>`. It then edits only that array, so comments and every other table
+stay. The edited text is loaded with the boot loader and `Config::validate`. A validation
+error leaves the original file and keeps the backup. The commit is a temp file renamed over
+`topology.toml`. The call does not reload cron or the schedules HTTP list. Recreate the
+process before the new row can fire. If the file is not writable, the call writes nothing.
+The homelab mount is `/config:ro`, so the bytes that matter are the host file, and an
+in-container write refuses until that directory is writable.
+
 To test a schedule without waiting: set `cron_expr` a few minutes out, `up -d --force-recreate`,
 watch, then restore. Verify the restore.
 

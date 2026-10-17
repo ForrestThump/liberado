@@ -49,6 +49,12 @@ write_class = "human_only"       # a named, sensitive zone: agents may read but 
 # Capabilities: Read / Write / ReadSummary over a zone, or ExecuteMcp by name.
 # Zone form: { Vault = "<folder>" } for a vault folder, { Named = "<name>" } for an external zone.
 
+# Automation Editor. The empty list is intentional: schedule tools are face builtins.
+# An approval card for a schedule edit must not add a row here or in grants.overlay.toml.
+[[grants]]
+component = "automation-editor"
+capabilities = []
+
 # Face agent (chat): thin — human interface + built-in `delegate`. Specialist tools go on
 # `dispatcher`. Uncomment ExecuteMcp only if you want the main agent to call those tools itself.
 [[grants]]
