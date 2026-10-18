@@ -321,7 +321,10 @@ letters `U M T W R F S` (Sunday through Saturday, Thursday is `R`), plus optiona
 the next 7 days, at most 10. There is no CalDAV read and no second event store.
 
 "Today" for both jobs is `topology.timezone`. The default is `America/Chicago`.
-`cron_expr` stays UTC. Set `deliver = false` on these schedules. The job sends on
+A row uses exactly one timing form. `days` plus `at` (`days = ["tue"]`, `at = "20:00"`) is
+evaluated in `timezone`, or in `topology.timezone` when that field is omitted, so the clock
+stays put across DST. `cron_expr` is the escape hatch: its fields are UTC unless `timezone`
+is set, in which case they are civil time in that zone. Set `deliver = false` on these schedules. The job sends on
 `LIBERADO_REMINDER_BOT_TOKEN` and `LIBERADO_REMINDER_CHAT_ID`. It does not append to the
 Telegram-bound chat, and it does not start a session. If the reminder variables are unset, the
 job still runs and the text is logged.

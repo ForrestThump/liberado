@@ -54,6 +54,10 @@ pub struct AutomationTargetRequest {
     #[serde(default)]
     pub cron_expr: String,
     #[serde(default)]
+    pub days: Vec<String>,
+    #[serde(default)]
+    pub at: String,
+    #[serde(default)]
     pub timezone: String,
     #[serde(default)]
     pub description: String,
@@ -134,6 +138,8 @@ fn editor_target_from(
         enabled: target.enabled,
         schedule_text: target.schedule_text.clone(),
         cron_expr: target.cron_expr.clone(),
+        days: target.days.clone(),
+        at: target.at.clone(),
         timezone: target.timezone.clone(),
         description: target.description.clone(),
     })

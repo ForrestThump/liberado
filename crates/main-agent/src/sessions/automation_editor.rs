@@ -34,7 +34,7 @@ Filed an approval card in this chat. topology.toml was not changed. \
 Approve applies this one edit. Deny writes nothing.";
 
 const AUTOMATION_EDITOR_SYSTEM_PROMPT: &str = "\
-You are Liberado's Automation Editor. This chat edits cron schedules in topology.toml.
+You are Liberado's Automation Editor. This chat edits schedules in topology.toml.
 
 The first assistant message is already in this chat. Do not repeat it. \
 When this prompt names a target automation, that context is already given. \
@@ -50,10 +50,16 @@ They do not change the file. Wait for the human to tap Approve or Deny.
 after the service restarts. Cron and the schedules list keep the previous copy until then.
 
 You do not have delegate or create_agent. Do not claim a write happened before Approve. \
+Prefer the structured form for a weekday and a clock: days (mon, tue, wed, thu, fri, sat, sun), \
+at (\"20:00\"), and timezone (an IANA name). Omit timezone to use the topology timezone. \
+That form is evaluated in the timezone, so the clock stays put across DST. \
+Use exactly one of the structured form or cron_expr. When you switch forms, clear the other \
+(cron_expr, or days and at). \
+cron_expr is the escape hatch: seconds first, and UTC unless timezone is also set. \
+When timezone is set, cron_expr fields are civil time in that zone. \
+Do not present the UTC hour as the local time. \
 Judge timing only from next_fires and the code-generated description; never from names, comments or labels; compare them to what the user asked and say so if they disagree. \
 Quote times in Central time (America/Chicago) when that is the timezone. \
-cron_expr stays UTC, seconds first, and is only for edits. \
-Do not present the UTC hour as the local time. \
 Be concise.";
 
 /// The automation an Edit click opened. A new automation has no target.
@@ -63,6 +69,8 @@ pub struct EditorTarget {
     pub enabled: bool,
     pub schedule_text: String,
     pub cron_expr: String,
+    pub days: Vec<String>,
+    pub at: String,
     pub timezone: String,
     pub description: String,
 }
@@ -74,12 +82,14 @@ pub fn editor_target_context(target: &EditorTarget) -> String {
          Name (id): {name}.\n\
          State: {state}.\n\
          Schedule: {when}.\n\
+         {form}\
          Cron expression: {cron}.\n\
          Timezone: {zone}.\n\
          What it does: {description}.",
         name = target.name.trim(),
         state = enabled_word(target.enabled),
         when = display_schedule(target),
+        form = form_lines(target),
         cron = blank_as(target.cron_expr.trim(), "not set"),
         zone = blank_as(target.timezone.trim(), "not set"),
         description = blank_as(target.description.trim(), "No description is stored."),
@@ -110,6 +120,21 @@ pub fn editor_chat_title(target: Option<&EditorTarget>) -> String {
 
 fn enabled_word(enabled: bool) -> &'static str {
     if enabled { "enabled" } else { "disabled" }
+}
+
+fn form_lines(target: &EditorTarget) -> String {
+    if target.days.is_empty() && target.at.trim().is_empty() {
+        return String::new();
+    }
+    let days = if target.days.is_empty() {
+        "not set".to_string()
+    } else {
+        target.days.join(", ")
+    };
+    format!(
+        "Days: {days}.\nAt: {}.\n",
+        blank_as(target.at.trim(), "not set")
+    )
 }
 
 fn display_schedule(target: &EditorTarget) -> String {

@@ -1084,16 +1084,36 @@ mod compaction_proptest {
 
 /// A configured cron schedule: wiring only (Decision 14) — the daemon-assembly layer
 /// (`liberado-bootstrap`) translates enabled entries into `liberado-cron`'s runtime `Schedule`
-/// type. `cron_expr` uses the `cron` crate's 6/7-field syntax (**seconds first** — not standard
-/// 5-field cron), e.g. `"0 0 9 * * * *"` for "every day at 09:00:00" **UTC**. Local wall-clock for
-/// the model is separate: set `topology.timezone` once; the daemon stamps "Local time: …" onto the
-/// goal text when a schedule fires (see [`liberado_common::UserTimezone`]).
+/// type.
+///
+/// Exactly one timing form per row:
+///
+/// - `cron_expr`: the `cron` crate's 6/7-field syntax (**seconds first**). The fields are
+///   **UTC** unless `timezone` is set, in which case they are civil time in that IANA zone.
+/// - `days` + `at`: a weekday clock such as `days = ["tue"]`, `at = "20:00"`. It is evaluated
+///   in `timezone`, or in `topology.timezone` when `timezone` is omitted, so the clock stays
+///   put across DST.
+///
+/// The daemon still stamps "Local time: …" from `topology.timezone` onto the goal text when a
+/// schedule fires (see [`liberado_common::UserTimezone`]).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CronSchedule {
     pub name: String,
     #[serde(default = "default_true")]
     pub enabled: bool,
+    /// Escape-hatch cron. Empty when `days` and `at` are set.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub cron_expr: String,
+    /// Weekday names for the structured form: `mon` … `sun`, or the full English name.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub days: Vec<String>,
+    /// 24-hour clock `HH:MM` or `HH:MM:SS` for the structured form.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub at: Option<String>,
+    /// IANA zone for this row. Structured rows default to `topology.timezone`.
+    /// A `cron_expr` row is UTC when this is omitted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timezone: Option<String>,
     /// The goal text dispatched. Empty when `job` handles the firing without a model.
     #[serde(default)]
     pub goal: String,

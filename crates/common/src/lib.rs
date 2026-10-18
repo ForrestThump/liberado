@@ -37,6 +37,7 @@ pub mod approval_ledger;
 mod bundled_vault;
 pub mod capability;
 pub mod catalog;
+pub mod civil_schedule;
 pub mod clock;
 pub mod permission;
 mod write_target;
@@ -68,6 +69,9 @@ pub use catalog::{
     VAULT_WIDE_ZONE_MARKER, WriteTarget, apply_bundled_classifications,
     default_bundled_classification, is_bundled_mcp, names_single_write_target, resolve_zone,
     write_target, zone_write_restriction,
+};
+pub use civil_schedule::{
+    CivilSchedule, civil_english, compile_cron, parse_civil, parse_compiled_cron,
 };
 pub use dispatch::{
     BlockReason, Delivery, Depth, DispatchAction, DispatchDecision, ExecMode, JobHandle, JobStatus,

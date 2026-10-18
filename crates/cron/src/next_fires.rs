@@ -66,7 +66,7 @@ fn resolve_tz(tz: &str) -> Result<Tz, String> {
         .map_err(|_| format!("unknown timezone '{name}'"))
 }
 
-fn stamp(utc: DateTime<Utc>, zone: Tz) -> FireInstant {
+pub(crate) fn stamp(utc: DateTime<Utc>, zone: Tz) -> FireInstant {
     let local = utc.with_timezone(&zone);
     let weekday = local.weekday();
     FireInstant {

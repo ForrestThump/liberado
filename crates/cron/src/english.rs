@@ -22,6 +22,23 @@ pub fn cron_to_english_at(expr: &str, timezone: &str, at: DateTime<Utc>) -> Stri
     describe(expr.trim(), timezone.trim(), at).unwrap_or_else(|| expr.to_string())
 }
 
+/// Read `expr` as civil time in `timezone`.
+///
+/// A weekly clock becomes `Every Tuesday at 8:00 PM America/Chicago`. The hour
+/// is the field as written. It is not converted out of UTC.
+pub fn cron_to_english_civil(expr: &str, timezone: &str) -> String {
+    let raw = expr.trim();
+    let zone = timezone.trim();
+    if let Some(spec) = liberado_common::parse_compiled_cron(raw) {
+        return liberado_common::civil_english(&spec, zone);
+    }
+    let plain = cron_to_english_at(raw, "UTC", Utc::now());
+    if plain != raw && !plain.contains(" at ") {
+        return plain;
+    }
+    raw.to_string()
+}
+
 fn describe(raw: &str, timezone: &str, at: DateTime<Utc>) -> Option<String> {
     let (spec, five_field) = parse::parse_expression(raw)?;
     if !five_field && cron::Schedule::from_str(raw).is_err() {

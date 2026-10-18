@@ -171,8 +171,22 @@ fn json_to_toml(value: &serde_json::Value) -> Result<Value, String> {
         serde_json::Value::Bool(flag) => Ok(Value::from(*flag)),
         serde_json::Value::String(text) => Ok(Value::from(text.clone())),
         serde_json::Value::Number(number) => json_number(number),
-        _ => Err("schedule patch values must be strings, numbers, or booleans".into()),
+        serde_json::Value::Array(items) => json_string_array(items),
+        _ => {
+            Err("schedule patch values must be strings, numbers, booleans, or string arrays".into())
+        }
     }
+}
+
+fn json_string_array(items: &[serde_json::Value]) -> Result<Value, String> {
+    let mut array = toml_edit::Array::new();
+    for item in items {
+        let text = item
+            .as_str()
+            .ok_or_else(|| "schedule patch arrays must contain strings".to_string())?;
+        array.push(text);
+    }
+    Ok(Value::Array(array))
 }
 
 fn json_number(number: &serde_json::Number) -> Result<Value, String> {

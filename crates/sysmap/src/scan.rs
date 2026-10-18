@@ -306,6 +306,15 @@ fn schedule_node(schedule: &CronSchedule) -> MapNode {
         ("cron_expr".to_string(), schedule.cron_expr.clone()),
         ("goal".to_string(), schedule.goal.clone()),
     ]);
+    if !schedule.days.is_empty() {
+        meta.insert("days".to_string(), schedule.days.join(","));
+    }
+    if let Some(at) = &schedule.at {
+        meta.insert("at".to_string(), at.clone());
+    }
+    if let Some(zone) = &schedule.timezone {
+        meta.insert("timezone".to_string(), zone.clone());
+    }
     if let Some(pool) = &schedule.pool {
         meta.insert("pool".to_string(), pool.clone());
     }
