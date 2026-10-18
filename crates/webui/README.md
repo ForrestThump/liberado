@@ -54,9 +54,9 @@ The bundle is **mounted** into the daemon's container; `ServeDir` re-reads it pe
 
 - **Shell**: `index.html` (PWA), `public/{manifest.json, sw.js, icon-*.png}`.
 - **App**: `src/main.rs` (App + `Route` match + `api_base`), `src/shell.rs` (`GrokAppHeader`, `PhoneMenuFab`, viewport helpers), `src/back_nav.rs` (phone Back: history entries mirror open layers), `src/pwa.rs` (PWA-shell assertions), `src/theme.rs` (`theme_css_vars(&Theme)` → `:root { --lib-* }`), `src/icons.rs`.
-- **Styles**: `src/styles/main.css` — all styling, ~280 semantic classes.
+- **Styles**: `src/styles/main.css` — all styling, 279 semantic classes.
 - **Components** (`src/components/`): chat pipeline (`chat.rs`, `chat_input.rs` with the pure `stream_url()` builder, `chat_fold.rs`, `chat_reasoning.rs`, `chat_scroll.rs` + tests, `chat_submission.rs`, `chat_tool_events.rs`, `message_row.rs`, `markdown.rs` — `pulldown-cmark` with trailing-WS trim, `conversation_row.rs`); slash commands (`slash_commands.rs`, `slash_palette.rs`); routes (one component per Route: `library.rs`, `automations.rs`, `projects.rs`, `plugins.rs`, `imagine.rs` — Route::Imagine reserved); sidebar submodule (`sidebar/mod.rs` — `Route` enum + `Sidebar` — `sidebar/{rail,agents,projects,profile_api,row_menu,tests}.rs`, `sidebar_agent_creator.rs`, `sidebar_shelf.rs`); header overlays (`incognito.rs`, `grants_popover.rs` Tools, `model_browser.rs`, `profile_browser.rs`, `profile_surface.rs`, `picker.rs`); helpers (`approval_card.rs`, `mcp_panel.rs`, `project_data.rs`).
-- **Dashboard (dead)**: `dashboard.rs` plus its panels (`reactions.rs`, `vault.rs`, `profiles_panel.rs`, `stuck_sessions.rs`) still compile, but no Route targets `dashboard.rs` — reachable only via the Cargo dependency graph until the Status view returns.
+- **Dashboard (orphan)**: `dashboard.rs` plus its panels (`reactions.rs`, `vault.rs`, `profiles_panel.rs`, `stuck_sessions.rs`) still compile, but no `Route` targets `dashboard.rs` — reachable only through the module tree (`pub mod dashboard` in `components/mod.rs`) until the Status view returns.
 
 ---
 
@@ -74,7 +74,7 @@ The bundle is **mounted** into the daemon's container; `ServeDir` re-reads it pe
 | `Agents` | `components::imagine::Imagine` | Reuses `Imagine`; sidebar section header pushes `route.set(Route::Agents)`. |
 | `Imagine` | `components::imagine::Imagine` | **Reserved** — kept in the enum and on disk so the surface can be re-introduced without re-shaping the rail; the sidebar never renders a primary-nav row targeting it. |
 
-The sidebar's **primary nav** renders only `Chat`, `Library`, `Automations` (`PrimaryNavRow` calls in `sidebar/mod.rs`). Other routes are reached via section headers ("Projects", "Plugins") or the Agents shelf. The collapsed rail mirrors the primary nav plus a Search and Tools affordance. `shell::shell_route_title(route)` sets the header bar title; chat views stay "Liberado", every other route uses its view name.
+The sidebar's **primary nav** renders only `Chat`, `Library`, `Automations` (`PrimaryNavRow` calls in `sidebar/mod.rs`). Other routes are reached via section headers ("Projects", "Plugins") or the Agents shelf. The **collapsed rail** renders Chat, Search, Library, Automations, Agents and Plugins plus the theme swatch — `Tools` is **not** in the rail, it lives in the header (`shell::GrokAppHeader`'s tools popover, opened through `tools_open` in `main.rs`). `shell::shell_route_title(route)` sets the header bar title; chat views stay "Liberado", every other route uses its view name.
 
 ---
 
@@ -83,12 +83,20 @@ The sidebar's **primary nav** renders only `Chat`, `Library`, `Automations` (`Pr
 - `main.rs::api_base()` computes the daemon base URL once and threads it to every view. **Same-origin by default** (`window.location.origin`) — whoever served the page also answers `/api/*`. The one exception is `dx serve`, which runs on `:8080` and cannot proxy; there, and only there, retarget the same host's `:4201`. See [`api_base`](#api_base--cors).
 - Wire DTOs come from the **`chat-client-contract`** crate — single source of truth shared with the TUI and CLI.
 - Chat streams over **SSE**:
-  - `GET /api/chat/stream?message=…&session=…&incognito=true&profile=…&model=…` — one turn. URL builder in `components::chat_input::stream_url`.
+  - `GET /api/chat/stream?message=…` — one turn, with **exactly one** of `session=<id>`, `incognito=true`, or `profile=<name>` selecting *which* conversation (or how to open one); `model=<name>` appends to whichever of the three applied. URL builder in `components::chat_input::stream_url` (`chat_input.rs` lines 61-93).
   - `GET /api/conversations/{id}/attach` — join a turn already in flight.
   - `POST /api/conversations/{id}/cancel` — stop the turn.
+- Coding projects: `GET /api/projects` — both the sidebar's projects shelf and the projects page fetch through `project_data::fetch_projects`.
+- Status / capabilities: `GET /api/status` — slash commands (`/theme`, `/model`, …) and the chat header.
 - SSE event types (`chat_client_contract::SessionEvent::from_sse_data`): bare — `session` (id), `token` (text); JSON — `session_started`, `role_started`, `role_finished`, `tool_started`, `tool_finished`, `progress`, `awaiting_input`, `human_input`, `validation_finished`, `critic_verdict`, `file_changed`, `checkpoint`, `loop_guard`, `session_finished`, `session_offered`, `failed`. **Unknown** types return a benign empty `Token`. `done` is **not** an SSE event type — it is the `status` value inside a `session_finished` payload.
 
-Sidebar endpoints (`/api/conversations`, `/api/conversations/search`, `/api/conversations/{id}` rename + delete, `/api/profiles/{name}`) live in `components/sidebar/mod.rs`; the full surface is in [`docs/spec/reference/api.md`](../../docs/spec/reference/api.md).
+Sidebar endpoints:
+
+- `/api/conversations`, `/api/conversations/search`, and `/api/conversations/{id}` rename + delete — `components/sidebar/mod.rs`.
+- `/api/profiles/{name}` — `components/sidebar/profile_api.rs`.
+- `/api/projects` — fetched from the projects shelf in `components/sidebar/projects.rs` (via `project_data::fetch_projects`).
+
+The full surface is in [`docs/spec/reference/api.md`](../../docs/spec/reference/api.md).
 
 ---
 
@@ -109,7 +117,7 @@ No Tailwind, no CSS-in-JS, no build step for styles.
 
 **CSS authoring constraint.** The stylesheet is `include_str!`-injected as the text content of a Dioxus `<style>` element, and Dioxus text-escapes `<` and `&`. **Avoid `<` and `&`** in `main.css`. `>` (child combinator), `+` (sibling), and descendant selectors are fine — `main.css` already uses `.grok-main-phone-scroll > .grok-page` and similar.
 
-**Class inventory** (~280 top-level classes, all live in the current set) groups as: shell (`.app`, `.app-header*`, `.grok-header*`, `.grok-main*`, `.phone-menu-fab`, `.sidebar-menu-btn`, `.header-right-cluster`); sidebar (`.sidebar*`: rail, brand, shelves, sections, scroll, search, empty, error, retry); chat (`.messages`, `.bubble-row`, `.bubble`, `.bubble-wrap`, `.bubble-thinking`, `.input-bar`, `.input`, `.send-btn`, `.markdown-body`); route pages (`.library-page`, `.automations-page`, `.projects-page`, `.plugins-page`, `.imagine-page`, `.automation-list`, `.automation-row`, `.plugin-list`, `.project-list`); cross-cutting (`.grok-page*`, `.grok-row*`, `.incognito-btn`, `.theme-swatch-*`, `.tools-popover`, `.approval-card`, `.slash-palette`, `.mcp-server`, `.conv-item`, `.conv-menu`). Reuse before inventing new ones; list with `rg -oN '^\.[a-zA-Z][a-zA-Z0-9_-]*' crates/webui/src/styles/main.css | sort -u`.
+**Class inventory** (279 top-level classes, all live in the current set) groups as: shell (`.app`, `.app-header*`, `.grok-header*`, `.grok-main*`, `.phone-menu-fab`, `.sidebar-menu-btn`, `.header-right-cluster`); sidebar (`.sidebar*`: rail, brand, shelves, sections, scroll, search, empty, error, retry); chat (`.messages`, `.bubble-row`, `.bubble`, `.bubble-wrap`, `.bubble-thinking`, `.input-bar`, `.input`, `.send-btn`, `.markdown-body`); route pages (`.library-page`, `.automations-page`, `.projects-page`, `.plugins-page`, `.imagine-page`, `.automation-list`, `.automation-row`, `.plugin-list`, `.project-list`); cross-cutting (`.grok-page*`, `.grok-row*`, `.incognito-btn`, `.theme-swatch-*`, `.tools-popover`, `.approval-card`, `.slash-palette`, `.mcp-server`, `.conv-item`, `.conv-menu`). Reuse before inventing new ones; list with `rg -oN '^\.[a-zA-Z][a-zA-Z0-9_-]*' crates/webui/src/styles/main.css | sort -u`.
 
 ---
 
@@ -139,5 +147,5 @@ The worker does not cache and does not intercept `/api/` — chat streams over E
 
 - **Wasm std / `dx`.** Building for wasm fails with *"can't find crate for `core`"* if `dx` picks up the standalone Rust on `PATH` (it lacks the wasm32 target). Always prepend the rustup `cargo` bin dir; verify with `rustup target list --installed` showing `wasm32-unknown-unknown`.
 - **Stale `:4201`.** The daemon serves a *static* release build. After editing the UI, `:4201` does not change until you rebuild the bundle. Use `:8080` for live work, or rebuild + hard-refresh `:4201`.
-- **PowerShell + UTF-8 scripts.** PS 5.1 reads BOM-less UTF-8 as Windows-1252, mangling non-ASCII (em-dashes, etc.) and breaking parsing. Keep `scripts/*.ps1` ASCII-only (the dashes here are `--`).
+- **PowerShell + UTF-8 scripts.** PS 5.1 reads BOM-less UTF-8 as Windows-1252, mangling non-ASCII (em-dashes, etc.) and breaking parsing. There are **none today** (no `scripts/*.ps1` exists); a future one must stay ASCII-only (the dashes here are `--`).
 - **SSE event named `error`.** Browser `EventSource` reserves `error` for its own connection-failure event, so the daemon's failure event is named **`failed`** — do not rename it back. Asserted in `crates/chat-client-contract/src/wire.rs::failed_tag_is_failed_not_error`.
