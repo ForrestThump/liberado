@@ -3074,10 +3074,6 @@ body {
         --phone-header-offset: calc(3rem + env(safe-area-inset-top, 0px));
     }
 
-    .app-header {
-        z-index: 30;
-    }
-
     .grok-header-inner {
         height: auto;
         min-height: var(--phone-header-offset);
@@ -3132,7 +3128,19 @@ body {
         cursor: pointer;
     }
 
-    /* Global `.tools-popover-wrap` is z-index 40; keep Tools under the drawer overlay. */
+    /* `.app-header` is sticky, z-index 10, and `backdrop-filter: blur`. Any of those
+       makes a stacking context. A phone rule used to raise that context to z-index 30,
+       above the drawer (25) and the dim overlay (20). A child cannot paint behind its
+       parent context, so `z-index: auto` on `.tools-popover-wrap` left the Tools label
+       on top of the drawer. Isolate the bar while the drawer is open: the context stays
+       in normal flow, under the overlay, and the global Tools z-index (40) stays inside it. */
+    .grok-layout.drawer-open .app-header {
+        position: static;
+        z-index: auto;
+        backdrop-filter: none;
+        isolation: isolate;
+    }
+
     .grok-layout.drawer-open .tools-popover-wrap {
         z-index: auto;
     }

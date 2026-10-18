@@ -343,9 +343,38 @@ fn theme_picker_paints_above_the_chat_and_is_not_clipped() {
         drawer.contains("overflow: hidden"),
         "the phone overlay stays clipped: {drawer}"
     );
+    let backdrop_z = css_z_index(css_block(phone_drawer, ".sidebar-backdrop"));
+    let drawer_z = css_z_index(drawer);
     assert!(
-        css_z_index(css_block(phone_drawer, ".app-header")) > css_z_index(drawer),
-        "the phone header stays above the drawer"
+        drawer_z > backdrop_z,
+        "the drawer ({drawer_z}) paints above the dim overlay ({backdrop_z})"
+    );
+    assert!(
+        !phone_drawer.contains("z-index: 30"),
+        "a phone header z-index of 30 sits above the drawer and the overlay"
+    );
+
+    let header_under = css_block(phone_drawer, ".grok-layout.drawer-open .app-header");
+    assert!(
+        header_under.contains("isolation: isolate"),
+        "the open drawer must trap header descendants; Tools is z-index 40 globally: {header_under}"
+    );
+    assert!(
+        header_under.contains("position: static"),
+        "a sticky header is a stacking context above the overlay: {header_under}"
+    );
+    assert!(
+        header_under.contains("backdrop-filter: none"),
+        "backdrop-filter on the header paints the bar above the overlay: {header_under}"
+    );
+    assert!(
+        header_under.contains("z-index: auto"),
+        "the header stack level must stay under the overlay: {header_under}"
+    );
+    let tools_global = css_z_index(css_block(css, ".tools-popover-wrap"));
+    assert!(
+        tools_global > drawer_z,
+        "Tools ({tools_global}) is globally above the drawer ({drawer_z}); the header must trap it"
     );
 
     let tools_under_drawer =
