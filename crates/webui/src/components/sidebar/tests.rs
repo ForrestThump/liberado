@@ -348,6 +348,13 @@ fn theme_picker_paints_above_the_chat_and_is_not_clipped() {
         "the phone header stays above the drawer"
     );
 
+    let tools_under_drawer =
+        css_block(phone_drawer, ".grok-layout.drawer-open .tools-popover-wrap");
+    assert!(
+        tools_under_drawer.contains("z-index: auto"),
+        "Tools must not paint above the phone drawer: {tools_under_drawer}"
+    );
+
     let phone_pop = nth_css_block(css, ".theme-swatch-pop", 1);
     assert!(
         phone_pop.contains("position: fixed"),

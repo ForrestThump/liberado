@@ -3132,6 +3132,11 @@ body {
         cursor: pointer;
     }
 
+    /* Global `.tools-popover-wrap` is z-index 40; keep Tools under the drawer overlay. */
+    .grok-layout.drawer-open .tools-popover-wrap {
+        z-index: auto;
+    }
+
     .grok-layout.drawer-open .sidebar {
         position: fixed;
         /* `inset` first: the shorthand clears every edge, then the offsets below stick. */

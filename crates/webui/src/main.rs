@@ -192,6 +192,12 @@ fn App() -> Element {
     use_effect(move || back_nav::sync_depth(back_depth()));
 
     let drawer_open = move || sidebar_drawer_open(is_narrow(), sidebar_collapsed());
+    use_effect(move || {
+        let mut tools_open = tools_open;
+        if sidebar_drawer_open(is_narrow(), sidebar_collapsed()) && tools_open() {
+            tools_open.set(false);
+        }
+    });
     let open_profile_picker = move |_| {
         route.set(Route::Chat);
         profile_browser_open.set(true);
