@@ -355,6 +355,47 @@ profile). A chat, and an empty chat with no conversation yet, still show the chi
 Out of scope here: a wizard UI, notebook editor, skills substrate, custom tool grants, compaction
 of the creator transcript, and TUI shelf parity.
 
+## 6f. Automation Editor session
+
+Each Edit or New click on the Automations page creates a **new** Automation Editor
+chat. The marker is `automation_editor: true` on the session and conversation headers
+(serde default false, omitted when false). A fork clears the flag. The chat is a normal
+conversation (`surface_mode: chat`). It appears on the Chats shelf and can be deleted.
+
+The row runs as profile `automation-editor`. That name is not an agent-creator profile,
+so `create_agent` stays off. It is not listed in `[chat] agent_profiles`. `delegation`
+is false. The policy grant for component `automation-editor` is an empty capability
+list: the four schedule tools are face builtins, not policy capabilities. The profile
+has no `domain` and no vault write.
+
+`POST /api/conversations` accepts `automation_editor: true`. `profile` and `title` on
+that body are ignored. Every such post returns 201 and a new id. Optional `target`
+names the automation an Edit click opened (name, schedule text, cron expression,
+timezone, description, enabled). That text is appended to the system prompt. It is not
+a visible turn. A new automation omits `target`. Sending `agent_creator` and
+`automation_editor` together is 400. The opener
+`What automation changes do you want to make?` is the first assistant message. The
+store writes it. There is no model call for that line.
+
+The face catalog for that flag is only `list_schedules`, `create_schedule`,
+`update_schedule`, and `delete_schedule`. Another profile does not see them.
+`list_schedules` re-reads `topology.toml` and needs no card. The three writers file a
+permission proposal (`requested_grant` set, `session_id` set, origin Web) and return
+without editing the file.
+
+The card offers **Approve** and **Deny**. A tap of once, session, or everywhere is treated
+as Approve for this one edit. None of those taps sets `approved_scope` or writes
+`grants.overlay.toml`. Approve calls `liberado_config`'s schedule writer once. Deny writes
+nothing. When the current row and the proposed row can both be read, the card summary is
+a plain-English before/after (the cron English helper and the schedule description).
+Otherwise the card keeps the stored rationale. The model-facing success text is the
+writer's summary. The editor prompt tells the model to say the edit takes effect after
+the service restarts, and to quote Central time. A refused write is the writer error,
+in plain text.
+
+The Automations page is the schedule list only. Edit and New navigate to the new chat.
+The page does not embed a composer and does not state the restart rule.
+
 ## 7. Follow-ups
 
 - **S4 (dogfood, Slice 4)** — Current. Use the shelves on the daemon you talk to,

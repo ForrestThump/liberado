@@ -46,6 +46,17 @@ pub async fn resolve_approval(
     Path(id): Path<String>,
     Json(body): Json<ApprovalResolveRequest>,
 ) -> impl IntoResponse {
+    resolve_recorded(state, id, body).await
+}
+
+async fn resolve_recorded(
+    state: Arc<AppState>,
+    id: String,
+    body: ApprovalResolveRequest,
+) -> axum::response::Response {
+    if let Some(response) = crate::schedule_cards::try_resolve(&state, &id, &body.decision).await {
+        return response;
+    }
     let Some(hub) = &state.approval_hub else {
         return (
             StatusCode::SERVICE_UNAVAILABLE,

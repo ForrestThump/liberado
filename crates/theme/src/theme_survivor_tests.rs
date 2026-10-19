@@ -111,7 +111,19 @@ fn save_then_load_round_trips_through_the_real_config_dir() {
 fn the_built_in_registry_is_never_empty() {
     let registry = ThemeRegistry::new();
     assert!(!registry.is_empty());
-    assert_eq!(registry.len(), 3, "dark, light, nord ship built in");
+    let builtins = Theme::builtins();
+    assert_eq!(
+        registry.len(),
+        builtins.len(),
+        "every Theme::builtins entry ships in the registry"
+    );
+    for theme in &builtins {
+        assert!(
+            registry.get(&theme.name).is_some(),
+            "built-in {} missing from the registry",
+            theme.name
+        );
+    }
 }
 
 #[test]

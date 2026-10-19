@@ -18,6 +18,16 @@ pub(crate) fn profile_chip_visible(surface: Option<SurfaceMode>) -> bool {
     !matches!(surface, Some(SurfaceMode::Agent))
 }
 
+/// Profile a new chat starts with.
+///
+/// Always unset. The header chip and the first-message `profile` query both read the
+/// `active_profile` signal in `App`. That signal is not written to localStorage (only the
+/// theme is, under `liberado.theme`). A privileged profile such as `operator` must not
+/// survive Chats +, `/new`, or the incognito fresh-chat transition.
+pub(crate) const fn profile_for_new_chat() -> Option<String> {
+    None
+}
+
 /// The picker renders only when the chip would, and only when something asked it to open.
 pub(crate) fn show_profile_browser(open: bool, surface: Option<SurfaceMode>) -> bool {
     open && profile_chip_visible(surface)
@@ -77,6 +87,15 @@ pub(crate) async fn handle_slash_for_surface(
 mod tests {
     use super::*;
     use liberado_commands::CommandResult;
+
+    /// Chats +, `/new`, and a fresh incognito chat all assign this. `operator` is the
+    /// privileged creator grant; it must not be what the next chat starts on.
+    #[test]
+    fn a_new_chat_starts_without_a_privileged_profile() {
+        assert_eq!(profile_for_new_chat(), None);
+        assert_ne!(profile_for_new_chat(), Some("operator".to_string()));
+        assert_ne!(profile_for_new_chat(), Some("coding".to_string()));
+    }
 
     #[test]
     fn chip_hides_only_on_an_agent_surface() {

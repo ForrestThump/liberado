@@ -20,6 +20,10 @@ use super::chat::{CHAT_DISABLED_HINT, chat_error, resolve_chat_grant};
 /// `agent_creator: true` ignores `profile` and `title` and find-or-creates the singleton Agent
 /// Creator session (201 the first time, 200 after that). See
 /// `docs/spec/architecture/chat-agent-surface-mode.md` §6e.
+///
+/// `automation_editor: true` opens a new Automation Editor chat (§6f). `profile` and
+/// `title` on that body are ignored. Optional `target` is hidden prompt context for
+/// an Edit click. The two flags together are a 400. Every editor post creates a chat.
 #[derive(Deserialize, Default)]
 pub struct CreateConversationRequest {
     #[serde(default)]
@@ -30,6 +34,29 @@ pub struct CreateConversationRequest {
     /// `{profile}` keep their existing meaning.
     #[serde(default)]
     pub agent_creator: bool,
+    /// Automations page. Each post creates a new editor chat. Default false.
+    #[serde(default)]
+    pub automation_editor: bool,
+    /// Edit click. Omitted for a new automation. Stored in the system prompt.
+    #[serde(default)]
+    pub target: Option<AutomationTargetRequest>,
+}
+
+/// Schedule the human opened from the Automations list.
+#[derive(Deserialize, Default)]
+pub struct AutomationTargetRequest {
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub schedule_text: String,
+    #[serde(default)]
+    pub cron_expr: String,
+    #[serde(default)]
+    pub timezone: String,
+    #[serde(default)]
+    pub description: String,
 }
 
 /// `POST /api/conversations` — create a conversation and return its header.
@@ -41,10 +68,75 @@ pub async fn create_conversation(
     State(state): State<Arc<AppState>>,
     Json(req): Json<CreateConversationRequest>,
 ) -> impl IntoResponse {
+    create_from_request(state, req).await
+}
+
+async fn create_from_request(
+    state: Arc<AppState>,
+    req: CreateConversationRequest,
+) -> axum::response::Response {
+    if req.agent_creator && req.automation_editor {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ApiError {
+                error: "send only one of agent_creator or automation_editor".into(),
+            }),
+        )
+            .into_response();
+    }
+    if req.automation_editor {
+        return open_automation_editor_response(state, &req).await;
+    }
     if req.agent_creator {
         return open_agent_creator_response(state).await;
     }
     create_standard_conversation(state, req).await
+}
+
+async fn open_automation_editor_response(
+    state: Arc<AppState>,
+    req: &CreateConversationRequest,
+) -> axum::response::Response {
+    let Some(sessions) = &state.chat else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ApiError {
+                error: CHAT_DISABLED_HINT.into(),
+            }),
+        )
+            .into_response();
+    };
+    let id = match sessions
+        .open_automation_editor(editor_target_from(req))
+        .await
+    {
+        Ok(id) => id,
+        Err(msg) => {
+            return (StatusCode::BAD_REQUEST, Json(ApiError { error: msg })).into_response();
+        }
+    };
+    match sessions.list().await {
+        Ok(headers) => header_or_missing(headers, id, true),
+        Err(e) => chat_error(e),
+    }
+}
+
+fn editor_target_from(
+    req: &CreateConversationRequest,
+) -> Option<liberado_main_agent::EditorTarget> {
+    let target = req.target.as_ref()?;
+    let name = target.name.trim();
+    if name.is_empty() {
+        return None;
+    }
+    Some(liberado_main_agent::EditorTarget {
+        name: name.to_string(),
+        enabled: target.enabled,
+        schedule_text: target.schedule_text.clone(),
+        cron_expr: target.cron_expr.clone(),
+        timezone: target.timezone.clone(),
+        description: target.description.clone(),
+    })
 }
 
 async fn open_agent_creator_response(state: Arc<AppState>) -> axum::response::Response {
@@ -131,7 +223,7 @@ async fn create_standard_conversation(
             // disabled / serialization failure — all fail closed). `Ok(None)` is structurally
             // unreachable for this input. If you ever generalize `resolve_chat_grant` to return
             // `Ok(None)` for any `Some(name)` case, this site is the one that must change.
-            let grant = match resolve_chat_grant(state.config.as_ref(), Some(name)) {
+            let grant = match resolve_chat_grant(&state.surfaces.profiles, Some(name)) {
                 Ok(Some(grant)) => grant,
                 Ok(None) => unreachable!(
                     "resolve_chat_grant(Some(name)) cannot return Ok(None) — only Ok(Some(grant)) \
@@ -157,6 +249,10 @@ async fn create_standard_conversation(
         Err(e) => chat_error(e),
     }
 }
+
+#[cfg(test)]
+#[path = "chat_automation_editor_tests.rs"]
+mod automation_editor_tests;
 
 fn schedule_agent_dm(
     sessions: &liberado_main_agent::ChatSessions,

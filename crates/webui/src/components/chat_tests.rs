@@ -1,10 +1,11 @@
 //! Split from `chat.rs` for module-health boundaries.
 
 use super::super::message_row::{
-    message_offers_copy, next_copy_button_visible, next_open_copy, should_scroll_copy_button,
+    clipboard_needs_exec_command, copy_feedback_label, message_offers_copy,
 };
 use super::stream_url;
 use super::*;
+use crate::components::profile_surface::profile_for_new_chat;
 
 const BASE: &str = "http://d";
 
@@ -66,6 +67,17 @@ fn a_model_survives_incognito_and_a_profile() {
 fn no_model_means_no_parameter() {
     assert!(!url(Some("01ABC"), None).contains("model="));
     assert!(!url(Some("01ABC"), Some("")).contains("model="));
+}
+
+/// A new chat assigns `profile_for_new_chat` (unset). The create request must not carry
+/// `operator` or any other profile from the chat that was just left.
+#[test]
+fn a_new_chat_request_omits_the_previous_profile() {
+    let profile = profile_for_new_chat();
+    assert!(profile.is_none());
+    let u = stream_url(BASE, "hi", None, false, profile.as_deref(), None);
+    assert!(!u.contains("profile="), "{u}");
+    assert!(!u.contains("operator"), "{u}");
 }
 
 /// `session` names an existing conversation; `incognito` and `profile` describe how to open a new
@@ -148,6 +160,36 @@ fn a_reloaded_think_only_turn_keeps_a_collapsed_thinking_step() {
     assert_eq!(live[0].reasoning.as_deref(), Some("only thinking"));
     assert!(!super::chat_fold::show_answer(true, false, true));
     assert!(super::chat_fold::show_answer(false, false, true));
+}
+
+/// Streaming appends every token onto `content`, including a `<think>` block, and
+/// history then stores that same block as `reasoning`. The disclosure must not
+/// repeat the reply, and a thought that was joined to itself must show once.
+#[test]
+fn thinking_disclosure_does_not_repeat_the_visible_reply() {
+    let (content, reasoning) = super::chat_reasoning::fold_thinking(
+        "<think>\nsecret step\n</think>\n\nHello",
+        Some("secret step\n\nHello"),
+    );
+    assert_eq!(content, "Hello");
+    assert_eq!(reasoning.as_deref(), Some("secret step"));
+    assert!(!content.contains("secret"), "{content}");
+
+    let (same, hidden) = super::chat_reasoning::fold_thinking("Hello", Some("Hello"));
+    assert_eq!(same, "Hello");
+    assert!(hidden.is_none(), "the reply is already on screen");
+
+    let (answer, once) =
+        super::chat_reasoning::fold_thinking("Hello", Some("secret step\nsecret step"));
+    assert_eq!(answer, "Hello");
+    assert_eq!(once.as_deref(), Some("secret step"));
+
+    let mut msg = ChatMsg::new_assistant(String::new());
+    super::chat_reasoning::append_token(&mut msg, "<thi");
+    super::chat_reasoning::append_token(&mut msg, "nk>\nsecret step\n</think>\n\nHello");
+    assert_eq!(msg.content, "Hello");
+    assert_eq!(msg.reasoning.as_deref(), Some("secret step"));
+    assert!(!msg.content.contains("<think"), "{}", msg.content);
 }
 
 /// The history effect must not wipe a first turn just because it has no conversation id yet.
@@ -261,109 +303,64 @@ fn tool_block_header_uses_the_daemon_summary_line() {
     assert_eq!(super::chat_fold::tool_block_label(""), "Tool result");
 }
 
-/// The copy button is hidden until the first tap, shown after it, hidden after the second, and
-/// so on. Pinned so a future refactor that swaps `!` for an accidental `set(false)` or a
-/// stale-closure bug cannot quietly regress to a button that never appears (or never goes away).
+/// Plain `http` (a tailnet) is not a secure context. `navigator.clipboard` rejects there,
+/// which is why a tap used to do nothing. The textarea fallback is the path for that case.
 #[test]
-fn copy_button_visibility_alternates_with_each_tap() {
-    // The function is the *next* state after a tap, so feeding `false` in returns the state
-    // produced by the first tap on a hidden button — visible.
-    assert!(
-        next_copy_button_visible(false),
-        "first tap must show the button"
-    );
-
-    // Five consecutive taps from a fresh render: odd-numbered taps reveal the button, even ones
-    // hide it. 1-based tap count makes the alternation easy to read.
-    let mut visible = false;
-    for tap in 1..=5 {
-        visible = next_copy_button_visible(visible);
-        let expected = tap % 2 == 1;
-        assert_eq!(
-            visible, expected,
-            "tap #{tap} should set visible={expected}"
-        );
-    }
-
-    // A sixth tap re-hides the button — important because a stuck-visible button would consume
-    // space under every assistant message after the first interaction.
-    visible = next_copy_button_visible(visible);
-    assert!(!visible, "sixth tap should re-hide the button");
+fn insecure_context_uses_the_textarea_clipboard_fallback() {
+    assert!(clipboard_needs_exec_command(false));
+    assert!(!clipboard_needs_exec_command(true));
 }
 
-/// One copy button is visible. Tapping a message reveals it and hides whichever other message
-/// was open. A second tap on that same message hides it, and a third shows it again — the
-/// same-message alternation, applied to the single shared index rather than a private flag.
 #[test]
-fn copy_button_tap_state_is_exclusive() {
-    let mut open = None;
+fn copy_button_label_confirms_then_resets() {
+    assert_eq!(copy_feedback_label(false), "Copy");
+    assert_eq!(copy_feedback_label(true), "Copied");
+}
 
-    open = next_open_copy(open, 0);
-    assert_eq!(open, Some(0), "first tap shows that message");
-    assert_eq!(
-        open.is_some(),
-        next_copy_button_visible(false),
-        "showing a closed message uses the same-message alternation"
-    );
-
-    open = next_open_copy(open, 1);
-    assert_eq!(
-        open,
-        Some(1),
-        "tapping a second message shows it and hides the first"
-    );
-
-    open = next_open_copy(open, 1);
-    assert_eq!(open, None, "second tap on the same message hides it");
+/// Attach, model, mic, voice, and send sit on a row under the text box, on phone
+/// and desk widths. The textarea uses the full pill.
+#[test]
+fn composer_actions_sit_under_the_full_width_text_box() {
+    let css = include_str!("../styles/main.css");
+    let bar = css_block(css, ".input-bar");
+    assert!(bar.contains("flex-direction: column"), "{bar}");
+    assert!(bar.contains("align-items: stretch"), "{bar}");
     assert!(
-        !next_copy_button_visible(true),
-        "hiding an open message uses the same-message alternation"
+        !bar.contains("flex-end"),
+        "flex-end was the side-by-side toolbar: {bar}"
     );
-
-    open = next_open_copy(open, 1);
-    assert_eq!(
-        open,
-        Some(1),
-        "third tap on the same message shows it again"
-    );
-
-    open = next_open_copy(Some(0), 2);
-    assert_eq!(
-        open,
-        Some(2),
-        "revealing a third message leaves only that one open"
+    let wrap = css_block(css, ".input-wrap");
+    assert!(wrap.contains("width: 100%"), "{wrap}");
+    let field = css_block(css, ".input-wrap .input");
+    assert!(field.contains("width: 100%"), "{field}");
+    let toolbar = css_block(css, ".input-toolbar");
+    assert!(toolbar.contains("width: 100%"), "{toolbar}");
+    let chat = include_str!("chat.rs");
+    let form = chat
+        .split("class: \"input-bar\"")
+        .nth(1)
+        .expect("input-bar");
+    let form = form
+        .split("class: \"input-toolbar\"")
+        .next()
+        .expect("toolbar");
+    assert!(
+        form.contains("id: \"chat-input\""),
+        "the text box must come before the action row"
     );
 }
 
-/// Scroll only when a tap reveals the button on the last message in the thread list.
-/// Hiding does not scroll. An earlier message does not scroll, including a tap that hides
-/// the last message's button by opening an earlier one. The streaming ellipsis is not a list
-/// entry: counting it would make the last `ChatMsg` look earlier than `last`, and that tap
-/// would no longer scroll.
-#[test]
-fn copy_button_scrolls_only_when_the_last_message_is_revealed() {
-    let last = 2usize;
-    assert!(should_scroll_copy_button(None, last, last));
-    assert!(
-        should_scroll_copy_button(Some(0), last, last),
-        "switching the open button onto the last message reveals it"
-    );
-    assert!(
-        !should_scroll_copy_button(Some(last), last, last),
-        "hiding the last message does not scroll"
-    );
-    assert!(
-        !should_scroll_copy_button(None, 0, last),
-        "an earlier message does not scroll"
-    );
-    assert!(
-        !should_scroll_copy_button(Some(last), 0, last),
-        "moving off the last message does not scroll"
-    );
-    assert!(
-        !should_scroll_copy_button(None, last, last + 1),
-        "the ellipsis is not a list entry, so it must not push the last message off the end"
-    );
+fn css_block<'a>(css: &'a str, selector: &str) -> &'a str {
+    let needle = format!("{selector} {{");
+    let start = css
+        .find(&needle)
+        .unwrap_or_else(|| panic!("missing CSS rule {selector}"))
+        + needle.len();
+    let rest = &css[start..];
+    let end = rest
+        .find('}')
+        .unwrap_or_else(|| panic!("unterminated CSS rule {selector}"));
+    &rest[..end]
 }
 
 #[test]

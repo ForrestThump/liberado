@@ -22,7 +22,6 @@ use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 
 use chat_client_contract::{ApiError, ChatMessage, ConversationHistoryResponse};
-use liberado_bootstrap::Config;
 
 use crate::state::AppState;
 #[derive(Deserialize)]
@@ -155,13 +154,13 @@ pub(super) const KEEP_ALIVE_INTERVAL: std::time::Duration = std::time::Duration:
 /// closure is the only place that touches `ResolvedProfile`; the type is not re-exported from
 /// `liberado_config` at the top level, so naming it here would force a deep import.
 pub(super) fn resolve_chat_grant(
-    config: &Config,
+    profiles: &crate::surfaces::ProfileCatalog,
     profile: Option<&str>,
 ) -> Result<Option<liberado_session::SessionGrant>, String> {
     match profile {
         None => Ok(None),
-        Some(name) => config
-            .resolve_session_profile(Some(name), "")
+        Some(name) => profiles
+            .resolve(Some(name), "")
             .map_err(|e| e.to_string())
             .and_then(|resolved| {
                 let parts = resolved.grant_parts();
@@ -264,7 +263,7 @@ async fn chat_stream_core(
     // Resolve the requested profile before creating anything: an unknown name must fail the request
     // rather than quietly open a chat on the default grant, which is wider than whatever was asked
     // for. Same fail-closed rule the switch endpoint follows.
-    let grant = match resolve_chat_grant(state.config.as_ref(), profile.as_deref()) {
+    let grant = match resolve_chat_grant(&state.surfaces.profiles, profile.as_deref()) {
         Ok(grant) => grant,
         Err(msg) => return fail_stream_response(tx, rx, msg),
     };
@@ -595,6 +594,14 @@ pub async fn delete_conversation(
     Path(id): Path<Ulid>,
     Query(params): Query<DeleteParams>,
 ) -> impl IntoResponse {
+    delete_conversation_inner(state, id, params).await
+}
+
+async fn delete_conversation_inner(
+    state: Arc<AppState>,
+    id: Ulid,
+    params: DeleteParams,
+) -> impl IntoResponse {
     let Some(sessions) = &state.chat else {
         return (
             StatusCode::SERVICE_UNAVAILABLE,
@@ -674,38 +681,9 @@ async fn refuse_ephemeral_delete(
 ///
 /// Enabled entries only, in configured order, so the operator controls the list a picker shows.
 pub async fn list_profiles(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    // The deployment's `[chat] agent_profiles` set is the source of truth for which
-    // profiles the WebUI New Agent picker and the face `create_agent` tool will
-    // accept. Reading it from `config.tuning` here keeps the picker consistent with
-    // those create paths — a deployment adding `designer` shows it in the picker,
-    // a deployment removing `coding` no longer offers it.
-    let agent_eligible: std::collections::HashSet<&str> = state
-        .config
-        .tuning
-        .chat
-        .agent_profiles
-        .iter()
-        .map(String::as_str)
-        .collect();
-    let profiles: Vec<serde_json::Value> = state
-        .config
-        .enabled_session_profiles()
-        .into_iter()
-        .map(|p| {
-            serde_json::json!({
-                "name": p.name,
-                "description": p.description,
-                // Present for a pack profile (`/spawn`), absent for a chat profile (`/profile`).
-                // The client uses it to say which list an entry belongs in.
-                "domain": p.domain,
-                "delegation": p.delegation,
-                "model": p.model,
-                // Reading B: New Agent picker + create_agent only offer these.
-                "agent_eligible": agent_eligible.contains(p.name.as_str()),
-            })
-        })
-        .collect();
-    Json(serde_json::json!({ "profiles": profiles }))
+    // Live names come from the profile ledger. `agent_eligible` still follows the topology
+    // name in `[chat] agent_profiles`. See `ProfileCatalog::list_json`.
+    Json(state.surfaces.profiles.list_json())
 }
 
 #[derive(Deserialize)]
@@ -757,7 +735,7 @@ pub async fn set_conversation_profile(
             // The domain fallback is unused here: it only applies when no profile is named, and a
             // name is named. A chat profile has no domain and that is fine — unlike `/spawn`, a
             // conversation needs no pack.
-            match state.config.resolve_session_profile(Some(name), "") {
+            match state.surfaces.profiles.resolve(Some(name), "") {
                 Ok(resolved) => {
                     let parts = resolved.grant_parts();
                     liberado_session::SessionGrant {
@@ -812,43 +790,17 @@ pub async fn set_conversation_profile(
     }
 }
 
-/// `PATCH /api/conversations/{id}` â€” update the title of an existing conversation.
-#[derive(Deserialize)]
-pub struct TitleRequest {
-    pub title: String,
-}
-
+/// `PATCH /api/conversations/{id}` — title, project, and the next turn's model.
 pub async fn patch_conversation_title(
     State(state): State<Arc<AppState>>,
     Path(id): Path<Ulid>,
-    Json(req): Json<TitleRequest>,
+    Json(req): Json<chat_patch::PatchConversation>,
 ) -> impl IntoResponse {
-    let Some(sessions) = &state.chat else {
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(ApiError {
-                error: CHAT_DISABLED_HINT.into(),
-            }),
-        )
-            .into_response();
-    };
-    match sessions.set_title(id, req.title).await {
-        Ok(()) => StatusCode::OK.into_response(),
-        Err(liberado_main_agent::SessionError::Store(
-            liberado_conversation_store::StoreError::NotFound(_),
-        )) => (
-            StatusCode::NOT_FOUND,
-            Json(ApiError {
-                error: "conversation not found".into(),
-            }),
-        )
-            .into_response(),
-        Err(e) => {
-            tracing::warn!(error = %e, "PATCH title failed for conversation {id}");
-            chat_error(e)
-        }
-    }
+    chat_patch::patch_conversation(state, id, req).await
 }
+
+#[path = "chat_patch.rs"]
+mod chat_patch;
 
 /// `GET /api/conversations/{id}` â€” the full message history of one conversation, for reopening it.
 /// 404 when the conversation does not exist, 500 on any other store error.
@@ -873,7 +825,7 @@ pub async fn get_conversation(
                 nodes.into_iter().map(chat_message_from_node).collect();
             // One session read: profile for the chip, projected shelf for whether the chip shows.
             // The projection is the same chat lens the sidebar list uses.
-            let (profile, surface_mode) = state
+            let (profile, surface_mode, project, pending_model) = state
                 .sessions
                 .session(id)
                 .await
@@ -883,9 +835,19 @@ pub async fn get_conversation(
                             .to_conversation_header_with(state.sessions.agent_profiles())
                             .surface_mode,
                     );
-                    (header.grant.profile, mode)
+                    (
+                        header.grant.profile,
+                        mode,
+                        header.project.clone(),
+                        header.pending_model.clone(),
+                    )
                 })
-                .unwrap_or((None, chat_client_contract::SurfaceMode::default()));
+                .unwrap_or((
+                    None,
+                    chat_client_contract::SurfaceMode::default(),
+                    None,
+                    None,
+                ));
             let approvals =
                 crate::approvals::conversation_cards(&state.approval_hub, &id.to_string()).await;
             Json(ConversationHistoryResponse {
@@ -899,6 +861,8 @@ pub async fn get_conversation(
                 turn_unanswered: sessions.last_turn_unanswered(id).await,
                 surface_mode,
                 approvals,
+                project,
+                pending_model,
             })
             .into_response()
         }

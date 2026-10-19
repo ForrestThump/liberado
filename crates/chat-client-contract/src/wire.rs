@@ -312,6 +312,12 @@ pub struct ConvHeader {
     /// `docs/spec/architecture/chat-agent-surface-mode.md` for the rule.
     #[serde(default)]
     pub surface_mode: SurfaceMode,
+    /// Coding project attached to this chat. Absent when none is attached.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<String>,
+    /// Model pick for the next turn. Absent once a turn has consumed it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pending_model: Option<String>,
 }
 
 /// Body of `POST /api/sessions/{id}/fork`.
@@ -419,6 +425,14 @@ pub struct ConversationHistoryResponse {
     /// and an older daemon (no field) still decodes as an empty list.
     #[serde(default)]
     pub approvals: Vec<ApprovalCard>,
+    /// Coding project attached to this chat. `#[serde(default)]` so an older
+    /// daemon (no field) reads as not attached.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<String>,
+    /// Model the next turn will use, when the human picked one and has not sent yet.
+    /// Cleared once that turn stamps the message. Absent means no pending pick.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pending_model: Option<String>,
 }
 
 /// One tappable choice on an [`ApprovalCard`]. The label comes from the server. A surface
@@ -951,6 +965,7 @@ mod tests {
             parent_conversation: Some("c0".into()),
             spawned_by: Some("msg-5".into()),
             surface_mode: SurfaceMode::default(),
+            ..Default::default()
         };
         let json = serde_json::to_value(&h).unwrap();
         let back: ConvHeader = serde_json::from_value(json).unwrap();
@@ -1063,6 +1078,8 @@ mod tests {
             turn_unanswered: false,
             surface_mode: SurfaceMode::Agent,
             approvals: vec![],
+            project: Some("liberado".into()),
+            pending_model: Some("vendor/exact".into()),
         };
         let json = serde_json::to_value(&resp).unwrap();
         assert_eq!(json["surface_mode"], "agent");
@@ -1072,6 +1089,8 @@ mod tests {
         assert_eq!(back.messages[1].content, "hi there");
         assert!(back.turn_running);
         assert_eq!(back.surface_mode, SurfaceMode::Agent);
+        assert_eq!(back.project.as_deref(), Some("liberado"));
+        assert_eq!(back.pending_model.as_deref(), Some("vendor/exact"));
     }
 
     /// A daemon that predates `turn_running` omits the field, and a client must read that as "no
@@ -1083,6 +1102,8 @@ mod tests {
         assert!(!back.turn_running);
         assert!(!back.turn_unanswered);
         assert_eq!(back.surface_mode, SurfaceMode::Chat);
+        assert!(back.project.is_none());
+        assert!(back.pending_model.is_none());
     }
 
     // ── VaultInfo / ApiError ──────────────────────────────────

@@ -26,6 +26,8 @@ use crate::proposal_path;
 
 #[path = "pending_list.rs"]
 mod pending_list;
+#[path = "resolve_schedule.rs"]
+mod schedule_card;
 
 /// What [`PermissionResolver::resolve`] did. HTTP and Telegram map these onto their own replies.
 #[derive(Debug, Clone, PartialEq, Eq)]

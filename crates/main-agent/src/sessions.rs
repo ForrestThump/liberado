@@ -79,11 +79,18 @@ use liberado_session::{DomainHint, GoalSessionHub, GoalSpec, SessionGrant, Sessi
 mod agent_hooks;
 #[path = "sessions/agent_profiles.rs"]
 mod agent_profiles;
+#[path = "sessions/automation_editor.rs"]
+mod automation_editor;
+pub use automation_editor::{AUTOMATION_EDITOR_OPENER, EditorTarget};
+#[path = "sessions/face_gate.rs"]
+mod face_gate;
 pub use agent_hooks::is_agent_dm_session;
 #[path = "sessions/agent_spawn.rs"]
 mod agent_spawn;
 #[path = "sessions/approval.rs"]
 mod approval;
+#[path = "sessions/pending_choice.rs"]
+mod pending_choice;
 mod provider_route;
 #[path = "sessions/reasoning_stamp.rs"]
 mod reasoning_stamp;
@@ -180,6 +187,8 @@ struct TurnSettings {
     /// Resolved here with everything else for the reason this struct exists: a profile switch must
     /// not land between two reads and give a turn one profile's model under another's tools.
     model: Option<String>,
+    /// An Automation Editor chat. Its face catalog is the schedule tools only.
+    automation_editor: bool,
 }
 
 /// What can go wrong running a persisted turn: the agent loop failed, or the store did. Both are
@@ -334,6 +343,10 @@ pub struct ChatSessions {
     user_timezone: Option<UserTimezone>,
     /// Sticky Telegram id and the scope-button sender. Filled after this value is inside an `Arc`.
     approval_hooks: approval::ApprovalHooks,
+    /// `list_schedules` for the Automation Editor. Absent unless boot wires it.
+    schedule_list: Option<automation_editor::ScheduleList>,
+    /// Code-computed timing appended to a schedule-edit tool result.
+    schedule_facts: Option<automation_editor::ScheduleFacts>,
     /// Runs after an agent is created, renamed, or deleted. Empty unless Matrix is on.
     matrix_hook: Mutex<Option<agent_hooks::MatrixHook>>,
 }
@@ -401,6 +414,8 @@ impl ChatSessions {
             user_timezone: None,
             approval_hooks: approval::ApprovalHooks::new(),
             matrix_hook: Mutex::new(None),
+            schedule_list: None,
+            schedule_facts: None,
         }
     }
 
@@ -771,7 +786,7 @@ impl ChatSessions {
                 .await?;
             // Resolved once: the prompt the model reads and the tools it is handed must agree, and
             // deciding that twice is how they came apart in the first place.
-            let face_agent = self.uses_face_agent(settings.delegation);
+            let face_agent = self.face_turn(&settings);
             if !face_agent {
                 convo.apply_direct_agent_prompt();
             }
@@ -793,7 +808,7 @@ impl ChatSessions {
                     session,
                     settings.capabilities.clone(),
                     turn_deferral.clone(),
-                    settings.profile.as_deref(),
+                    &settings,
                 );
                 // Derived from the runtime the executor is about to be handed, never from a list built
                 // beside it — see `Conversation::apply_available_tools`.
@@ -894,7 +909,7 @@ impl ChatSessions {
                 .persist_user_message(session, user, parent_leaf, Some(turn_model.clone()))
                 .await?;
 
-            let face_agent = self.uses_face_agent(settings.delegation);
+            let face_agent = self.face_turn(&settings);
             if !face_agent {
                 convo.apply_direct_agent_prompt();
             }
@@ -919,7 +934,7 @@ impl ChatSessions {
                     session,
                     settings.capabilities.clone(),
                     turn_deferral,
-                    settings.profile.as_deref(),
+                    &settings,
                 );
                 self.state_tool_surface(&mut convo, session, &settings, turn_runtime.as_ref());
                 let ran = convo
@@ -965,20 +980,6 @@ impl ChatSessions {
             Ok(())
         })
         .await
-    }
-
-    /// Whether this turn runs as the face agent (delegating) rather than driving the dispatcher
-    /// directly.
-    ///
-    /// `delegation` is the **session's** resolved setting, not the process-wide flag: turning
-    /// dispatch off is most of what a "basic chat" profile means, and a profile that could only
-    /// shorten the tool list would leave the agent still handing work to the dispatcher.
-    ///
-    /// `face_bridge` still gates it. A daemon with no hub attached has no `delegate` tool to offer,
-    /// so a profile asking for delegation there gets the direct path rather than a tool that does
-    /// not exist.
-    fn uses_face_agent(&self, delegation: bool) -> bool {
-        delegation && self.face_bridge.is_some()
     }
 
     /// The capability set a turn in `session` runs under.
@@ -1032,19 +1033,21 @@ impl ChatSessions {
                 prompt_append: header.grant.prompt_append,
                 profile: header.grant.profile,
                 model: header.grant.model,
+                automation_editor: false,
             }
         };
+        settings.automation_editor = header.automation_editor;
         settings.model = self.resolve_turn_model(session, from_profile).await;
         settings
     }
 
     /// Which model this turn runs on, in precedence order.
     ///
-    /// 1. **A pending pick** — a human chose a model for *this* conversation. Either they asked
-    ///    ahead of time (`POST /api/models/select` with a `conversation`) or the choice arrived on
-    ///    the message itself (`model` on the chat request, which is how a pick made *before* the
-    ///    conversation existed gets here). Held in memory only, because until a turn runs there is
-    ///    nothing to record; the pick becomes durable the moment the user node is stamped with it.
+    /// 1. **A pending pick** — a human chose a model for *this* conversation. The in-memory
+    ///    pick (`POST /api/models/select` with a `conversation`, or `model` on the chat request)
+    ///    wins over `pending_model` on the session header (`PATCH /api/conversations/{id}`).
+    ///    The chosen string is used as-is. The turn stamps it on the user message and clears
+    ///    the header field. It does not substitute another model.
     /// 2. **The profile's model**, when a session profile names one. Operator-declared.
     /// 3. **What this conversation last ran on**, read back off its own log. This is the sticky
     ///    behaviour: a conversation stays on the model that has been answering it, rather than
@@ -1077,10 +1080,7 @@ impl ChatSessions {
         from_profile: Option<String>,
         consume: ConsumePending,
     ) -> Option<String> {
-        let pending = match consume {
-            ConsumePending::Yes => self.pending_model(session),
-            ConsumePending::No => self.peek_pending_model(session),
-        };
+        let pending = self.pending_choice(session, consume).await;
         if let Some(pending) = pending {
             return Some(pending);
         }
@@ -1352,6 +1352,7 @@ impl ChatSessions {
             prompt_append: None,
             profile: None,
             model: None,
+            automation_editor: false,
         }
     }
 

@@ -171,3 +171,30 @@ fn main_agent_chat_search_is_commented_opt_in_not_granted() {
         "CAS3 opt-in comment must live on the main-agent grant, not only dispatcher; block was:\n{block}"
     );
 }
+
+/// The Automation Editor hat is empty: no domain, no delegation, no vault write.
+#[test]
+fn the_automation_editor_hat_is_empty() {
+    let cfg = shipped_example_config();
+    cfg.validate()
+        .unwrap_or_else(|err| panic!("config.example does not validate: {err}"));
+    let profile = cfg
+        .topology
+        .session_profiles
+        .iter()
+        .find(|profile| profile.name == "automation-editor")
+        .expect("automation-editor profile");
+    assert!(profile.enabled);
+    assert!(profile.domain.is_none());
+    assert_eq!(profile.delegation, Some(false));
+    assert!(!profile.declares_authority());
+    let caps = cfg.policy.capabilities_for("automation-editor");
+    assert!(caps.capabilities.is_empty());
+    assert!(
+        !cfg.tuning
+            .chat
+            .agent_profiles
+            .iter()
+            .any(|name| name == "automation-editor")
+    );
+}

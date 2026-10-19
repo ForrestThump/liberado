@@ -155,9 +155,13 @@ async fn bridge_with_config(
         executor,
         Arc::new(no_tools_runtime()),
     ));
-    let mut state = crate::state::AppState::for_test(store, Some(Arc::clone(&chat)), root.into());
+    let mut state = crate::state::AppState::for_test_with_config(
+        store,
+        Some(Arc::clone(&chat)),
+        root.into(),
+        (*config).clone(),
+    );
     state.provider = Some(Arc::clone(&provider));
-    state.config = config;
     let bridge = TextChatBridge::for_test(Arc::new(state));
     (bridge, chat, provider)
 }

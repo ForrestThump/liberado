@@ -16,6 +16,13 @@ ignore = [
     # eframe's Linux window integration through winit/sctk-adwaita. Revisit
     # when that upstream GUI stack replaces it.
     "RUSTSEC-2026-0192",
+    # `zvariant`, `zbus_names`, and `zvariant_derive` are unmaintained (not
+    # vulnerabilities) with no safe upgrade. zbus 5 merged them into zbus 6.
+    # eframe pulls them in through accesskit_unix → zbus 5.19 for
+    # liberado-sysmap-gui. Revisit when that Linux stack moves to zbus 6.
+    "RUSTSEC-2026-0370",
+    "RUSTSEC-2026-0371",
+    "RUSTSEC-2026-0372",
 ]
 
 [licenses]

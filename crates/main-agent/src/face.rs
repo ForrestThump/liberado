@@ -32,10 +32,16 @@ use serde_json::json;
 
 #[path = "face/create_agent.rs"]
 mod create_agent;
+#[path = "face/schedules.rs"]
+mod schedules;
 pub use create_agent::{
     AgentSpawner, CREATE_AGENT_TOOL_NAME, CreateAgentResult, create_agent_tool_def,
 };
 use create_agent::{CreateAgentArgs, parse_create_agent_args};
+pub use schedules::{
+    CREATE_SCHEDULE_TOOL_NAME, DELETE_SCHEDULE_TOOL_NAME, EditorRuntime, LIST_SCHEDULES_TOOL_NAME,
+    ScheduleEditorOps, UPDATE_SCHEDULE_TOOL_NAME, is_schedule_write_tool,
+};
 
 /// Tool name the face agent calls to hand a goal to the dispatcher.
 pub const DELEGATE_TOOL_NAME: &str = "delegate";

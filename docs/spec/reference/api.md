@@ -8,13 +8,14 @@ share everything.
 ```
               ┌──────────── liberado-server (HTTP + SSE) ──────────────────┐
               │  /api/status   /api/models (+ POST select)   /api/catalog   │
-              │  /api/reactions   /api/vault   /api/chat (+ stream)         │
+              │  /api/reactions   /api/vault   /api/library   /api/chat    │
               │  /api/conversations   /api/conversations/{id} (GET/PATCH)   │
               │  GET /api/conversations/{id}/grant                           │
               │  GET /api/conversations/{id}/grants (read-only)              │
               │  GET /api/approvals/pending                                  │
               │  /api/conversations/{id}/approvals   POST .../resolve        │
               │  /api/goals  /api/goals/{id}/stream  (goal sessions)        │
+              │  GET /api/schedules   GET /api/hooks   POST /api/hooks/{name} │
               └───────────────┬───────────────────────────┬────────────────┘
                               │                            │
                     fetch / EventSource            reqwest (native)
@@ -40,6 +41,8 @@ human input. Packs registered at boot: **`life`** (always, second-domain demo) a
 |---|---|---|
 | GET | `/api/sessions` | **Every session, newest first — chats *and* goal sessions in one list (S5′).** `goal` is absent on a chat and present on a session that runs to a terminal status; that `Option` is the only difference. Also carries `title`, `status`, `awaiting_input`, `visibility` (`foreground`/`background`), and `parent_session` (a real id, so the session tree is walkable). This is what a switcher should read. |
 | GET | `/api/goals/domains` | The **registered packs** — `{ "domains": ["life","coding","dispatch"] }` when a provider is configured. `dispatch` is the dispatcher + orchestrator pair as a pack, so cron, webhooks and `delegate` are hosted sessions on the same hub as `/spawn` rather than a second engine. |
+| GET | `/api/schedules` | **Read-only** reflection of `[[schedules]]` from loaded topology: `{ "schedules": [{ "name", "enabled", "cron_expr", "goal", "job", "profile", "next_fire": null, "description", "schedule_text", "timezone" }] }`. `next_fire` is the next fire in `timezone`, for example `Mon Oct 19, 8:00 PM CDT`. It is null when `cron_expr` does not parse. `description` is plain text for what that row runs, built from its kind, goal, profile, and delivery fields. `schedule_text` is a reading of `cron_expr` in `timezone` (the loaded `topology.timezone`). Clock times in that reading use the offset at request time. An expression the reader cannot describe exactly is returned unchanged as `schedule_text`. `timezone` is the IANA name. These three fields are additive. No enable/disable, run-now, or topology write. |
+| GET | `/api/hooks` | **Read-only** list of configured webhook hooks: `{ "hooks": [{ "name", "enabled" }] }`. Never returns `secret_ref` or secret values. Triggers remain `POST /api/hooks/{name}` with `X-Liberado-Hook-Secret`. |
 | POST | `/api/sessions/{id}/fork` | **Branch a conversation, keeping the original.** Body: `{"after_turn": <n>?, "title": <string>?}`. `after_turn` is 1-based and names the branch point by the *human's* turn — keep through turn `n` and the reply it got, dropping everything after, i.e. "go back to just after turn n and take a different path". Omit it to fork the whole conversation as it stands. The server resolves turn → node; the store speaks node ids. Returns `{id, forked_from, kept_turns, total_turns}`. **Copy, not reference**: the prefix is copied into the fork's own log, so continuing the original afterwards does not move the fork, and every session's log stays self-contained. 400 if the session has no message transcript (a goal session records *events*, not turns), 404 if unknown. |
 | GET | `/api/goals` | The **kernel lens**: only goal-bearing sessions (newest first). A goal-less session has no `GoalSessionRecord` representation, so it cannot appear here. Prefer `/api/sessions` for a list; this is for callers that specifically want run-to-terminal sessions. |
 | POST | `/api/goals` | JSON `GoalSpec`: `description`, `domain` (`life`\|`coding`\|`dispatch`), `success_criteria`, optional `profile`, optional `max_idle_secs`, optional `payload` |
@@ -139,10 +142,15 @@ can continue it. Conversation history is rehydrated from the store each turn and
 `{"reply","session"}`, so a client learns the id there too.
 
 Two read endpoints back the conversation sidebar: **`GET /api/conversations`** lists every
-conversation header (`[{id,title,created_at}]`, newest first), and **`GET /api/conversations/{id}`**
-returns one conversation's full message history (`{"messages":[…]}`; `404` if it doesn't exist).
-**`PATCH /api/conversations/{id}`** with `{"title": "..."}` renames a conversation (`200` on success,
-`404` if it doesn't exist, `503` if chat is disabled).
+conversation header (`[{id,title,created_at,project?,pending_model?}]`, newest first), and
+**`GET /api/conversations/{id}`** returns one conversation's full message history
+(`{"messages":[…],project?,pending_model?}`; `404` if it doesn't exist).
+**`PATCH /api/conversations/{id}`** updates a conversation (`200` on success, `404` if it doesn't
+exist, `400` for an unknown project or an empty body, `503` if chat is disabled). The body may
+include any of `title`, `project`, and `pending_model`. A missing field is left unchanged. `null`
+clears `project` or `pending_model`. `project` must be an enabled name from `GET /api/projects`.
+`pending_model` is the model id for the next turn. That turn stamps the same string on the message
+and clears the field. It does not substitute a different model. `{"title":"..."}` still renames.
 
 **`GET /api/conversations/{id}/grants`** is read-only. It returns the effective tool, MCP, and zone
 grants for that conversation's agent and session. `agent` is the process `main-agent` grant.
@@ -162,19 +170,87 @@ conversation does not exist, `503` if chat is disabled. There is no revoke on th
 consequence,tool_count,tool_names,visible_to_main_agent,visible_to_dispatcher}]}`) — the same
 `Arc<CapabilityCatalog>` the dispatcher routes against, not an independent snapshot.
 `tool_count`/`tool_names` are populated from the connected chat runtime's tools, grouped by MCP
-name. Visibility flags reflect `policy.toml` grants for `"main-agent"` vs `"dispatcher"`.
+name. `visible_to_dispatcher` is the `policy.toml` grant for `"dispatcher"`.
+`visible_to_main_agent` is the `"main-agent"` grant, narrowed by the chat-access ledger below.
+The ledger cannot grant a server policy did not grant.
+
+**`PUT /api/plugins/{id}`** body `{"enabled": true|false}`. `{id}` is an MCP server name from
+`GET /api/catalog`. `enabled: false` hides that server from the chat face (catalog flag and the
+chat runtime). `enabled: true` restores it only when policy already grants it to `main-agent`;
+otherwise `409`. Unknown id → `404`. Response:
+`{"name","enabled","visible_to_main_agent"}`. The mask is process-wide for the chat face, stored
+in `{data_dir}/plugin-chat-access.json`. It does not edit `topology.toml` and does not change the
+dispatcher grant.
+
+**`GET /api/profiles`** lists enabled `[[session_profiles]]` under their live names.
+`agent_eligible` follows the name in `topology.toml` (what `[chat] agent_profiles` lists), not a
+renamed display name.
+
+**`PATCH /api/profiles/{name}`** body `{"name":"new-name"}`. Renames one enabled profile.
+`200` `{"name","renamed_to","conversations"}`. The same name is a no-op (`conversations: 0`).
+Names are trimmed, non-empty, at most 64 characters, and ASCII letters, digits, `.`, `_`, `-`.
+A bad name is `400`. A name already in use is `409`. An unknown name is `404`. `chat-default`
+and the Agent Creator profile (`operator`) are `403`, whether they are the current name or the
+requested name. Conversations that used the old name are kept; their stored grant is copied onto
+the new name. The ledger is `{data_dir}/session-profile-ledger.json`. `topology.toml` is not
+rewritten.
+
+**`DELETE /api/profiles/{name}`** removes that live name. `200`
+`{"name","deleted":true,"conversations_kept","fallback":"default"}`. Conversations are kept.
+Their profile is cleared, so the next turn uses the process default grant. Unknown → `404`.
+`chat-default` and `operator` → `403`.
 
 ## Models (live catalog + hot-swap)
 
 | Method | Path | Notes |
 |---|---|---|
 | GET | `/api/models` | Live catalog from the provider's OpenAI-compatible `GET /models`, plus `current`. Soft-fails: always **200** with optional `error` so clients can still show `current`. Shape: `{"models":["…"],"current"?:"…","error"?:"…"}`. |
-| POST | `/api/models/select` | Body `{"model":"…"}`. Hot-swaps the active model for **subsequent** completions (same base URL / API key; only the `model` field of chat-completions requests changes). No daemon restart. Response: same `ModelsResponse` shape with updated `current`. Empty model → `400`; no provider → `503`. |
+| POST | `/api/models/select` | Body `{"model":"…"}` hot-swaps the daemon-wide model. Body `{"model":"…","conversation":"<ulid>"}` records an in-memory pick for that chat's next turn. The durable per-chat pick is `pending_model` on `PATCH /api/conversations/{id}`. The turn uses the in-memory pick when one is set, otherwise the stored `pending_model`, and stamps that exact string. Empty model → `400`; no provider on the daemon-wide form → `503`. |
 
 `GET /api/status` reports `model_name` from the live provider (so it tracks hot-swap, not only boot-time config). In-flight turns keep whatever model they already started with.
 
 TUI: `/model` opens a full-screen searchable browser over `GET /api/models`; Enter calls
 `POST /api/models/select`.
+
+## Projects (read-only)
+
+`GET /api/projects` returns the enabled `[[projects]]` rows from `topology.toml`:
+`{ "projects": [{ "name", "root", "write_class" }] }`. There is no create, update, or delete
+route. A project is declared in that file. The WebUI lists the rows and can remember a choice
+in the browser. It does not write the topology.
+
+## Library (vault files, v1)
+
+`GET /api/library?limit=50` returns `items`. One row looks like this:
+
+```json
+{
+  "id": "attachments/a.png",
+  "kind": "png",
+  "title": "a.png",
+  "path_or_url": "attachments/a.png",
+  "created_at": "2026-10-15T12:00:00Z",
+  "source": "vault"
+}
+```
+
+v1 is a read-only capped scan of vault folders the default profile may read. The default
+profile is the enabled `chat-default` session profile. When that profile is missing or
+disabled, the scan uses the `main-agent` grant. A folder is included only when that grant
+has `Read` on a **vault** zone and the zone name is one of `attachments`, `media`, `images`,
+`files`, `exports`, or `artifacts` (ASCII case-insensitive). Other readable zones, such as
+`tasks` or `decisions`, are not library items.
+
+`source` is always `"vault"`. Session artifacts and executor offload are not listed. There is
+no upload and no delete.
+
+`limit` defaults to 50 and is clamped to 1..=200. `created_at` is the file's last modification
+time in UTC (`YYYY-MM-DDTHH:MM:SSZ`). Birth time is not portable, so v1 does not use it. The
+scan stops after 2000 files and 8 directory levels under each folder, then keeps the newest
+`limit` rows. A missing vault or an empty folder is `200` with `{ "items": [] }`.
+
+`id` and `path_or_url` are the vault-relative path with `/` separators. `kind` is the
+lowercased extension, or `"file"` when the name has none. `title` is the file name.
 
 Structured events are **JSON-encoded** (not bare strings) so a multi-line preview can't split across
 SSE `data:` lines, and so the fields stay typed. `args_preview`/`result_preview` are truncated
@@ -300,7 +376,9 @@ What is reachable today, given spider-mcp fetches with `GET`:
 | `GET /api/conversations/search?q=` | Grep across every stored chat |
 | `GET /api/status`, `/api/catalog` | Model, MCP fleet, capability grants |
 
-So the live exposure is **disclosure, not escalation**: no `GET` mutates anything. An incognito chat
+So the live exposure through spider-mcp is **disclosure, not escalation**: no `GET` mutates
+anything. `PATCH /api/profiles/{name}`, `DELETE /api/profiles/{name}`, and `PUT /api/plugins/{id}`
+are not `GET` and are not agent tools. An incognito chat
 is not listed and has no file, so it cannot be found by listing or search — but it *is* readable at
 `GET /api/conversations/{id}` by anyone holding the id.
 

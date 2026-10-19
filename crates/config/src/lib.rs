@@ -19,26 +19,40 @@
 //! `docs/future-work/archive/hygiene-audit-2026-07-04.md`). Re-exported below so callers still reach it as
 //! `liberado_config::Config` et al. — "the config crate" stays the natural place to import it from.
 //!
-//! Deliberately dependency-light: only `liberado-common` + `liberado-config-loader`, no
-//! daemon/mcp/dispatcher/orchestrator/provider — so a tool that only needs config/path resolution
-//! (`liberado-mcp-forge`) doesn't have to build the whole assembly stack. `liberado-bootstrap` depends
-//! on this crate and re-exports its public surface, so `liberado-server`/`liberado-cli` see no change.
+//! Deliberately dependency-light: `liberado-common`, `liberado-config-loader`, and `toml_edit`
+//! (the `[[schedules]]` splice only). No daemon/mcp/dispatcher/orchestrator/provider — so a tool
+//! that only needs config/path resolution (`liberado-mcp-forge`) doesn't have to build the whole
+//! assembly stack. `liberado-bootstrap` depends on this crate and re-exports its public surface,
+//! so `liberado-server`/`liberado-cli` see no change.
+//!
+//! [`create_schedule`] writes one `[[schedules]]` row. It does not reload cron. See
+//! `docs/spec/config-spec.md` §4.5.
 
 use std::path::{Path, PathBuf};
 
 use liberado_common::{Capability, CapabilityCatalog, WriteClass, Zone};
 use thiserror::Error;
 
+mod schedule_patch;
+mod schedule_write;
+
+pub use schedule_patch::SchedulePatch;
+pub use schedule_write::{
+    ScheduleWriteAction, ScheduleWriteError, ScheduleWriteReport, create_schedule, delete_schedule,
+    schedule_topology_path, update_schedule,
+};
+
 pub use liberado_config_loader::{
-    AcpConfig, AgentWorkspaceTuning, COMPACTION_TRIGGER_PCT_DEFAULT,
-    COMPACTION_TRIGGER_TOKENS_FALLBACK, CURRENT_SCHEMA_VERSION, CaptureTuning, CodingAuthError,
-    CodingWorkspaceAuth, CompactionSettings, CompactionTriggerSource, ConcurrencyTuning, Config,
-    ConfigBuilder, ContextTuning, CronSchedule, DEFAULT_POOL, DispatchTuning, Grant, HookConfig,
-    MainAgentConfig, MaintenanceTuning, McpConfig, McpPoolingTuning, McpTransport,
-    ModelCompactionSettings, Policy, PoolConfig, ProjectConfig, ProviderFallback, ProviderProfile,
-    RoleOverride, SessionProfile, ShepherdAuthConfig, ShepherdConfig, ShepherdProjectConfig,
-    ShepherdReviewConfig, SubagentIsolation, TelegramApprovalsTuning, ToolImpact, Topology, Tuning,
-    VaultRemindersConfig, ZonePolicy, managed_binary_path, resolve_declared_zone,
+    AcpConfig, AgentWorkspaceTuning, BUILTIN_AUTOMATION_EDITOR_PROFILE,
+    COMPACTION_TRIGGER_PCT_DEFAULT, COMPACTION_TRIGGER_TOKENS_FALLBACK, CURRENT_SCHEMA_VERSION,
+    CaptureTuning, CodingAuthError, CodingWorkspaceAuth, CompactionSettings,
+    CompactionTriggerSource, ConcurrencyTuning, Config, ConfigBuilder, ContextTuning, CronSchedule,
+    DEFAULT_POOL, DispatchTuning, Grant, HookConfig, MainAgentConfig, MaintenanceTuning, McpConfig,
+    McpPoolingTuning, McpTransport, ModelCompactionSettings, Policy, PoolConfig, ProjectConfig,
+    ProviderFallback, ProviderProfile, ResolvedProfile, RoleOverride, SessionProfile,
+    ShepherdAuthConfig, ShepherdConfig, ShepherdProjectConfig, ShepherdReviewConfig,
+    SubagentIsolation, TelegramApprovalsTuning, ToolImpact, Topology, Tuning, VaultRemindersConfig,
+    ZonePolicy, managed_binary_path, resolve_declared_zone,
 };
 
 /// Records which source file contributed each section of a loaded [`Config`],
