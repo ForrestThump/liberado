@@ -76,7 +76,7 @@ pub(crate) fn edit_automation_body(row: &ScheduleRow) -> serde_json::Value {
             "schedule_text": row.schedule_text,
             "cron_expr": row.cron_expr,
             "days": row.days,
-            "at": row.at,
+            "at": row.at.clone().unwrap_or_default(),
             "timezone": row.timezone,
             "description": row.description,
         }
@@ -95,15 +95,22 @@ pub(crate) fn created_conversation_id(body: &str) -> Result<String, String> {
 }
 
 fn chat_error(status: u16, body: &str) -> String {
-    serde_json::from_str::<serde_json::Value>(body)
-        .ok()
-        .and_then(|value| {
-            value
-                .get("error")
-                .and_then(|error| error.as_str())
-                .map(str::to_string)
-        })
-        .unwrap_or_else(|| format!("Could not open the chat (HTTP {status})"))
+    let fallback = format!("Could not open the chat (HTTP {status})");
+    match serde_json::from_str::<serde_json::Value>(body) {
+        Ok(value) => value
+            .get("error")
+            .and_then(|error| error.as_str())
+            .map(str::to_string)
+            .unwrap_or(fallback),
+        Err(_) => {
+            let plain = body.trim();
+            if plain.is_empty() {
+                fallback
+            } else {
+                format!("{fallback}: {plain}")
+            }
+        }
+    }
 }
 
 async fn post_automation_chat(api_base: &str, body: &serde_json::Value) -> Result<String, String> {
@@ -485,8 +492,23 @@ mod tests {
         assert_eq!(body["target"]["name"], "morning");
         assert_eq!(body["target"]["schedule_text"], "Every day at 6:30 AM");
         assert_eq!(body["target"]["cron_expr"], "0 30 12 * * * *");
+        assert_eq!(body["target"]["at"], "");
         assert_eq!(body["target"]["timezone"], "America/Chicago");
         assert!(body.get("profile").is_none());
+    }
+
+    #[test]
+    fn a_plain_failure_body_is_shown_and_a_json_error_stays_the_message() {
+        assert_eq!(chat_error(400, r#"{"error":"nope"}"#), "nope");
+        assert_eq!(
+            chat_error(400, r#"{"id":"x"}"#),
+            "Could not open the chat (HTTP 400)"
+        );
+        assert_eq!(chat_error(500, "  "), "Could not open the chat (HTTP 500)");
+        assert_eq!(
+            chat_error(422, "target.at: invalid type: null, expected a string"),
+            "Could not open the chat (HTTP 422): target.at: invalid type: null, expected a string"
+        );
     }
 
     #[test]

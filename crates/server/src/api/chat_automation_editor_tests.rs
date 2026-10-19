@@ -202,6 +202,40 @@ async fn an_edit_post_hides_the_target_in_the_system_prompt() {
 }
 
 #[tokio::test]
+async fn an_edit_target_with_null_at_is_accepted() {
+    let dir = tempfile::tempdir().unwrap();
+    let sessions = Arc::new(SessionStore::open(dir.path()).await);
+    let chat = Arc::new(
+        ChatSessions::new(
+            sessions.clone(),
+            Executor::new(
+                Arc::new(MockProvider::with_script("mock", vec![])),
+                Budget::default(),
+            ),
+            Arc::new(NoopRuntime),
+        )
+        .with_profile_resolver(Arc::new(|name: &str| {
+            Ok(SessionGrant {
+                profile: Some(name.to_owned()),
+                delegation: Some(false),
+                ..SessionGrant::default()
+            })
+        })),
+    );
+    let state = Arc::new(crate::state::AppState::for_test(
+        sessions,
+        Some(chat),
+        dir.path().to_path_buf(),
+    ));
+    let app = router(state);
+    let body = r#"{"automation_editor":true,"target":{"name":"morning","enabled":true,"schedule_text":"Every day at 6:30 AM","cron_expr":"0 30 12 * * * *","at":null,"timezone":"America/Chicago","description":"Sends a reminder."}}"#;
+    let (status, raw) = post(&app, body).await;
+    assert_eq!(status, StatusCode::CREATED, "{raw}");
+    let created: serde_json::Value = serde_json::from_str(&raw).unwrap();
+    assert_eq!(created["title"], "Edit morning");
+}
+
+#[tokio::test]
 async fn editor_open_and_a_later_turn_resolve_without_a_topology_row() {
     let mut cfg = liberado_config::Config::default();
     cfg.topology.vault_path = std::path::PathBuf::from("/tmp/vault");

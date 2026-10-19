@@ -55,8 +55,9 @@ pub struct AutomationTargetRequest {
     pub cron_expr: String,
     #[serde(default)]
     pub days: Vec<String>,
+    /// Clock on the row. Absent and JSON null both mean no clock.
     #[serde(default)]
-    pub at: String,
+    pub at: Option<String>,
     #[serde(default)]
     pub timezone: String,
     #[serde(default)]
@@ -139,7 +140,7 @@ fn editor_target_from(
         schedule_text: target.schedule_text.clone(),
         cron_expr: target.cron_expr.clone(),
         days: target.days.clone(),
-        at: target.at.clone(),
+        at: target.at.clone().unwrap_or_default(),
         timezone: target.timezone.clone(),
         description: target.description.clone(),
     })
