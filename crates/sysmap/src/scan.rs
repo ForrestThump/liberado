@@ -301,11 +301,7 @@ fn project_node(project: &ProjectConfig) -> MapNode {
     }
 }
 
-fn schedule_node(schedule: &CronSchedule) -> MapNode {
-    let mut meta = BTreeMap::from([
-        ("cron_expr".to_string(), schedule.cron_expr.clone()),
-        ("goal".to_string(), schedule.goal.clone()),
-    ]);
+fn record_schedule_clock_meta(meta: &mut BTreeMap<String, String>, schedule: &CronSchedule) {
     if !schedule.days.is_empty() {
         meta.insert("days".to_string(), schedule.days.join(","));
     }
@@ -315,6 +311,14 @@ fn schedule_node(schedule: &CronSchedule) -> MapNode {
     if let Some(zone) = &schedule.timezone {
         meta.insert("timezone".to_string(), zone.clone());
     }
+}
+
+fn schedule_node(schedule: &CronSchedule) -> MapNode {
+    let mut meta = BTreeMap::from([
+        ("cron_expr".to_string(), schedule.cron_expr.clone()),
+        ("goal".to_string(), schedule.goal.clone()),
+    ]);
+    record_schedule_clock_meta(&mut meta, schedule);
     if let Some(pool) = &schedule.pool {
         meta.insert("pool".to_string(), pool.clone());
     }

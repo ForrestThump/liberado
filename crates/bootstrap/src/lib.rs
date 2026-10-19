@@ -383,6 +383,12 @@ pub fn cron_source_from_config(
         .filter(|s| s.enabled)
         .map(|s| runtime_schedule(s, &config.topology.timezone))
         .collect::<Result<Vec<_>, _>>()?;
+    assemble_cron_event_source(schedules)
+}
+
+fn assemble_cron_event_source(
+    schedules: Vec<liberado_cron::Schedule>,
+) -> Result<Option<liberado_cron::CronEventSource>, liberado_cron::CronError> {
     if schedules.is_empty() {
         return Ok(None);
     }
