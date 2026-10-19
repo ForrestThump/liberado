@@ -37,6 +37,7 @@ Authority model: [doc-authority.md](spec/reference/doc-authority.md).
 | [docs/decisions/ADR-0019-turbovault-as-privileged-plugin.md](decisions/ADR-0019-turbovault-as-privileged-plugin.md) | decision | accepted | normative | architecture | adr-0019 |
 | [docs/decisions/ADR-0020-mechanical-schedules.md](decisions/ADR-0020-mechanical-schedules.md) | decision | accepted | normative | architecture | adr-0020 |
 | [docs/decisions/README.md](decisions/README.md) | index | active | advisory | architecture | — |
+| [docs/direction.md](direction.md) | plan | active | advisory | product | product-direction |
 | [docs/future-work/2026-10-11-vault-write-gate-audit.md](future-work/2026-10-11-vault-write-gate-audit.md) | finding | active | evidence | security | vault-write-gate-audit |
 | [docs/future-work/2026-10-11-vault-write-gate-deploy.md](future-work/2026-10-11-vault-write-gate-deploy.md) | runbook | draft | advisory | security | — |
 | [docs/future-work/README.md](future-work/README.md) | index | active | advisory | — | — |
