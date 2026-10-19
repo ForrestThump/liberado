@@ -130,6 +130,15 @@ impl CronSchedule {
             Form::Civil => civil_timing(self, topology_timezone),
         }
     }
+
+    /// Refuse a row that does not name one complete clock.
+    ///
+    /// This is the form half of [`Self::timing`]. It does not parse `cron_expr`
+    /// or `at`, so a create card can fail before the writer takes a backup.
+    pub fn require_one_clock(&self) -> Result<(), String> {
+        classify(self)?;
+        Ok(())
+    }
 }
 
 enum Form {

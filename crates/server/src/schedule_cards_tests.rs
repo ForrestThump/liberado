@@ -173,8 +173,42 @@ fn a_shape_error_names_the_problem_and_leaves_the_file() {
         reply.contains("Could not read the schedule edit"),
         "{reply}"
     );
+    assert!(
+        reply.contains("exactly one of cron_expr or days and at"),
+        "{reply}"
+    );
     assert!(reply.contains("topology.toml was not changed"), "{reply}");
     assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
+    assert_eq!(backup_count(dir.path()), 0);
+}
+
+#[test]
+fn a_days_and_at_card_writes_the_structured_row() {
+    let dir = config_dir();
+    let path = topology(dir.path());
+    let reply = apply_at(
+        &path,
+        &card(
+            "create_schedule",
+            json!({
+                "name": "trash",
+                "days": ["tue"],
+                "at": "20:00",
+                "goal": "bins"
+            }),
+        ),
+    );
+    assert!(reply.contains("The file is on disk"), "{reply}");
+    assert!(
+        !reply.contains("Could not read the schedule edit"),
+        "{reply}"
+    );
+    let text = std::fs::read_to_string(&path).unwrap();
+    assert!(text.contains("name = \"trash\""), "{text}");
+    assert!(text.contains("days = [\"tue\"]"), "{text}");
+    assert!(text.contains("at = \"20:00\""), "{text}");
+    assert!(text.contains("morning"), "{text}");
+    assert_eq!(backup_count(dir.path()), 1);
 }
 
 #[tokio::test]

@@ -202,6 +202,7 @@ fn schedule_from_args(args: &serde_json::Value) -> Result<CronSchedule, EditErro
     if schedule.name.trim().is_empty() {
         return Err(EditError::Shape("`name` is empty".into()));
     }
+    schedule.require_one_clock().map_err(EditError::Shape)?;
     Ok(schedule)
 }
 
