@@ -31,6 +31,9 @@ pub(crate) struct ScheduleRow {
     timezone: String,
     #[serde(default)]
     next_fire: Option<String>,
+    /// `system` for background plumbing. Missing or any other value is an automation.
+    #[serde(default)]
+    category: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -174,6 +177,18 @@ pub(crate) fn next_fire_line(row: &ScheduleRow) -> Option<String> {
     }
 }
 
+/// The reminder engine is plumbing. Every other row, including an older server
+/// that omits `category`, stays on the main list.
+pub(crate) fn is_background_system(row: &ScheduleRow) -> bool {
+    row.category == "system"
+}
+
+pub(crate) fn split_schedule_rows(rows: &[ScheduleRow]) -> (Vec<ScheduleRow>, Vec<ScheduleRow>) {
+    rows.iter()
+        .cloned()
+        .partition(|row| !is_background_system(row))
+}
+
 pub(crate) fn schedule_body(row: &ScheduleRow) -> String {
     let description = row.description.trim();
     if description.is_empty() {
@@ -293,17 +308,45 @@ pub fn Automations(
                 match schedules.read().as_ref() {
                     None => rsx! { p { class: "project-status", "Loading..." } },
                     Some(Err(error)) => rsx! { p { class: "project-status", "{error}" } },
-                    Some(Ok(rows)) if rows.is_empty() => rsx! {
-                        p { class: "project-status", "No automations are configured." }
-                    },
-                    Some(Ok(rows)) => rsx! {
-                        ul {
-                            class: "automation-list",
-                            for row in rows.iter() {
-                                ScheduleRowView { row: row.clone(), open: open.clone() }
+                    Some(Ok(rows)) => {
+                        let (automations, system) = split_schedule_rows(rows);
+                        rsx! {
+                            if automations.is_empty() {
+                                p { class: "project-status", "No automations are configured." }
+                            } else {
+                                ul {
+                                    class: "automation-list",
+                                    for row in automations {
+                                        ScheduleRowView {
+                                            row,
+                                            open: open.clone(),
+                                            editable: true,
+                                        }
+                                    }
+                                }
+                            }
+                            if !system.is_empty() {
+                                section {
+                                    class: "automation-system",
+                                    h2 { class: "automation-system-title", "Background system jobs" }
+                                    p {
+                                        class: "automation-system-note",
+                                        "Plumbing Liberado runs for you. Your own tasks and reminders live in Obsidian (#task, #remind)."
+                                    }
+                                    ul {
+                                        class: "automation-list",
+                                        for row in system {
+                                            ScheduleRowView {
+                                                row,
+                                                open: open.clone(),
+                                                editable: false,
+                                            }
+                                        }
+                                    }
+                                }
                             }
                         }
-                    },
+                    }
                 }
             }
         }
@@ -311,7 +354,7 @@ pub fn Automations(
 }
 
 #[component]
-fn ScheduleRowView(row: ScheduleRow, open: OpenChat) -> Element {
+fn ScheduleRowView(row: ScheduleRow, open: OpenChat, editable: bool) -> Element {
     let (badge_class, badge_label) = enabled_badge(row.enabled);
     let primary = schedule_primary(&row);
     let secondary = schedule_secondary(&row);
@@ -333,18 +376,20 @@ fn ScheduleRowView(row: ScheduleRow, open: OpenChat) -> Element {
                 class: "automation-row-main",
                 span { class: "automation-name", "{row.name}" }
                 span { class: "{badge_class}", "{badge_label}" }
-                div {
-                    class: "automation-row-actions",
-                    button {
-                        class: "approval-option",
-                        r#type: "button",
-                        disabled: (open.opening)(),
-                        onclick: {
-                            let open = open.clone();
-                            let edit_body = edit_body.clone();
-                            move |_| start_automation_chat(open.clone(), edit_body.clone())
-                        },
-                        "Edit"
+                if editable {
+                    div {
+                        class: "automation-row-actions",
+                        button {
+                            class: "approval-option",
+                            r#type: "button",
+                            disabled: (open.opening)(),
+                            onclick: {
+                                let open = open.clone();
+                                let edit_body = edit_body.clone();
+                                move |_| start_automation_chat(open.clone(), edit_body.clone())
+                            },
+                            "Edit"
+                        }
                     }
                 }
             }
@@ -384,6 +429,7 @@ mod tests {
             schedule_text: "Every day at 6:30 AM".into(),
             timezone: "America/Chicago".into(),
             next_fire: Some("Mon Oct 19, 8:00 PM CDT".into()),
+            category: String::new(),
         }
     }
 
@@ -413,6 +459,7 @@ mod tests {
             schedule_text: String::new(),
             timezone: String::new(),
             next_fire: None,
+            category: String::new(),
         };
         assert_eq!(schedule_snippet(&row), "habit-ping");
         assert_eq!(schedule_body(&row), "habit-ping");
@@ -469,10 +516,34 @@ mod tests {
             schedule_text: String::new(),
             timezone: String::new(),
             next_fire: None,
+            category: String::new(),
         };
         assert_eq!(schedule_primary(&row), "0 * * * * *");
         assert_eq!(schedule_secondary(&row), "0 * * * * *");
         assert_eq!(schedule_body(&row), "ping");
+    }
+
+    #[test]
+    fn system_rows_leave_the_main_list_and_a_missing_category_stays() {
+        let body = r#"{"schedules":[
+            {"name":"tick","enabled":true,"goal":"ping"},
+            {"name":"engine","enabled":true,"category":"system"},
+            {"name":"tasks","enabled":true,"category":"automation"}
+        ]}"#;
+        let rows = parse_schedules(body).unwrap();
+        assert!(rows[0].category.is_empty());
+        let (shown, system) = split_schedule_rows(&rows);
+        assert_eq!(
+            shown
+                .iter()
+                .map(|row| row.name.as_str())
+                .collect::<Vec<_>>(),
+            ["tick", "tasks"]
+        );
+        assert_eq!(system.len(), 1);
+        assert_eq!(system[0].name, "engine");
+        assert!(is_background_system(&system[0]));
+        assert!(!is_background_system(&shown[0]));
     }
 
     #[test]
@@ -528,6 +599,11 @@ mod tests {
         let css = include_str!("../styles/main.css");
         assert!(page.contains("New automation"));
         assert!(page.contains("\"Edit\""));
+        assert!(page.contains("editable: false"));
+        assert!(page.contains("Background system jobs"));
+        assert!(page.contains(
+            "Plumbing Liberado runs for you. Your own tasks and reminders live in Obsidian (#task, #remind)."
+        ));
         assert!(page.contains("automation-list"));
         assert!(!page.contains("automation-editor"), "{page}");
         assert!(!page.contains("topology.toml"));

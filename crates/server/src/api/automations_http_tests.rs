@@ -111,6 +111,7 @@ async fn list_schedules_reflects_topology_rows() {
     let fires = liberado_cron::next_fires("0 0 9 * * * *", "America/Chicago", 1).unwrap();
     assert_eq!(rows[0]["next_fire"], fires[0].display());
     assert_eq!(rows[0]["timezone"], "America/Chicago");
+    assert_eq!(rows[0]["category"], "automation");
     assert_eq!(
         rows[0]["description"],
         "Runs the \"maintenance\" agent with the prompt: \"Summarize inbox\". The result is pushed to the notifier when the run finishes."
@@ -168,6 +169,7 @@ async fn list_schedules_describes_a_mechanical_job_without_secrets() {
     assert!(!text.contains("Secret Name"));
     let v: serde_json::Value = serde_json::from_str(&text).unwrap();
     assert_eq!(v["schedules"][0]["schedule_text"], "Every 15 minutes");
+    assert_eq!(v["schedules"][0]["category"], "automation");
     assert_eq!(
         v["schedules"][0]["description"],
         "Sends a reminder listing up to 10 open vault tasks. No model session. The reminder goes to the reminder channel, not the sticky chat."
@@ -240,6 +242,7 @@ async fn list_schedules_evaluates_a_structured_row_in_its_zone() {
     let fires = liberado_cron::next_fires_zoned("0 0 20 * * 3 *", "America/Chicago", 1).unwrap();
     assert_eq!(v["schedules"][0]["next_fire"], fires[0].display());
     assert_eq!(v["schedules"][0]["timezone"], "America/Chicago");
+    assert_eq!(v["schedules"][0]["category"], "automation");
     assert_eq!(fires[0].local.hour(), 20);
     assert_eq!(fires[0].weekday_name(), "Tuesday");
 }

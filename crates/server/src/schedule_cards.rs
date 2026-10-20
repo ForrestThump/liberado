@@ -24,11 +24,12 @@ use liberado_messaging::permission_card_options;
 use liberado_telegram_approvals::ResolveOutcome;
 use serde::Deserialize;
 
+use crate::api::schedule_description::schedule_category;
 use crate::state::AppState;
 
 /// `list_schedules` reads the file on disk, not the boot snapshot.
 ///
-/// Each row includes `cron_expr`, code-generated `schedule_text`, and `next_fires`.
+/// Each row includes `cron_expr`, code-generated `schedule_text`, `next_fires`, and `category`.
 pub fn list_from_disk() -> Result<String, String> {
     let path = schedule_topology_path().map_err(|err| err.to_string())?;
     let text = std::fs::read_to_string(&path)
@@ -81,6 +82,10 @@ fn schedule_row_with_local_clock(
             serde_json::Value::String(schedule_text),
         );
         obj.insert("next_fires".to_string(), serde_json::Value::Array(fires));
+        obj.insert(
+            "category".to_string(),
+            serde_json::Value::String(schedule_category(schedule.job.as_deref()).to_string()),
+        );
     }
     Ok(value)
 }
