@@ -13,7 +13,12 @@ use super::sidebar::Route;
 pub(crate) struct ScheduleRow {
     name: String,
     enabled: bool,
+    #[serde(default)]
     cron_expr: String,
+    #[serde(default)]
+    days: Vec<String>,
+    #[serde(default)]
+    at: Option<String>,
     #[serde(default)]
     goal: String,
     job: Option<String>,
@@ -70,6 +75,8 @@ pub(crate) fn edit_automation_body(row: &ScheduleRow) -> serde_json::Value {
             "enabled": row.enabled,
             "schedule_text": row.schedule_text,
             "cron_expr": row.cron_expr,
+            "days": row.days,
+            "at": row.at.clone().unwrap_or_default(),
             "timezone": row.timezone,
             "description": row.description,
         }
@@ -88,15 +95,22 @@ pub(crate) fn created_conversation_id(body: &str) -> Result<String, String> {
 }
 
 fn chat_error(status: u16, body: &str) -> String {
-    serde_json::from_str::<serde_json::Value>(body)
-        .ok()
-        .and_then(|value| {
-            value
-                .get("error")
-                .and_then(|error| error.as_str())
-                .map(str::to_string)
-        })
-        .unwrap_or_else(|| format!("Could not open the chat (HTTP {status})"))
+    let fallback = format!("Could not open the chat (HTTP {status})");
+    match serde_json::from_str::<serde_json::Value>(body) {
+        Ok(value) => value
+            .get("error")
+            .and_then(|error| error.as_str())
+            .map(str::to_string)
+            .unwrap_or(fallback),
+        Err(_) => {
+            let plain = body.trim();
+            if plain.is_empty() {
+                fallback
+            } else {
+                format!("{fallback}: {plain}")
+            }
+        }
+    }
 }
 
 async fn post_automation_chat(api_base: &str, body: &serde_json::Value) -> Result<String, String> {
@@ -141,10 +155,12 @@ pub(crate) fn schedule_primary(row: &ScheduleRow) -> String {
 
 pub(crate) fn schedule_secondary(row: &ScheduleRow) -> String {
     let timezone = row.timezone.trim();
-    if timezone.is_empty() {
-        row.cron_expr.clone()
-    } else {
-        format!("{} · {}", row.cron_expr, timezone)
+    let cron = row.cron_expr.trim();
+    match (cron.is_empty(), timezone.is_empty()) {
+        (true, true) => String::new(),
+        (true, false) => timezone.to_string(),
+        (false, true) => cron.to_string(),
+        (false, false) => format!("{cron} · {timezone}"),
     }
 }
 
@@ -359,6 +375,8 @@ mod tests {
             name: "morning".into(),
             enabled: true,
             cron_expr: "0 30 12 * * * *".into(),
+            days: Vec::new(),
+            at: None,
             goal: String::new(),
             job: Some("event-ping".into()),
             profile: None,
@@ -386,6 +404,8 @@ mod tests {
             name: "habit".into(),
             enabled: true,
             cron_expr: "0 0 8 * * * *".into(),
+            days: Vec::new(),
+            at: None,
             goal: String::new(),
             job: Some("habit-ping".into()),
             profile: None,
@@ -417,11 +437,31 @@ mod tests {
     }
 
     #[test]
+    fn a_structured_row_omits_cron_and_shows_the_zone() {
+        let body = r#"{"schedules":[{"name":"trash","enabled":true,"days":["tue"],"at":"20:00","goal":"bins","schedule_text":"Every Tuesday at 8:00 PM America/Chicago","timezone":"America/Chicago","next_fire":"Tue Nov 3, 8:00 PM CST"}]}"#;
+        let rows = parse_schedules(body).unwrap();
+        assert!(rows[0].cron_expr.is_empty());
+        assert_eq!(rows[0].days, ["tue"]);
+        assert_eq!(rows[0].at.as_deref(), Some("20:00"));
+        assert_eq!(
+            schedule_primary(&rows[0]),
+            "Every Tuesday at 8:00 PM America/Chicago"
+        );
+        assert_eq!(schedule_secondary(&rows[0]), "America/Chicago");
+        let edit = edit_automation_body(&rows[0]);
+        assert_eq!(edit["target"]["days"], serde_json::json!(["tue"]));
+        assert_eq!(edit["target"]["at"], "20:00");
+        assert_eq!(edit["target"]["cron_expr"], "");
+    }
+
+    #[test]
     fn a_missing_reading_falls_back_to_the_raw_cron() {
         let row = ScheduleRow {
             name: "tick".into(),
             enabled: true,
             cron_expr: "0 * * * * *".into(),
+            days: Vec::new(),
+            at: None,
             goal: "ping".into(),
             job: None,
             profile: Some("ops".into()),
@@ -452,8 +492,23 @@ mod tests {
         assert_eq!(body["target"]["name"], "morning");
         assert_eq!(body["target"]["schedule_text"], "Every day at 6:30 AM");
         assert_eq!(body["target"]["cron_expr"], "0 30 12 * * * *");
+        assert_eq!(body["target"]["at"], "");
         assert_eq!(body["target"]["timezone"], "America/Chicago");
         assert!(body.get("profile").is_none());
+    }
+
+    #[test]
+    fn a_plain_failure_body_is_shown_and_a_json_error_stays_the_message() {
+        assert_eq!(chat_error(400, r#"{"error":"nope"}"#), "nope");
+        assert_eq!(
+            chat_error(400, r#"{"id":"x"}"#),
+            "Could not open the chat (HTTP 400)"
+        );
+        assert_eq!(chat_error(500, "  "), "Could not open the chat (HTTP 500)");
+        assert_eq!(
+            chat_error(422, "target.at: invalid type: null, expected a string"),
+            "Could not open the chat (HTTP 422): target.at: invalid type: null, expected a string"
+        );
     }
 
     #[test]

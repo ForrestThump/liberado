@@ -10,9 +10,10 @@ use super::schedule_description::schedule_description;
 
 /// `GET /api/schedules` — configured cron entries from in-memory topology (read-only).
 ///
-/// `next_fire` is the next local reading in `topology.timezone`, or null when
-/// the expression does not parse. `description`, `schedule_text`, and `timezone`
-/// are additive display fields.
+/// `next_fire` is the next local reading. A structured row, and a `cron_expr`
+/// row that sets `timezone`, are evaluated in that zone. A `cron_expr` row
+/// without `timezone` stays UTC and is displayed in `topology.timezone`.
+/// `description`, `schedule_text`, and `timezone` are additive display fields.
 pub async fn list_schedules(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let timezone = state.config.topology.timezone.clone();
     let schedules: Vec<serde_json::Value> = state
@@ -20,32 +21,47 @@ pub async fn list_schedules(State(state): State<Arc<AppState>>) -> impl IntoResp
         .topology
         .schedules
         .iter()
-        .map(|s| {
-            serde_json::json!({
-                "name": s.name,
-                "enabled": s.enabled,
-                "cron_expr": s.cron_expr,
-                "goal": s.goal,
-                "job": s.job,
-                "profile": s.profile,
-                "next_fire": next_fire_value(&s.cron_expr, &timezone),
-                "description": schedule_description(s),
-                "schedule_text": liberado_cron::cron_to_english(&s.cron_expr, &timezone),
-                "timezone": &timezone,
-            })
-        })
+        .map(|s| schedule_json(s, &timezone))
         .collect();
     Json(serde_json::json!({ "schedules": schedules }))
 }
 
-fn next_fire_value(expr: &str, timezone: &str) -> serde_json::Value {
-    match liberado_cron::next_fires(expr, timezone, 1) {
-        Ok(fires) => match fires.first() {
-            Some(fire) => serde_json::Value::String(fire.display()),
-            None => serde_json::Value::Null,
-        },
-        Err(_) => serde_json::Value::Null,
-    }
+fn schedule_json(schedule: &liberado_config::CronSchedule, topology_tz: &str) -> serde_json::Value {
+    let shown = crate::schedule_timing::show(schedule, topology_tz).ok();
+    let (next_fire, schedule_text, zone) = match &shown {
+        Some(shown) => (
+            next_from_shown(shown),
+            shown.english.clone(),
+            shown.zone.clone(),
+        ),
+        None => (
+            serde_json::Value::Null,
+            schedule.cron_expr.clone(),
+            topology_tz.to_string(),
+        ),
+    };
+    serde_json::json!({
+        "name": schedule.name,
+        "enabled": schedule.enabled,
+        "cron_expr": schedule.cron_expr,
+        "days": schedule.days,
+        "at": schedule.at,
+        "goal": schedule.goal,
+        "job": schedule.job,
+        "profile": schedule.profile,
+        "next_fire": next_fire,
+        "description": schedule_description(schedule),
+        "schedule_text": schedule_text,
+        "timezone": zone,
+    })
+}
+
+fn next_from_shown(shown: &crate::schedule_timing::ShownSchedule) -> serde_json::Value {
+    let rows = crate::schedule_timing::rows_for(shown, 1);
+    rows.first()
+        .and_then(|row| row.get("display"))
+        .cloned()
+        .unwrap_or(serde_json::Value::Null)
 }
 
 /// `GET /api/hooks` — webhook hook names from topology. Never returns secrets or `secret_ref`.

@@ -237,6 +237,31 @@ fn tool_args_patch_only_the_named_goal() {
     assert!(after.contains("goal = \"still a job\""));
 }
 
+#[test]
+fn a_structured_patch_clears_cron_and_writes_days() {
+    let patch = SchedulePatch::from_tool_args(&serde_json::json!({
+        "name": "alpha",
+        "days": ["tue"],
+        "at": "20:00",
+        "timezone": "America/Chicago",
+        "cron_expr": null
+    }))
+    .unwrap();
+    let extras = BTreeMap::new();
+    let (_before, after) = write_case(&topology_text(&extras), &patch);
+    assert!(after.contains("days = [\"tue\"]"), "{after}");
+    assert!(after.contains("at = \"20:00\""), "{after}");
+    assert!(after.contains("timezone = \"America/Chicago\""), "{after}");
+    assert!(!after.contains("cron_expr = \"0 0 8 * * * *\""), "{after}");
+    let doc = after.parse::<DocumentMut>().unwrap();
+    let alpha = schedule_named(&doc, "alpha");
+    assert!(alpha.get("cron_expr").is_none(), "{after}");
+    assert_eq!(
+        alpha.get("job").and_then(|item| item.as_str()),
+        Some("task-ping")
+    );
+}
+
 fn schedule_named<'a>(doc: &'a DocumentMut, name: &str) -> &'a toml_edit::Table {
     doc.get("schedules")
         .and_then(|item| item.as_array_of_tables())

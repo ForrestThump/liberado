@@ -3,6 +3,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+pub use super::schedule_form::CronSchedule;
 use super::shepherd::ShepherdConfig;
 use super::vault_reminders::VaultRemindersConfig;
 use liberado_common::{
@@ -1080,86 +1081,6 @@ mod compaction_proptest {
             prop_assert!(tokens >= 1);
         }
     }
-}
-
-/// A configured cron schedule: wiring only (Decision 14) — the daemon-assembly layer
-/// (`liberado-bootstrap`) translates enabled entries into `liberado-cron`'s runtime `Schedule`
-/// type. `cron_expr` uses the `cron` crate's 6/7-field syntax (**seconds first** — not standard
-/// 5-field cron), e.g. `"0 0 9 * * * *"` for "every day at 09:00:00" **UTC**. Local wall-clock for
-/// the model is separate: set `topology.timezone` once; the daemon stamps "Local time: …" onto the
-/// goal text when a schedule fires (see [`liberado_common::UserTimezone`]).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CronSchedule {
-    pub name: String,
-    #[serde(default = "default_true")]
-    pub enabled: bool,
-    pub cron_expr: String,
-    /// The goal text dispatched. Empty when `job` handles the firing without a model.
-    #[serde(default)]
-    pub goal: String,
-    /// Which named pool (Decision 18 checkpoint #3) handles this schedule's firing — `None` routes
-    /// to the always-present `"default"` pool (today's behavior, unchanged for anyone not opting
-    /// in). If set, must name `"default"` or a declared, enabled `topology.pools` entry
-    /// (fail-fast validated).
-    #[serde(default)]
-    pub pool: Option<String>,
-    /// Optional `[[session_profiles]]` hat for this schedule (E7). When set, the reaction session
-    /// resolves its grant (and idle budget) from the profile — so a cron that *wants* `AskHuman`
-    /// can opt in; crons without a profile keep the pool grant, which should omit `AskHuman` (D-d).
-    #[serde(default)]
-    pub profile: Option<String>,
-    /// Push this schedule's result to the notifier when it finishes. Omitted means yes, which is
-    /// the behaviour every schedule had before this existed.
-    ///
-    /// Set `false` for maintenance schedules that fire often and usually do nothing — hourly with
-    /// delivery on is 24 notifications a day for "nothing to report".
-    #[serde(default)]
-    pub deliver: Option<bool>,
-    /// Turn ceiling for this schedule's run. Omitted keeps the dispatch path's default (4 turns
-    /// direct, 8 for a subagent) — which the schedule does not choose and cannot see.
-    #[serde(default)]
-    pub max_turns: Option<u32>,
-    /// Mechanical job kind. When set, the daemon runs the job and does not start a model
-    /// session, except `inbox-if-present`, which dispatches `goal` only when the capture
-    /// file has text. Known kinds: `git-snapshot`, `task-ping`, `event-ping`, `habit-ping`,
-    /// `inbox-if-present`, `vault-reminder-tick`.
-    #[serde(default)]
-    pub job: Option<String>,
-    /// Text a `habit-ping` sends. Required for that kind.
-    #[serde(default)]
-    pub habit_text: Option<String>,
-    /// How many open tasks a `task-ping` lists. Default 10. `event-ping` lists at most 10
-    /// events and does not read this field.
-    #[serde(default)]
-    pub task_limit: Option<u32>,
-    /// Vault-relative capture file for `inbox-if-present`. Default `Inbox/Capture.md`.
-    #[serde(default)]
-    pub capture_path: Option<String>,
-    /// Git remote for `git-snapshot`. Default `origin`.
-    #[serde(default)]
-    pub git_remote: Option<String>,
-    /// Branch `git-snapshot` pushes `HEAD` to. Omitted pushes `HEAD`.
-    #[serde(default)]
-    pub git_branch: Option<String>,
-    /// Commit identity for `git-snapshot`. Default `Liberado` / `liberado@localhost`.
-    #[serde(default)]
-    pub git_user_name: Option<String>,
-    #[serde(default)]
-    pub git_user_email: Option<String>,
-    /// Run a `git-snapshot` once at daemon start when the tree is dirty. Default yes.
-    /// Other jobs ignore this.
-    #[serde(default)]
-    pub run_on_start: Option<bool>,
-    /// When `true`, dispatch this schedule's `goal` directly without consulting the
-    /// router (classifier) model. The router exists to disambiguate human chat into
-    /// Execute / Clarify / Skip and add nothing for a fully-specified cron goal: by
-    /// construction, a schedule already names the work, and any router parse failure
-    /// degrades to `Clarify`, which fails closed for an unattended cron (no `AskHuman`
-    /// capability) — silently doing nothing. Recommended for any schedule whose `goal`
-    /// is self-contained and pairs naturally with `profile` (which scopes the grant).
-    /// Default `false` (today's behaviour).
-    #[serde(default)]
-    pub direct: Option<bool>,
 }
 
 /// A configured external webhook hook: wiring only (Decision 14) — `liberado-server` resolves

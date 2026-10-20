@@ -105,11 +105,11 @@ fn pair(before: &str, after: &str) -> String {
 }
 
 fn timed_line(schedule: &CronSchedule, book: &ScheduleBook) -> String {
-    format!(
-        "{}\n{}",
-        english_line(schedule, book),
-        crate::schedule_timing::fire_lines(&schedule.cron_expr, &book.timezone)
-    )
+    let fires = match crate::schedule_timing::show(schedule, &book.timezone) {
+        Ok(shown) => crate::schedule_timing::lines_for(&shown),
+        Err(_) => crate::schedule_timing::fire_lines(&schedule.cron_expr, &book.timezone),
+    };
+    format!("{}\n{}", english_line(schedule, book), fires)
 }
 
 fn english_line(schedule: &CronSchedule, book: &ScheduleBook) -> String {
@@ -118,13 +118,23 @@ fn english_line(schedule: &CronSchedule, book: &ScheduleBook) -> String {
     } else {
         "Disabled"
     };
-    let zone = crate::schedule_timing::zone_name(&book.timezone);
-    let when = liberado_cron::cron_to_english(&schedule.cron_expr, zone);
     let what = schedule_description(schedule);
-    format!(
-        "{} — {state}. cron_expr: {}. {when}. {what}",
-        schedule.name, schedule.cron_expr
-    )
+    let when = when_clause(schedule, book);
+    format!("{} — {state}. {when}. {what}", schedule.name)
+}
+
+fn when_clause(schedule: &CronSchedule, book: &ScheduleBook) -> String {
+    match crate::schedule_timing::show(schedule, &book.timezone) {
+        Ok(shown) if schedule.cron_expr.trim().is_empty() => shown.english,
+        Ok(shown) => format!("cron_expr: {}. {}", schedule.cron_expr, shown.english),
+        Err(_) => fallback_when(schedule, book),
+    }
+}
+
+fn fallback_when(schedule: &CronSchedule, book: &ScheduleBook) -> String {
+    let zone = crate::schedule_timing::zone_name(&book.timezone);
+    let english = liberado_cron::cron_to_english(&schedule.cron_expr, zone);
+    format!("cron_expr: {}. {english}", schedule.cron_expr)
 }
 
 fn overlay_schedule(current: &CronSchedule, args: &serde_json::Value) -> Option<CronSchedule> {
@@ -145,6 +155,10 @@ fn apply_overlay(
         }
         if key == "new_name" {
             insert_new_name(obj, item);
+            continue;
+        }
+        if item.is_null() {
+            obj.remove(key);
             continue;
         }
         obj.insert(key.clone(), item.clone());

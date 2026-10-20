@@ -381,32 +381,55 @@ pub fn cron_source_from_config(
         .schedules
         .iter()
         .filter(|s| s.enabled)
-        .map(|s| liberado_cron::Schedule {
-            name: s.name.clone(),
-            cron_expr: s.cron_expr.clone(),
-            goal: s.goal.clone(),
-            pool: s.pool.clone(),
-            profile: s.profile.clone(),
-            deliver: s.deliver,
-            max_turns: s.max_turns,
-            job: s.job.clone().map(|kind| liberado_cron::MechanicalJob {
-                kind,
-                habit_text: s.habit_text.clone(),
-                task_limit: s.task_limit,
-                capture_path: s.capture_path.clone(),
-                git_remote: s.git_remote.clone(),
-                git_branch: s.git_branch.clone(),
-                git_user_name: s.git_user_name.clone(),
-                git_user_email: s.git_user_email.clone(),
-                run_on_start: s.run_on_start,
-            }),
-            direct: s.direct,
-        })
-        .collect();
+        .map(|s| runtime_schedule(s, &config.topology.timezone))
+        .collect::<Result<Vec<_>, _>>()?;
+    assemble_cron_event_source(schedules)
+}
+
+fn assemble_cron_event_source(
+    schedules: Vec<liberado_cron::Schedule>,
+) -> Result<Option<liberado_cron::CronEventSource>, liberado_cron::CronError> {
     if schedules.is_empty() {
         return Ok(None);
     }
     Ok(Some(liberado_cron::CronEventSource::new(schedules)?))
+}
+
+fn runtime_schedule(
+    schedule: &liberado_config::CronSchedule,
+    topology_tz: &str,
+) -> Result<liberado_cron::Schedule, liberado_cron::CronError> {
+    let timing = schedule.timing(topology_tz).map_err(|detail| {
+        liberado_cron::CronError::InvalidSchedule {
+            name: schedule.name.clone(),
+            detail,
+        }
+    })?;
+    Ok(liberado_cron::Schedule {
+        name: schedule.name.clone(),
+        cron_expr: timing.expr,
+        eval_timezone: timing.civil_zone,
+        goal: schedule.goal.clone(),
+        pool: schedule.pool.clone(),
+        profile: schedule.profile.clone(),
+        deliver: schedule.deliver,
+        max_turns: schedule.max_turns,
+        job: schedule
+            .job
+            .clone()
+            .map(|kind| liberado_cron::MechanicalJob {
+                kind,
+                habit_text: schedule.habit_text.clone(),
+                task_limit: schedule.task_limit,
+                capture_path: schedule.capture_path.clone(),
+                git_remote: schedule.git_remote.clone(),
+                git_branch: schedule.git_branch.clone(),
+                git_user_name: schedule.git_user_name.clone(),
+                git_user_email: schedule.git_user_email.clone(),
+                run_on_start: schedule.run_on_start,
+            }),
+        direct: schedule.direct,
+    })
 }
 
 /// Attach the dispatcher and (when an MCP server is configured) the orchestrator to `daemon`, using
@@ -1120,6 +1143,9 @@ mod tests {
             git_user_email: None,
             run_on_start: None,
             direct: None,
+            days: Vec::new(),
+            at: None,
+            timezone: None,
         }
     }
 

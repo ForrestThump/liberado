@@ -547,6 +547,7 @@ impl Config {
                 schedule,
                 &mut seen_schedule_names,
                 self.topology.vault_reminders.enabled,
+                &self.topology.timezone,
             )?;
         }
         Ok(())
@@ -564,6 +565,7 @@ fn validate_one_schedule<'a>(
     schedule: &'a CronSchedule,
     seen: &mut std::collections::HashSet<&'a str>,
     reminders_enabled: bool,
+    topology_tz: &str,
 ) -> Result<()> {
     if !seen.insert(&schedule.name) {
         return Err(Error::Config(format!(
@@ -571,11 +573,8 @@ fn validate_one_schedule<'a>(
             schedule.name
         )));
     }
-    if let Err(e) = std::str::FromStr::from_str(&schedule.cron_expr).map(|_: cron::Schedule| ()) {
-        return Err(Error::Config(format!(
-            "topology.schedules['{}'].cron_expr '{}' is invalid: {e}",
-            schedule.name, schedule.cron_expr
-        )));
+    if let Err(detail) = schedule.timing(topology_tz) {
+        return Err(Error::Config(detail));
     }
     let Some(job) = &schedule.job else {
         return Ok(());

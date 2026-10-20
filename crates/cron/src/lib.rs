@@ -23,17 +23,25 @@ use liberado_common::{Event, EventPayload, EventSource, event_source};
 use tokio::sync::mpsc::UnboundedSender;
 
 mod english;
+mod fire_at;
 mod next_fires;
-pub use english::{cron_to_english, cron_to_english_at};
+mod zoned;
+pub use english::{cron_to_english, cron_to_english_at, cron_to_english_civil};
 pub use next_fires::{FireInstant, next_fires, next_fires_after};
+pub use zoned::{next_fires_zoned, next_fires_zoned_after};
 
 /// A configured cron schedule: fire on `cron_expr` and dispatch `goal` when it does. `cron_expr`
 /// uses the `cron` crate's 6/7-field syntax (**seconds first** — not standard 5-field cron), e.g.
 /// `"0 0 9 * * * *"` for "every day at 09:00:00".
+///
+/// `eval_timezone` is `None` when those fields are UTC. When it is an IANA name, the fields
+/// are civil time in that zone.
 #[derive(Debug, Clone)]
 pub struct Schedule {
     pub name: String,
     pub cron_expr: String,
+    /// IANA zone the cron fields are civil time in. `None` keeps UTC field evaluation.
+    pub eval_timezone: Option<String>,
     pub goal: String,
     /// Which named dispatcher/executor pool (Decision 18 checkpoint #3) handles this schedule's
     /// firing — `None` routes to the daemon's always-present `"default"` pool.
@@ -95,6 +103,10 @@ pub enum CronError {
     },
     #[error("duplicate schedule name '{0}'")]
     DuplicateName(String),
+    #[error("schedule '{name}' timezone '{timezone}' is unknown")]
+    InvalidTimezone { name: String, timezone: String },
+    #[error("schedule '{name}' is not a valid schedule: {detail}")]
+    InvalidSchedule { name: String, detail: String },
 }
 
 /// One parsed, ready-to-fire schedule.
@@ -108,6 +120,7 @@ struct ParsedSchedule {
     max_turns: Option<u32>,
     job: Option<MechanicalJob>,
     direct: Option<bool>,
+    zone: Option<chrono_tz::Tz>,
     parsed: cron::Schedule,
 }
 
@@ -130,27 +143,38 @@ impl CronEventSource {
             if !seen.insert(s.name.clone()) {
                 return Err(CronError::DuplicateName(s.name));
             }
-            let expr = cron::Schedule::from_str(&s.cron_expr).map_err(|source| {
-                CronError::InvalidExpression {
-                    name: s.name.clone(),
-                    expr: s.cron_expr.clone(),
-                    source,
-                }
-            })?;
-            parsed.push(ParsedSchedule {
-                name: s.name,
-                goal: s.goal,
-                pool: s.pool,
-                profile: s.profile,
-                deliver: s.deliver,
-                max_turns: s.max_turns,
-                job: s.job,
-                direct: s.direct,
-                parsed: expr,
-            });
+            parsed.push(parse_schedule(s)?);
         }
         Ok(Self { schedules: parsed })
     }
+}
+
+fn parse_schedule(schedule: Schedule) -> Result<ParsedSchedule, CronError> {
+    let expr = cron::Schedule::from_str(&schedule.cron_expr).map_err(|source| {
+        CronError::InvalidExpression {
+            name: schedule.name.clone(),
+            expr: schedule.cron_expr.clone(),
+            source,
+        }
+    })?;
+    let zone = fire_at::eval_zone(schedule.eval_timezone.as_deref()).map_err(|timezone| {
+        CronError::InvalidTimezone {
+            name: schedule.name.clone(),
+            timezone,
+        }
+    })?;
+    Ok(ParsedSchedule {
+        name: schedule.name,
+        goal: schedule.goal,
+        pool: schedule.pool,
+        profile: schedule.profile,
+        deliver: schedule.deliver,
+        max_turns: schedule.max_turns,
+        job: schedule.job,
+        direct: schedule.direct,
+        zone,
+        parsed: expr,
+    })
 }
 
 #[async_trait]
@@ -172,7 +196,9 @@ impl EventSource for CronEventSource {
             .schedules
             .iter()
             .enumerate()
-            .filter_map(|(i, s)| s.parsed.after(&now).next().map(|next| Reverse((next, i))))
+            .filter_map(|(i, s)| {
+                fire_at::next_utc(&s.parsed, s.zone, now).map(|next| Reverse((next, i)))
+            })
             .collect();
 
         loop {
@@ -193,7 +219,7 @@ impl EventSource for CronEventSource {
             }
 
             // Requeue this schedule's next occurrence.
-            if let Some(next) = schedule.parsed.after(&Utc::now()).next() {
+            if let Some(next) = fire_at::next_utc(&schedule.parsed, schedule.zone, Utc::now()) {
                 heap.push(Reverse((next, idx)));
             }
         }
@@ -297,6 +323,7 @@ mod tests {
         Schedule {
             name: name.into(),
             cron_expr: cron_expr.into(),
+            eval_timezone: None,
             goal: goal.into(),
             pool: None,
             profile: None,
@@ -512,5 +539,27 @@ mod tests {
             .expect("channel closed");
 
         assert_eq!(event.payload.pool.as_deref(), Some("restricted"));
+    }
+
+    #[test]
+    fn a_zoned_schedule_uses_civil_time_for_its_next_fire() {
+        let mut row = schedule("trash", "0 0 20 * * 3 *", "bins");
+        row.eval_timezone = Some("America/Chicago".into());
+        let source = CronEventSource::new(vec![row]).unwrap();
+        let after = chrono::TimeZone::with_ymd_and_hms(&Utc, 2026, 11, 2, 0, 0, 0).unwrap();
+        let parsed = &source.schedules[0];
+        let fire = fire_at::next_utc(&parsed.parsed, parsed.zone, after).unwrap();
+        assert_eq!(
+            fire,
+            chrono::TimeZone::with_ymd_and_hms(&Utc, 2026, 11, 4, 2, 0, 0).unwrap()
+        );
+    }
+
+    #[test]
+    fn an_unknown_eval_timezone_is_rejected() {
+        let mut row = schedule("trash", "0 0 20 * * 3 *", "bins");
+        row.eval_timezone = Some("Not/AZone".into());
+        let err = CronEventSource::new(vec![row]).unwrap_err();
+        assert!(matches!(err, CronError::InvalidTimezone { .. }));
     }
 }
