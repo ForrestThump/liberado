@@ -16,14 +16,21 @@ pub const UPDATE_SCHEDULE_TOOL_NAME: &str = "update_schedule";
 pub const DELETE_SCHEDULE_TOOL_NAME: &str = "delete_schedule";
 
 const SCHEDULE_FIELDS: &str = "\
-Optional fields, all omitted unless you mean to change them: enabled, cron_expr \
-(7-field cron, seconds first, UTC), goal, pool, profile, deliver, max_turns, \
+Prefer days, at, and timezone for a weekday and a clock. days is an array of \
+mon, tue, wed, thu, fri, sat, sun. at is 24-hour HH:MM. timezone is an IANA name; \
+omit it to use the topology timezone. That form is evaluated in the timezone. \
+Use exactly one of that form or cron_expr. cron_expr is the escape hatch: \
+7-field, seconds first, UTC unless timezone is set, in which case the fields are \
+civil time in that zone. When you switch forms, clear the other fields. \
+Optional fields, all omitted unless you mean to change them: enabled, days, at, \
+timezone, cron_expr, goal, pool, profile, deliver, max_turns, \
 job, habit_text, task_limit, capture_path, git_remote, git_branch, \
 git_user_name, git_user_email, run_on_start, direct. \
 update_schedule is a field patch: only named keys change. \
 new_name renames the row. \
 To remove job, habit_text, or deliver, list that name in remove. \
-An empty goal is refused when the row has a job.";
+An empty goal is refused when the row has a job. \
+Judge timing only from next_fires and schedule_text.";
 
 /// The three tools that file a card. `list_schedules` is not one of them.
 pub fn is_schedule_write_tool(name: &str) -> bool {
@@ -39,10 +46,12 @@ pub fn schedule_tool_defs() -> Vec<ToolDef> {
             LIST_SCHEDULES_TOOL_NAME,
             "List the schedules stored in topology.toml. This reads the file. \
              It does not use the boot snapshot. No approval card. \
-             Each row includes cron_expr, schedule_text (code-generated English; do not rewrite it), \
+             Each row includes days, at, timezone, cron_expr, \
+             schedule_text (code-generated English; do not rewrite it), \
              and next_fires (the next 5 local times, each with weekday and UTC). \
              Judge timing only from next_fires and schedule_text. \
-             cron_expr is UTC, seconds first, and is only for edits.",
+             Prefer days, at, and timezone when you edit a weekday clock. \
+             cron_expr is the escape hatch. It is UTC unless timezone is set.",
             json!({"type": "object", "properties": {}}),
         ),
         ToolDef::new(
@@ -53,7 +62,13 @@ pub fn schedule_tool_defs() -> Vec<ToolDef> {
             ),
             json!({
                 "type": "object",
-                "properties": { "name": {"type": "string"} },
+                "properties": {
+                    "name": {"type": "string"},
+                    "days": {"type": "array", "items": {"type": "string"}},
+                    "at": {"type": "string"},
+                    "timezone": {"type": "string"},
+                    "cron_expr": {"type": "string"}
+                },
                 "required": ["name"]
             }),
         ),
@@ -107,6 +122,9 @@ fn update_patch_schema() -> Value {
             "name": {"type": "string"},
             "new_name": {"type": "string"},
             "enabled": {"type": "boolean"},
+            "days": {"type": "array", "items": {"type": "string"}},
+            "at": {"type": "string"},
+            "timezone": {"type": "string"},
             "cron_expr": {"type": "string"},
             "goal": {"type": "string"},
             "pool": {"type": "string"},

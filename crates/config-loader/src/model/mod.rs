@@ -12,6 +12,7 @@ mod config_builtin_editor;
 mod config_profile_provider;
 mod config_turn_budgets;
 mod policy;
+mod schedule_form;
 mod shepherd;
 mod topology;
 mod topology_default;
@@ -22,6 +23,7 @@ pub use builder::ConfigBuilder;
 pub use config::{CodingAuthError, CodingWorkspaceAuth, Config, GrantParts, ResolvedProfile};
 pub use config_builtin_editor::BUILTIN_AUTOMATION_EDITOR_PROFILE;
 pub use policy::{Grant, Policy, ZonePolicy};
+pub use schedule_form::ScheduleTiming;
 pub use shepherd::{
     ShepherdAuthConfig, ShepherdConfig, ShepherdProjectConfig, ShepherdReviewConfig,
 };

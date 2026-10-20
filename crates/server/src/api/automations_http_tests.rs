@@ -8,6 +8,7 @@ use axum::{
     body::Body,
     http::{Request, StatusCode},
 };
+use chrono::Timelike;
 use liberado_common::CapabilitySet;
 use liberado_config::{CronSchedule, HookConfig};
 use liberado_session::{GoalSessionHub, GoalSessionStore, LifeOpsDemoRunner};
@@ -81,6 +82,9 @@ async fn list_schedules_reflects_topology_rows() {
             git_user_email: None,
             run_on_start: None,
             direct: None,
+            days: Vec::new(),
+            at: None,
+            timezone: None,
         }],
         vec![],
     );
@@ -107,6 +111,7 @@ async fn list_schedules_reflects_topology_rows() {
     let fires = liberado_cron::next_fires("0 0 9 * * * *", "America/Chicago", 1).unwrap();
     assert_eq!(rows[0]["next_fire"], fires[0].display());
     assert_eq!(rows[0]["timezone"], "America/Chicago");
+    assert_eq!(rows[0]["category"], "automation");
     assert_eq!(
         rows[0]["description"],
         "Runs the \"maintenance\" agent with the prompt: \"Summarize inbox\". The result is pushed to the notifier when the run finishes."
@@ -139,6 +144,9 @@ async fn list_schedules_describes_a_mechanical_job_without_secrets() {
             git_user_email: Some("secret@example.com".into()),
             run_on_start: None,
             direct: None,
+            days: Vec::new(),
+            at: None,
+            timezone: None,
         }],
         vec![],
     );
@@ -161,6 +169,7 @@ async fn list_schedules_describes_a_mechanical_job_without_secrets() {
     assert!(!text.contains("Secret Name"));
     let v: serde_json::Value = serde_json::from_str(&text).unwrap();
     assert_eq!(v["schedules"][0]["schedule_text"], "Every 15 minutes");
+    assert_eq!(v["schedules"][0]["category"], "automation");
     assert_eq!(
         v["schedules"][0]["description"],
         "Sends a reminder listing up to 10 open vault tasks. No model session. The reminder goes to the reminder channel, not the sticky chat."
@@ -199,4 +208,41 @@ async fn list_hooks_never_returns_secret_ref() {
     assert!(!text.contains("secret_ref"));
     let v: serde_json::Value = serde_json::from_slice(bytes.as_ref()).unwrap();
     assert_eq!(v["hooks"][0]["name"], "nightly-backup");
+}
+
+#[tokio::test]
+async fn list_schedules_evaluates_a_structured_row_in_its_zone() {
+    let row: CronSchedule = serde_json::from_value(serde_json::json!({
+        "name": "trash",
+        "days": ["tue"],
+        "at": "20:00",
+        "goal": "bins"
+    }))
+    .unwrap();
+    let app = app_with_topology(vec![row], vec![]);
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/api/schedules")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(
+        v["schedules"][0]["schedule_text"],
+        "Every Tuesday at 8:00 PM America/Chicago"
+    );
+    let fires = liberado_cron::next_fires_zoned("0 0 20 * * 3 *", "America/Chicago", 1).unwrap();
+    assert_eq!(v["schedules"][0]["next_fire"], fires[0].display());
+    assert_eq!(v["schedules"][0]["timezone"], "America/Chicago");
+    assert_eq!(v["schedules"][0]["category"], "automation");
+    assert_eq!(fires[0].local.hour(), 20);
+    assert_eq!(fires[0].weekday_name(), "Tuesday");
 }

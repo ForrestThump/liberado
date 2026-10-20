@@ -436,9 +436,21 @@ writes_vault = false             # writes code workspaces, not the Obsidian vaul
 # exact same reactive pipeline a vault change does (the same dispatcher, same capability boundary,
 # same guards). `cron_expr` uses the Rust `cron` crate's 6/7-field syntax — SECONDS FIRST, not
 # standard 5-field cron and not croner. Fields: sec min hour day-of-month month day-of-week [year].
-# Times are UTC. Weekday numbers are 1=Sun, 2=Mon, 3=Tue, 4=Wed, 5=Thu, 6=Fri, 7=Sat.
-# Convert from your local zone yourself (topology.timezone is for agent context, not for parsing
-# cron_expr). Example: 21:00 America/Chicago CDT (UTC-5) → 02:00 UTC next day → "0 0 2 * * * *".
+# Times are UTC unless `timezone` is set. When `timezone` is an IANA name, the fields are
+# civil time in that zone. Weekday numbers are 1=Sun, 2=Mon, 3=Tue, 4=Wed, 5=Thu, 6=Fri, 7=Sat.
+# Without `timezone`, convert from your local zone yourself (topology.timezone is for agent
+# context, not for parsing cron_expr). Example: 21:00 America/Chicago CDT (UTC-5) → 02:00 UTC
+# next day → "0 0 2 * * * *".
+#
+# Prefer a structured schedule for a weekday and a clock. It is evaluated in the timezone,
+# so 20:00 stays 20:00 across DST. `days` are mon, tue, wed, thu, fri, sat, sun. `at` is
+# 24-hour HH:MM. `timezone` is optional and defaults to topology.timezone. Exactly one of
+# this form or `cron_expr`.
+#
+# A recurring reminder belongs in the vault. Write an Obsidian task
+# (`- [ ] Take the bins out #task #remind 📅 2026-10-20 20:00`) or a Full Calendar
+# note under calendar/ with `remind: true`.
+#
 # When a schedule fires, the daemon prepends "Local time: YYYY-MM-DD HH:MM CDT (America/Chicago)."
 # to the goal so "today"/"this evening" land correctly. No catch-up/backfill on restart. `pool`
 # (optional) routes this schedule's dispatch through a named pool declared above instead of
@@ -454,7 +466,7 @@ writes_vault = false             # writes code workspaces, not the Obsidian vaul
 # Mechanical jobs do not start a model. task-ping reads Obsidian Tasks lines. event-ping
 # reads Full Calendar notes and titled notes under calendar/. habit-ping sends habit_text.
 # Reminders use LIBERADO_REMINDER_BOT_TOKEN and LIBERADO_REMINDER_CHAT_ID. They do not
-# enter the sticky chat. cron_expr is UTC. "Today" uses topology.timezone (America/Chicago).
+# enter the sticky chat. cron_expr is UTC unless timezone is set. "Today" uses topology.timezone (America/Chicago).
 # Set deliver = false so a session summary is not also pushed to the sticky notifier.
 #
 # Timed reminders are off until [vault_reminders] enabled = true. The tick then sends

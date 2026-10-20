@@ -24,11 +24,12 @@ use liberado_messaging::permission_card_options;
 use liberado_telegram_approvals::ResolveOutcome;
 use serde::Deserialize;
 
+use crate::api::schedule_description::schedule_category;
 use crate::state::AppState;
 
 /// `list_schedules` reads the file on disk, not the boot snapshot.
 ///
-/// Each row includes `cron_expr`, code-generated `schedule_text`, and `next_fires`.
+/// Each row includes `cron_expr`, code-generated `schedule_text`, `next_fires`, and `category`.
 pub fn list_from_disk() -> Result<String, String> {
     let path = schedule_topology_path().map_err(|err| err.to_string())?;
     let text = std::fs::read_to_string(&path)
@@ -53,13 +54,25 @@ fn schedule_row_with_local_clock(
     zone: &str,
 ) -> Result<serde_json::Value, String> {
     let mut value = serde_json::to_value(schedule).map_err(|err| err.to_string())?;
-    let zone_name = crate::schedule_timing::zone_name(zone);
-    let schedule_text = liberado_cron::cron_to_english(&schedule.cron_expr, zone_name);
+    let shown = crate::schedule_timing::show(schedule, zone).ok();
+    let zone_name = shown
+        .as_ref()
+        .map(|row| row.zone.clone())
+        .unwrap_or_else(|| crate::schedule_timing::zone_name(zone).to_string());
+    let schedule_text = shown
+        .as_ref()
+        .map(|row| row.english.clone())
+        .unwrap_or_else(|| schedule.cron_expr.clone());
+    let fires = shown
+        .as_ref()
+        .map(|row| crate::schedule_timing::rows_for(row, 5))
+        .unwrap_or_default();
     if let Some(obj) = value.as_object_mut() {
         obj.insert(
-            "timezone".to_string(),
-            serde_json::Value::String(zone_name.to_string()),
+            "cron_expr".to_string(),
+            serde_json::json!(schedule.cron_expr),
         );
+        obj.insert("timezone".to_string(), serde_json::Value::String(zone_name));
         obj.insert(
             "schedule_text".to_string(),
             serde_json::Value::String(schedule_text.clone()),
@@ -68,13 +81,10 @@ fn schedule_row_with_local_clock(
             "local_time".to_string(),
             serde_json::Value::String(schedule_text),
         );
+        obj.insert("next_fires".to_string(), serde_json::Value::Array(fires));
         obj.insert(
-            "next_fires".to_string(),
-            serde_json::Value::Array(crate::schedule_timing::next_fire_rows(
-                &schedule.cron_expr,
-                zone_name,
-                5,
-            )),
+            "category".to_string(),
+            serde_json::Value::String(schedule_category(schedule.job.as_deref()).to_string()),
         );
     }
     Ok(value)
@@ -197,6 +207,7 @@ fn schedule_from_args(args: &serde_json::Value) -> Result<CronSchedule, EditErro
     if schedule.name.trim().is_empty() {
         return Err(EditError::Shape("`name` is empty".into()));
     }
+    schedule.require_one_clock().map_err(EditError::Shape)?;
     Ok(schedule)
 }
 

@@ -136,6 +136,8 @@ fn sample_target() -> EditorTarget {
         enabled: true,
         schedule_text: "Every day at 6:30 AM".into(),
         cron_expr: "0 30 12 * * * *".into(),
+        days: Vec::new(),
+        at: String::new(),
         timezone: "America/Chicago".into(),
         description: "Sends a reminder listing calendar events.".into(),
     }

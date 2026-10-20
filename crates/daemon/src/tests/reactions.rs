@@ -107,6 +107,7 @@ async fn cron_and_vault_watch_are_interchangeable_event_sources() {
     let cron_source = CronEventSource::new(vec![Schedule {
         name: "every-second".into(),
         cron_expr: "* * * * * * *".into(),
+        eval_timezone: None,
         goal: "a cron-dispatched goal".into(),
         pool: None,
         profile: None,
@@ -207,6 +208,7 @@ async fn a_cron_firing_is_recorded_as_a_background_session_instead_of_vanishing(
     let cron = CronEventSource::new(vec![Schedule {
         name: "nightly".into(),
         cron_expr: "* * * * * * *".into(), // every second, so the test doesn't wait
+        eval_timezone: None,
         goal: "summarize today's decisions".into(),
         pool: None,
         profile: None,

@@ -28,6 +28,9 @@ fn cron_schedule(name: &str, cron_expr: &str) -> CronSchedule {
         git_user_email: None,
         run_on_start: None,
         direct: None,
+        days: Vec::new(),
+        at: None,
+        timezone: None,
     }
 }
 

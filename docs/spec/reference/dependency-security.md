@@ -55,6 +55,7 @@ crate and the upstream that should drop it.
 
 - `RUSTSEC-2024-0436` (`paste`) is transitive through fastembed/tokenizers and ratatui.
 - `RUSTSEC-2026-0192` (`ttf-parser`) is transitive through eframe's Linux window stack.
+- `RUSTSEC-2026-0370` (`zvariant`), `RUSTSEC-2026-0371` (`zbus_names`), and `RUSTSEC-2026-0372` (`zvariant_derive`) are unmaintained, not vulnerable. They are transitive through eframe (`accesskit_unix` -> zbus 5.19) for `liberado-sysmap-gui`, and folded into zbus 6. Revisit when that stack moves to zbus 6.
 
 ## YAML
 

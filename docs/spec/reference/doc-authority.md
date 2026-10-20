@@ -24,7 +24,8 @@ as historical analysis in the future-work archive.
 | What must remain true across crates? | `docs/spec/reference` and `docs/spec/architecture/contracts.md` |
 | Why was this design selected? | Accepted ADR under `docs/decisions/` |
 | What should an agent implement next? | `docs/future-work/backlog.md` only |
-| What is the broader direction? | `docs/roadmap.md` |
+| What is the product mission and strategic direction? | `docs/direction.md` |
+| What is the broader direction and status snapshot? | `docs/roadmap.md` |
 | What did an experiment prove? | Dated validation/evidence record under `docs/validation/` |
 | What might we do later? | Proposed plan or idea under `docs/future-work/` |
 | What happened before? | `docs/future-work/archive/` and git history |

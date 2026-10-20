@@ -1,6 +1,6 @@
 use liberado_config::CronSchedule;
 
-use super::schedule_description;
+use super::{schedule_category, schedule_description};
 
 fn bare() -> CronSchedule {
     CronSchedule {
@@ -22,6 +22,9 @@ fn bare() -> CronSchedule {
         git_user_email: None,
         run_on_start: None,
         direct: None,
+        days: Vec::new(),
+        at: None,
+        timezone: None,
     }
 }
 
@@ -184,10 +187,21 @@ fn habit_ping_without_text_does_not_invent_a_habit() {
 fn reminder_tick_stays_quiet_when_nothing_is_due() {
     let mut schedule = bare();
     schedule.job = Some("vault-reminder-tick".into());
-    let text = schedule_description(&schedule);
-    assert!(text.contains("opted in"));
-    assert!(text.contains("Stays quiet when nothing is due or reminders are off"));
-    assert!(text.contains("No model session"));
+    assert_eq!(
+        schedule_description(&schedule),
+        "Background system job. Each minute, delivers the timed pings for Obsidian tasks and calendar notes you marked #remind / remind: true. Stays quiet when nothing is due or reminders are off. Your reminders themselves live in the vault, not here."
+    );
+}
+
+#[test]
+fn only_the_reminder_tick_is_a_system_schedule() {
+    assert_eq!(schedule_category(Some("vault-reminder-tick")), "system");
+    assert_eq!(schedule_category(Some("  vault-reminder-tick  ")), "system");
+    assert_eq!(schedule_category(Some("habit-ping")), "automation");
+    assert_eq!(schedule_category(Some("task-ping")), "automation");
+    assert_eq!(schedule_category(Some("Vault-Reminder-Tick")), "automation");
+    assert_eq!(schedule_category(Some("")), "automation");
+    assert_eq!(schedule_category(None), "automation");
 }
 
 #[test]

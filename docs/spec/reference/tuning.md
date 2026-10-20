@@ -187,12 +187,23 @@ face model retunes only conversations that never pinned one.
 [[schedules]]
 name = "evening-debrief"
 enabled = true
-cron_expr = "0 55 1 * * * *"     # SECONDS MINUTES HOURS DOM MONTH DOW YEAR — always UTC
+cron_expr = "0 55 1 * * * *"     # SECONDS MINUTES HOURS DOM MONTH DOW YEAR — UTC unless timezone is set
 goal = """…"""                   # the prompt; the daemon prepends "Local time: …"
 ```
 
-`cron_expr` has **no timezone field** — it is UTC, and `topology.timezone` only affects the local-time
-string stamped onto the goal. Re-check the offset when DST flips.
+Prefer a structured row when the trigger is a weekday and a clock:
+
+```toml
+[[schedules]]
+name = "tuesday-trash"
+days = ["tue"]                   # mon tue wed thu fri sat sun
+at = "20:00"                     # 24-hour HH:MM, civil time
+timezone = "America/Chicago"    # optional; defaults to topology.timezone
+```
+
+Exactly one of `cron_expr` or `days` + `at`. The structured form is evaluated in its timezone,
+so 20:00 stays 20:00 across DST. `cron_expr` is UTC unless that row also sets `timezone`.
+`topology.timezone` still stamps the "Local time: …" line onto the goal.
 
 `liberado-config` can create, update, or delete one `[[schedules]]` row without rewriting the
 rest of the file (`docs/spec/config-spec.md` §4.5). It first copies `topology.toml` to
