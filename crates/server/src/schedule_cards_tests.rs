@@ -376,6 +376,7 @@ goal = "ping"
     let english = liberado_cron::cron_to_english("0 30 12 * * * *", "America/Chicago");
     assert_eq!(rows[0]["local_time"], english);
     assert_eq!(rows[0]["schedule_text"], english);
+    assert_eq!(rows[0]["category"], "automation");
     assert_eq!(rows[0]["cron_expr"], "0 30 12 * * * *");
     let shown = rows[0]["next_fires"].as_array().expect("next_fires");
     let computed = liberado_cron::next_fires("0 30 12 * * * *", "America/Chicago", 5).unwrap();
@@ -425,6 +426,24 @@ goal = "bins"
         assert_eq!(fire.local.hour(), 20);
         assert_eq!(fire.weekday_name(), "Tuesday");
     }
+}
+
+#[test]
+fn a_reminder_tick_row_is_marked_system() {
+    let file: super::ScheduleFile = toml::from_str(
+        r#"
+timezone = "UTC"
+[[schedules]]
+name = "vault-reminder-tick"
+cron_expr = "0 * * * * *"
+job = "vault-reminder-tick"
+"#,
+    )
+    .unwrap();
+    let json = super::schedules_json_with_local_clock(&file).unwrap();
+    let rows: Vec<serde_json::Value> = serde_json::from_str(&json).unwrap();
+    assert_eq!(rows[0]["job"], "vault-reminder-tick");
+    assert_eq!(rows[0]["category"], "system");
 }
 
 fn backup_count(dir: &Path) -> usize {

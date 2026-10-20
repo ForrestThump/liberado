@@ -447,14 +447,9 @@ writes_vault = false             # writes code workspaces, not the Obsidian vaul
 # 24-hour HH:MM. `timezone` is optional and defaults to topology.timezone. Exactly one of
 # this form or `cron_expr`.
 #
-# [[schedules]]
-# name = "tuesday-trash"
-# days = ["tue"]
-# at = "20:00"
-# timezone = "America/Chicago"
-# goal = "Remind me to take the bins out."
-# enabled = true
-# deliver = false
+# A recurring reminder belongs in the vault. Write an Obsidian task
+# (`- [ ] Take the bins out #task #remind 📅 2026-10-20 20:00`) or a Full Calendar
+# note under calendar/ with `remind: true`.
 #
 # When a schedule fires, the daemon prepends "Local time: YYYY-MM-DD HH:MM CDT (America/Chicago)."
 # to the goal so "today"/"this evening" land correctly. No catch-up/backfill on restart. `pool`

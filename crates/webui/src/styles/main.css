@@ -3569,6 +3569,29 @@ body {
     color: var(--grok-subtitle);
 }
 
+.automation-system {
+    margin-top: 1.5rem;
+    padding-top: 1rem;
+    border-top: 1px solid var(--grok-rail-border);
+}
+
+.automation-system-title {
+    margin: 0 0 0.25rem;
+    font-size: 0.875rem;
+    font-weight: 500;
+    color: var(--grok-subtitle);
+}
+
+.automation-system-note {
+    margin: 0 0 0.75rem;
+    color: var(--grok-subtitle);
+    font-size: 0.8125rem;
+}
+
+.automation-system .automation-row {
+    background: transparent;
+}
+
 .automations-page {
     flex: 1;
     min-height: 0;

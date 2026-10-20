@@ -6,14 +6,15 @@ use axum::{Json, extract::State, response::IntoResponse};
 
 use crate::state::AppState;
 
-use super::schedule_description::schedule_description;
+use super::schedule_description::{schedule_category, schedule_description};
 
 /// `GET /api/schedules` — configured cron entries from in-memory topology (read-only).
 ///
 /// `next_fire` is the next local reading. A structured row, and a `cron_expr`
 /// row that sets `timezone`, are evaluated in that zone. A `cron_expr` row
 /// without `timezone` stays UTC and is displayed in `topology.timezone`.
-/// `description`, `schedule_text`, and `timezone` are additive display fields.
+/// `description`, `schedule_text`, `timezone`, and `category` are additive display
+/// fields. `category` is `system` for `vault-reminder-tick` and `automation` otherwise.
 pub async fn list_schedules(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let timezone = state.config.topology.timezone.clone();
     let schedules: Vec<serde_json::Value> = state
@@ -48,6 +49,7 @@ fn schedule_json(schedule: &liberado_config::CronSchedule, topology_tz: &str) ->
         "at": schedule.at,
         "goal": schedule.goal,
         "job": schedule.job,
+        "category": schedule_category(schedule.job.as_deref()),
         "profile": schedule.profile,
         "next_fire": next_fire,
         "description": schedule_description(schedule),

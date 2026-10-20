@@ -17,6 +17,16 @@ pub(crate) fn schedule_description(schedule: &CronSchedule) -> String {
     }
 }
 
+/// `system` for the vault-reminder engine. Every other row is an automation.
+///
+/// The tick delivers Obsidian `#remind` pings. It is plumbing, not a reminder.
+pub(crate) fn schedule_category(job: Option<&str>) -> &'static str {
+    match job.map(str::trim) {
+        Some("vault-reminder-tick") => "system",
+        _ => "automation",
+    }
+}
+
 fn job_description(schedule: &CronSchedule, kind: &str) -> String {
     match kind {
         "event-ping" => event_ping(),
@@ -54,9 +64,7 @@ fn habit_ping(schedule: &CronSchedule) -> String {
 }
 
 fn reminder_tick() -> String {
-    format!(
-        "When vault reminders are enabled, sends a reminder for tasks and events that opted in and are due at this minute. Stays quiet when nothing is due or reminders are off.{REMINDER}"
-    )
+    "Background system job. Each minute, delivers the timed pings for Obsidian tasks and calendar notes you marked #remind / remind: true. Stays quiet when nothing is due or reminders are off. Your reminders themselves live in the vault, not here.".to_string()
 }
 
 fn git_snapshot(schedule: &CronSchedule) -> String {

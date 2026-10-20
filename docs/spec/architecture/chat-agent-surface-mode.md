@@ -396,6 +396,14 @@ in plain text.
 The Automations page is the schedule list only. Edit and New navigate to the new chat.
 The page does not embed a composer and does not state the restart rule.
 
+The page lists work a script or agent does for you. Your tasks and reminders stay in
+Obsidian: an Obsidian Tasks line with `#task`, `#remind` when you want a timed ping, or a
+Full Calendar note in `calendar/` with `remind: true`. The `vault-reminder-tick` schedule
+is the background job that delivers those pings. The page shows it under Background system
+jobs, below the automation list, and that row has no Edit action. `GET /api/schedules`
+sets `category` to `system` for that job and `automation` for every other row. A row with
+no `category` is an automation.
+
 ## 7. Follow-ups
 
 - **S4 (dogfood, Slice 4)** — Current. Use the shelves on the daemon you talk to,
