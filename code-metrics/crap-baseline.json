@@ -20383,8 +20383,8 @@
       "function": "classification_is_exhaustive",
       "line": 231,
       "cyclomatic": 5.0,
-      "coverage": 70.0,
-      "crap": 5.675000000000001,
+      "coverage": 80.0,
+      "crap": 5.2,
       "crate": "liberado-common"
     },
     {
