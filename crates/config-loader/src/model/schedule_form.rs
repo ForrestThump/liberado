@@ -72,7 +72,7 @@ pub struct CronSchedule {
     /// Mechanical job kind. When set, the daemon runs the job and does not start a model
     /// session, except `inbox-if-present`, which dispatches `goal` only when the capture
     /// file has text. Known kinds: `git-snapshot`, `task-ping`, `event-ping`, `habit-ping`,
-    /// `inbox-if-present`, `vault-reminder-tick`.
+    /// `inbox-if-present`, `vault-reminder-tick`, `weekly-spending-push`.
     #[serde(default)]
     pub job: Option<String>,
     /// Text a `habit-ping` sends. Required for that kind.

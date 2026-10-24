@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use super::builder::ConfigBuilder;
 use super::policy::Policy;
 use super::topology::{
-    CronSchedule, McpGrant, McpTransport, ProjectConfig, SessionProfile, Topology, empty_table,
+    McpGrant, McpTransport, ProjectConfig, SessionProfile, Topology, empty_table,
 };
 
 /// What a session profile resolves to — everything a caller needs to start a session under it.
@@ -541,80 +541,8 @@ impl Config {
     /// malformed or ambiguous schedule is a load-time error (Decision 14 fail-fast), not
     /// something discovered only once it fails to fire.
     fn validate_schedules(&self) -> Result<()> {
-        let mut seen_schedule_names = std::collections::HashSet::new();
-        for schedule in &self.topology.schedules {
-            validate_one_schedule(
-                schedule,
-                &mut seen_schedule_names,
-                self.topology.vault_reminders.enabled,
-                &self.topology.timezone,
-            )?;
-        }
-        Ok(())
+        super::schedule_rules::validate_schedules(self)
     }
-}
-
-/// Per-schedule validation: name uniqueness, cron parse, and the four job-kind
-/// `if`/`&&` checks. Lives at module scope so the per-schedule loop in
-/// `Config::validate_schedules` stays at its cyclomatic baseline.
-///
-/// Cyclomatic: 1 (base) + 1 (insert) + 1 (cron) + 1 (job Some) + 1 (KINDS)
-///             + 2 (habit &&) + 2 (inbox &&) + 1 (tick `?`) = 9.
-///             CRAP at full coverage is 9, under the per-function floor of 10.
-fn validate_one_schedule<'a>(
-    schedule: &'a CronSchedule,
-    seen: &mut std::collections::HashSet<&'a str>,
-    reminders_enabled: bool,
-    topology_tz: &str,
-) -> Result<()> {
-    if !seen.insert(&schedule.name) {
-        return Err(Error::Config(format!(
-            "topology.schedules has a duplicate name '{}'",
-            schedule.name
-        )));
-    }
-    if let Err(detail) = schedule.timing(topology_tz) {
-        return Err(Error::Config(detail));
-    }
-    let Some(job) = &schedule.job else {
-        return Ok(());
-    };
-    const KINDS: &[&str] = &[
-        "git-snapshot",
-        "task-ping",
-        "event-ping",
-        "habit-ping",
-        "inbox-if-present",
-        "vault-reminder-tick",
-    ];
-    if !KINDS.contains(&job.as_str()) {
-        return Err(Error::Config(format!(
-            "topology.schedules['{}'].job '{job}' is not one of {}",
-            schedule.name,
-            KINDS.join(", ")
-        )));
-    }
-    if job == "habit-ping"
-        && schedule
-            .habit_text
-            .as_deref()
-            .unwrap_or("")
-            .trim()
-            .is_empty()
-    {
-        return Err(Error::Config(format!(
-            "topology.schedules['{}'] habit-ping requires habit_text",
-            schedule.name
-        )));
-    }
-    if job == "inbox-if-present" && schedule.goal.trim().is_empty() {
-        return Err(Error::Config(format!(
-            "topology.schedules['{}'] inbox-if-present requires goal",
-            schedule.name
-        )));
-    }
-    super::vault_reminders::refuse_tick_while_disabled(schedule, reminders_enabled)?;
-    Ok(())
 }
 
 impl Config {

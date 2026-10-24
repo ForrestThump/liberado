@@ -233,6 +233,10 @@ The values are environment variables, not `config.toml`. The hookup is in
 Agent DMs are not the reminder path. `@liberado_pings` is not provisioned. The slug
 `pings` is reserved for a later notification room. Reminders stay on the reminder bot.
 
+`weekly-spending-push` does not call a model. It sends one Web Push for last week's
+spending while `[weekly_spending] enabled = true`. The default is off. Keys and the
+budget URL live in the homelab env file, not in git. See config-spec §9.
+
 `[vault_reminders] enabled` defaults to false. The minute tick does nothing until that
 switch is on. `tasks` and `events` default to true and apply only while the switch is on.
 A task or event also needs its own `#remind` tag, or `remind` / `reminder` set to

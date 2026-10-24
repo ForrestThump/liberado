@@ -14,7 +14,8 @@ use super::schedule_description::{schedule_category, schedule_description};
 /// row that sets `timezone`, are evaluated in that zone. A `cron_expr` row
 /// without `timezone` stays UTC and is displayed in `topology.timezone`.
 /// `description`, `schedule_text`, `timezone`, and `category` are additive display
-/// fields. `category` is `system` for `vault-reminder-tick` and `automation` otherwise.
+/// fields. `category` is `system` for `vault-reminder-tick` and `weekly-spending-push`,
+/// and `automation` otherwise.
 pub async fn list_schedules(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let timezone = state.config.topology.timezone.clone();
     let schedules: Vec<serde_json::Value> = state

@@ -13,11 +13,13 @@ mod config_profile_provider;
 mod config_turn_budgets;
 mod policy;
 mod schedule_form;
+mod schedule_rules;
 mod shepherd;
 mod topology;
 mod topology_default;
 mod tuning;
 mod vault_reminders;
+mod weekly_spending;
 
 pub use builder::ConfigBuilder;
 pub use config::{CodingAuthError, CodingWorkspaceAuth, Config, GrantParts, ResolvedProfile};
@@ -41,3 +43,7 @@ pub use tuning::{
     ProposalTuning, SubagentIsolation, TelegramApprovalsTuning, Tuning,
 };
 pub use vault_reminders::VaultRemindersConfig;
+pub use weekly_spending::{
+    UnmappedPolicy, WEEKLY_SPENDING_JOB, WeeklySpendingConfig, has_enabled_weekly_schedule,
+    weekly_open_clock,
+};

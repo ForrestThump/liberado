@@ -289,6 +289,7 @@ pub fn Automations(
             class: "grok-page automations-page",
             div {
                 class: "grok-page-body",
+                super::notifications::NotificationsCard { api_base: api_base.clone() }
                 div {
                     class: "automation-toolbar",
                     button {

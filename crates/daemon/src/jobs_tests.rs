@@ -357,3 +357,35 @@ async fn a_snapshot_runs_without_a_dispatcher_and_a_habit_uses_the_reminder_chan
     let messages = sent.lock().unwrap().clone();
     assert_eq!(messages, vec!["Plan the day.".to_string()]);
 }
+
+#[tokio::test]
+async fn the_weekly_spending_job_does_not_use_the_reminder_channel() {
+    let dir = tempfile::tempdir().unwrap();
+    let sticky = Arc::new(Mutex::new(Vec::new()));
+    let reminder = Arc::new(Mutex::new(Vec::new()));
+    let daemon = Daemon::open("vault", dir.path())
+        .await
+        .unwrap()
+        .with_notifier(Arc::new(RecordingNotifier {
+            sent: sticky.clone(),
+        }))
+        .with_reminder_notifier(Arc::new(RecordingNotifier {
+            sent: reminder.clone(),
+        }));
+    let event = Event::trigger(
+        "CronFired",
+        "cron:weekly-spending-push",
+        "cron:weekly-spending-push:t",
+        EventPayload {
+            data: serde_json::json!({"job": "weekly-spending-push", "deliver": false}),
+            ..EventPayload::default()
+        },
+    );
+    assert!(matches!(
+        daemon.handle_mechanical(&event),
+        Some(ReactionOutcome::Observed)
+    ));
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    assert!(reminder.lock().unwrap().is_empty());
+    assert!(sticky.lock().unwrap().is_empty());
+}

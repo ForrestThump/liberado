@@ -125,6 +125,8 @@ fn coding_goals_app_with(
         live_mcp: liberado_bootstrap::LiveMcpController::empty(),
         drain: crate::shutdown::DrainGate::default(),
         approval_hub: None,
+        push: crate::state::inert_push(),
+        spending: None,
     });
     Router::new()
         .route("/api/goals", axum::routing::post(goals_start))

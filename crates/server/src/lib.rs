@@ -221,6 +221,12 @@ async fn assemble_daemon(
     // so that chat keeps the same conversation.
     let channels = channels::resolve_channels(chat.as_ref()).await;
     let daemon = channels::wrap_cron_notifier(daemon, chat.as_ref(), &config, &channels);
+    let push = Arc::new(liberado_notify::PushHub::open(
+        liberado_config::data_dir().join("web-push-subscriptions.json"),
+    ));
+    let daemon = daemon
+        .with_push(Arc::clone(&push))
+        .with_weekly_runtime(liberado_daemon::weekly_runtime(&config.topology));
     let ledger_dir = liberado_config::data_dir();
     let (approval_resolver, approval_hub) = approvals::wire_approvals(
         chat.as_ref(),
@@ -278,6 +284,8 @@ async fn assemble_daemon(
         live_mcp: live_mcp.clone(),
         drain: crate::shutdown::DrainGate::default(),
         approval_hub,
+        push,
+        spending: None,
     });
 
     channels::spawn_configured_channels(
@@ -460,6 +468,17 @@ fn build_app_router(state: &Arc<AppState>) -> Router {
         )
         .route("/api/hooks", axum::routing::get(api::list_hooks))
         .route("/api/schedules", axum::routing::get(api::list_schedules))
+        .route("/api/push/status", axum::routing::get(api::push_status))
+        .route(
+            "/api/push/vapid-public-key",
+            axum::routing::get(api::vapid_public_key),
+        )
+        .route(
+            "/api/push/subscriptions",
+            axum::routing::post(api::upsert_subscription).delete(api::delete_subscription),
+        )
+        .route("/api/push/test", axum::routing::post(api::push_test))
+        .route("/api/push/weekly", axum::routing::post(api::push_weekly))
         // The one unified list (S5′): chats and goal sessions, same rows.
         .route("/api/sessions", axum::routing::get(api::sessions_list))
         // Branch a conversation, keeping the original (copy semantics — a snapshot, not a pointer).
@@ -766,6 +785,11 @@ pub fn config_check(dir: Option<&Path>) -> Result<(), Box<dyn std::error::Error>
 
 mod explain_write;
 pub use explain_write::explain_write;
+
+/// VAPID env lines for `liberado config vapid-keys`. Do not commit the output.
+pub fn vapid_env_lines() -> Result<String, Box<dyn std::error::Error>> {
+    liberado_notify::vapid_env_lines().map_err(|err| -> Box<dyn std::error::Error> { err.into() })
+}
 /// Build the chat agent when a provider is available: a connected tool runtime (the configured MCP
 /// server, or none) + the executor + the **converged session store** (S5′), injected by the caller.
 /// Returns `(chat, tool_count, tool_names)` so callers can surface tool availability in diagnostics.

@@ -253,6 +253,17 @@ pub struct Daemon {
     /// `hold_flag` parks a note for both the watcher and the schedule.
     /// Populated from `[tuning.capture]`.
     pub(crate) capture_scope: crate::vault_source::CaptureScope,
+    /// Web Push subscriptions. `open` starts inert. The server installs the shared hub.
+    pub(crate) push: Arc<liberado_notify::PushHub>,
+    /// Weekly spending table. Default off.
+    pub(crate) weekly_spending: liberado_config::WeeklySpendingConfig,
+    /// True when the table is on and one enabled schedule names the job.
+    pub(crate) weekly_catchup: bool,
+    /// Local open clock from the enabled schedule. Default 07:00.
+    pub(crate) weekly_open_hour: u32,
+    pub(crate) weekly_open_minute: u32,
+    /// Test double. `None` builds the HTTP client from the environment at send time.
+    pub(crate) spending_source: Option<Arc<dyn crate::weekly_spending::SpendingSource>>,
 }
 
 #[cfg(test)]

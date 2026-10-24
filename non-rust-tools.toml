@@ -46,5 +46,5 @@ justification = "The operator runs this from a branch checkout against live Dock
 [[tool]]
 path = "crates/webui/public/sw.js"
 owner = "web UI"
-purpose = "Provide the browser-managed origin-root service worker required by the PWA install shell."
+purpose = "Origin-root service worker for the PWA shell: show a Web Push and focus the app on click, without caching or intercepting /api/."
 justification = "The browser owns this lifecycle and origin scope; replacing it with Rust would remove the web platform boundary the installed UI depends on."

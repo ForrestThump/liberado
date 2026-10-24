@@ -27,7 +27,9 @@ use liberado_messaging::{
 
 mod http_error;
 mod outbound_cards;
+mod web_push;
 pub use outbound_cards::{OutboundCards, TelegramCardUpdater};
+pub use web_push::{NewSubscription, PushHub, SendReport, vapid_env_lines};
 
 /// Something that can be told about an event worth a human's attention.
 #[async_trait]
