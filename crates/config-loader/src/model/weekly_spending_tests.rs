@@ -57,8 +57,9 @@ fn missing_table_keeps_the_budget_defaults() {
     let defaults = WeeklySpendingConfig::default();
     assert!(!defaults.enabled);
     assert_eq!(defaults.timezone, "America/Chicago");
-    assert_eq!(defaults.unmapped, UnmappedPolicy::Ignore);
-    assert!(defaults.unmapped_bucket.is_none());
+    assert_eq!(defaults.unmapped, UnmappedPolicy::Count);
+    assert_eq!(defaults.unmapped_bucket.as_deref(), Some("Everything else"));
+    assert!(defaults.validate().is_ok(), "{:?}", defaults.validate());
     assert_eq!(defaults.buckets.len(), 2);
     assert_eq!(defaults.buckets[0].name, "Groceries");
     assert_eq!(defaults.buckets[0].weekly_dollars, 240);
@@ -86,7 +87,20 @@ fn enabled_table_without_buckets_keeps_the_defaults() {
         WeeklySpendingConfig::default().exclude
     );
     assert_eq!(topology.weekly_spending.timezone, "America/Chicago");
-    assert_eq!(topology.weekly_spending.unmapped, UnmappedPolicy::Ignore);
+    assert_eq!(topology.weekly_spending.unmapped, UnmappedPolicy::Count);
+    assert_eq!(
+        topology.weekly_spending.unmapped_bucket.as_deref(),
+        Some("Everything else")
+    );
+
+    let ignored: Topology =
+        toml::from_str("[weekly_spending]\nunmapped = \"ignore\"\n").expect("ignore");
+    assert_eq!(ignored.weekly_spending.unmapped, UnmappedPolicy::Ignore);
+    assert_eq!(
+        ignored.weekly_spending.unmapped_bucket.as_deref(),
+        Some("Everything else")
+    );
+    assert!(ignored.weekly_spending.validate().is_ok());
 }
 
 #[test]
@@ -200,6 +214,7 @@ fn categories_cannot_overlap_and_names_cannot_be_blank() {
 
     let mut duplicate_name = WeeklySpendingConfig::default();
     duplicate_name.buckets[1].name = "Groceries".into();
+    duplicate_name.unmapped_bucket = Some("Groceries".into());
     let err = message(&config_with(None, duplicate_name));
     assert!(
         err.contains("bucket 'Groceries' is listed more than once"),
@@ -218,6 +233,7 @@ fn categories_cannot_overlap_and_names_cannot_be_blank() {
 fn count_needs_a_real_bucket_and_ignore_still_checks_a_named_one() {
     let mut count = WeeklySpendingConfig {
         unmapped: UnmappedPolicy::Count,
+        unmapped_bucket: None,
         ..WeeklySpendingConfig::default()
     };
     let err = message(&config_with(None, count.clone()));
@@ -231,10 +247,16 @@ fn count_needs_a_real_bucket_and_ignore_still_checks_a_named_one() {
     assert!(config_with(None, count).validate().is_ok());
 
     let ignore = WeeklySpendingConfig {
+        unmapped: UnmappedPolicy::Ignore,
         unmapped_bucket: Some("Nope".into()),
         ..WeeklySpendingConfig::default()
     };
     let err = message(&config_with(None, ignore));
+    assert!(err.contains("is not a bucket name"), "{err}");
+
+    let mut dropped = WeeklySpendingConfig::default();
+    dropped.buckets.pop();
+    let err = message(&config_with(None, dropped));
     assert!(err.contains("is not a bucket name"), "{err}");
 }
 

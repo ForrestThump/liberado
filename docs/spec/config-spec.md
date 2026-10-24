@@ -378,8 +378,8 @@ at the open clock is not backlogged.
 [weekly_spending]
 enabled = false
 timezone = "America/Chicago"
-unmapped = "ignore"          # or "count"
-# unmapped_bucket = "Everything else"   # required when unmapped = "count"
+unmapped = "count"           # or "ignore"
+unmapped_bucket = "Everything else"
 exclude = ["Rent", "Tithing", "Utilities", "Loans", "Insurance", "Subscriptions", "Inference", "Payroll", "Transfers", "Credit Card", "Medical"]
 
 [[weekly_spending.buckets]]
@@ -398,10 +398,16 @@ A missing table uses those defaults, including the two buckets. `buckets = []` w
 fold. A category in two buckets, or in a bucket and `exclude`, is a load error.
 `weekly_dollars = 0` and a blank bucket name are load errors.
 
-`unmapped = "ignore"` (the default) leaves any other category out of the totals and
-logs its name when the spend is not zero. `unmapped = "count"` adds that spend to
-`unmapped_bucket`, which must name a bucket. Shipping is the live example of an
-unmapped category. The owner chooses ignore or count. Do not guess.
+`unmapped = "count"` is the default. A category that is not in a bucket and not in
+`exclude` is added to `unmapped_bucket`. The job still logs each of those categories
+with its whole-dollar amount. One category is `Shipping $12`. Several are
+`Shipping $12, Postage $4`. The dollars use the same nearest-dollar rounding as the
+message, one category at a time. Zero cents is not logged. `unmapped = "ignore"`
+leaves that spend out of the totals and still logs the name and amount. `count`
+requires `unmapped_bucket`, and that name must be a bucket. The default name is
+Everything else, which is one of the default buckets. If you omit the key, the
+loader fills Everything else. Shipping is unmapped in the live books, so it counts
+toward Everything else unless you set ignore.
 
 The schedule uses `days` and `at`, with an empty `cron_expr`, in the same IANA zone
 as `[weekly_spending].timezone`. Only one enabled row may name the job. A disabled

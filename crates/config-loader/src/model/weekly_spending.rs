@@ -12,6 +12,8 @@ use serde::{Deserialize, Serialize};
 
 use super::topology::{CronSchedule, Topology};
 
+mod weekly_spending_defaults;
+
 /// Job kind the daemon runs for the weekly spending reminder.
 pub const WEEKLY_SPENDING_JOB: &str = "weekly-spending-push";
 
@@ -19,10 +21,10 @@ pub const WEEKLY_SPENDING_JOB: &str = "weekly-spending-push";
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum UnmappedPolicy {
-    /// Leave the spend out of the message. Still log the category name.
-    #[default]
+    /// Leave the spend out of the totals. Still log the category and its amount.
     Ignore,
     /// Add the spend to [`WeeklySpendingConfig::unmapped_bucket`].
+    #[default]
     Count,
 }
 
@@ -50,12 +52,16 @@ pub struct WeeklySpendingConfig {
     /// IANA zone for the week window. Default `America/Chicago`.
     #[serde(default = "default_timezone")]
     pub timezone: String,
-    /// Categories in neither a bucket nor `exclude`. Default ignore.
+    /// Categories in neither a bucket nor `exclude`. Default count.
     #[serde(default)]
     pub unmapped: UnmappedPolicy,
     /// Bucket that receives unmapped spend when `unmapped` is `count`.
-    /// When `unmapped` is `ignore`, a set value must still name a bucket.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Default `Everything else`. When `unmapped` is `ignore`, a set value
+    /// must still name a bucket.
+    #[serde(
+        default = "weekly_spending_defaults::unmapped_bucket",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub unmapped_bucket: Option<String>,
     /// Category names that never count. Transfers stay here even though the
     /// budget service already drops them.
@@ -122,8 +128,8 @@ impl Default for WeeklySpendingConfig {
         Self {
             enabled: false,
             timezone: default_timezone(),
-            unmapped: UnmappedPolicy::Ignore,
-            unmapped_bucket: None,
+            unmapped: UnmappedPolicy::default(),
+            unmapped_bucket: weekly_spending_defaults::unmapped_bucket(),
             exclude: default_exclude(),
             buckets: default_buckets(),
         }

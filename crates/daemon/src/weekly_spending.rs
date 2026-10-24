@@ -186,7 +186,7 @@ fn note_unmapped(
     if excluded(cfg, name) || spent == 0 {
         return;
     }
-    unmapped.push(name.to_string());
+    unmapped.push(format!("{name} {}", money(round_dollars(spent))));
     add_counted(cfg, totals, spent);
 }
 
@@ -422,6 +422,7 @@ fn resolve_source(
 
 fn log_outcome(outcome: &RunOutcome) {
     if !outcome.unmapped.is_empty() {
+        // `categories` is `Shipping $12` or `Shipping $12, Postage $4`.
         tracing::warn!(
             categories = %outcome.unmapped.join(", "),
             "weekly spending has unmapped categories"

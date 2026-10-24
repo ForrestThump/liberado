@@ -117,7 +117,7 @@ fn cents_round_to_the_nearest_dollar_half_away_from_zero() {
 }
 
 #[tokio::test]
-async fn the_fixture_message_ignores_shipping_and_excludes_rent() {
+async fn the_fixture_counts_shipping_and_excludes_rent() {
     let rows = vec![
         spend("Groceries", -21_200),
         spend("Dining Out", -13_500),
@@ -138,9 +138,9 @@ async fn the_fixture_message_ignores_shipping_and_excludes_rent() {
     .expect("dry run");
     assert_eq!(
         outcome.message,
-        "Last week: groceries $212 of $240, everything else $135 of $110. This week starts fresh: $240 groceries, $110 everything else."
+        "Last week: groceries $212 of $240, everything else $143 of $110. This week starts fresh: $240 groceries, $110 everything else."
     );
-    assert_eq!(outcome.unmapped, vec!["Shipping".to_string()]);
+    assert_eq!(outcome.unmapped, vec!["Shipping $8".to_string()]);
     assert_eq!(outcome.week_id, "2026-10-19");
     assert_eq!(outcome.start, "2026-10-12");
     assert_eq!(outcome.end, "2026-10-18");
@@ -188,12 +188,69 @@ async fn count_still_names_the_unmapped_category() {
     )
     .await
     .expect("count");
-    assert_eq!(outcome.unmapped, vec!["Shipping".to_string()]);
+    assert_eq!(outcome.unmapped, vec!["Shipping $1".to_string()]);
     assert!(
         outcome.message.contains("everything else $1 of $110"),
         "{}",
         outcome.message
     );
+}
+
+#[tokio::test]
+async fn the_default_counts_shipping_into_everything_else_and_logs_dollars() {
+    let outcome = run_weekly(
+        &WeeklySpendingConfig::default(),
+        at(2026, 10, 23, 15, 0),
+        7,
+        0,
+        Arc::new(FixedSource::rows(vec![
+            spend("Shipping", -1_200),
+            spend("Postage", -400),
+        ])),
+        Arc::new(PushHub::inert()),
+        RunMode::DryRun,
+    )
+    .await
+    .expect("count");
+    assert_eq!(
+        outcome.unmapped,
+        vec!["Shipping $12".to_string(), "Postage $4".to_string()]
+    );
+    assert_eq!(outcome.unmapped.join(", "), "Shipping $12, Postage $4");
+    assert!(
+        outcome.message.contains("everything else $16 of $110"),
+        "{}",
+        outcome.message
+    );
+}
+
+#[tokio::test]
+async fn ignore_logs_the_amount_and_leaves_the_bucket_unchanged() {
+    let cfg = WeeklySpendingConfig {
+        unmapped: UnmappedPolicy::Ignore,
+        ..WeeklySpendingConfig::default()
+    };
+    let outcome = run_weekly(
+        &cfg,
+        at(2026, 10, 23, 15, 0),
+        7,
+        0,
+        Arc::new(FixedSource::rows(vec![
+            spend("Dining Out", -13_500),
+            spend("Shipping", -800),
+        ])),
+        Arc::new(PushHub::inert()),
+        RunMode::DryRun,
+    )
+    .await
+    .expect("ignore");
+    assert_eq!(outcome.unmapped, vec!["Shipping $8".to_string()]);
+    assert!(
+        outcome.message.contains("everything else $135 of $110"),
+        "{}",
+        outcome.message
+    );
+    assert!(!outcome.message.contains("everything else $143"));
 }
 
 #[tokio::test]
