@@ -26,6 +26,15 @@ rejects for the unauthenticated ServerHello key-exchange downgrade.
 The build script is the same file as in 0.23.45. The exemption is
 still debt, not an audit.
 
+The same debt covers four patched versions that the live advisory
+database rejects at the previous pins. `tokio` 1.54.1 replaces 1.52.3
+(`RUSTSEC-2026-0386`). `rustls-webpki` 0.103.16 replaces 0.103.15
+(`RUSTSEC-2026-0382`). `webpki-roots` 1.0.11 and `webpki-root-certs`
+1.0.11 replace 1.0.8 (`RUSTSEC-2026-0381`, `RUSTSEC-2026-0383`).
+Each exemption version moved with the lockfile. No new exemption was
+added. `aws-lc-rs` stays at 1.18.1 with default features off, so the
+direct pin does not pull `untrusted` 0.7.
+
 GitHub Actions use full commit SHAs. Dependabot proposes Action SHA changes.
 `turbovault*` and `turbomcp*` are git+tag pins on the public ForrestThump forks.
 `turbovault*` is pinned to `tag = "liberado-2026-10-15"` and `turbomcp*` stays
