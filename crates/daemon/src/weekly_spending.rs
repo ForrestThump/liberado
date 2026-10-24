@@ -57,12 +57,16 @@ pub struct WeeklyRuntime {
 }
 
 /// Live or test spend for an inclusive date range.
+///
+/// `exclude` lists categories whose positive rows are not refunds.
+/// [`HttpBudget`] nets those refunds. A test double may ignore `exclude`.
 #[async_trait]
 pub trait SpendingSource: Send + Sync {
     async fn spending(
         &self,
         start: NaiveDate,
         end: NaiveDate,
+        exclude: &[String],
     ) -> Result<Vec<CategorySpend>, String>;
 }
 
@@ -186,7 +190,7 @@ fn note_unmapped(
     if excluded(cfg, name) || spent == 0 {
         return;
     }
-    unmapped.push(format!("{name} {}", money(round_dollars(spent))));
+    unmapped.push(format!("{name} {}", crate::weekly_net::cents_label(spent)));
     add_counted(cfg, totals, spent);
 }
 
@@ -246,7 +250,7 @@ fn finish_buckets(cfg: &WeeklySpendingConfig, totals: &[i64]) -> Vec<BucketTotal
     for (index, bucket) in cfg.buckets.iter().enumerate() {
         out.push(BucketTotal {
             name: bucket.name.clone(),
-            spent_dollars: round_dollars(*totals.get(index).unwrap_or(&0)),
+            spent_dollars: crate::weekly_net::shown_dollars(*totals.get(index).unwrap_or(&0)),
             budget_dollars: bucket.weekly_dollars,
         });
     }
@@ -264,11 +268,10 @@ fn render(buckets: &[BucketTotal]) -> String {
 fn last_week(buckets: &[BucketTotal]) -> String {
     let mut parts = Vec::new();
     for bucket in buckets {
-        parts.push(format!(
-            "{} {} of {}",
-            lower(&bucket.name),
-            money(bucket.spent_dollars),
-            money(i64::from(bucket.budget_dollars))
+        parts.push(crate::weekly_net::bucket_clause(
+            &bucket.name,
+            bucket.spent_dollars,
+            bucket.budget_dollars,
         ));
     }
     parts.join(", ")
@@ -311,7 +314,7 @@ pub async fn run_weekly(
     if skip_fetch(mode, &hub, &week_id) {
         return Ok(quiet(&week_id, start, end));
     }
-    let rows = source.spending(start, end).await?;
+    let rows = source.spending(start, end, &cfg.exclude).await?;
     let allocation = allocate(&rows, cfg);
     let message = render(&allocation.buckets);
     deliver(
@@ -422,7 +425,7 @@ fn resolve_source(
 
 fn log_outcome(outcome: &RunOutcome) {
     if !outcome.unmapped.is_empty() {
-        // `categories` is `Shipping $12` or `Shipping $12, Postage $4`.
+        // `categories` is `Shipping $5.55` or `Shipping $12.00, Postage $4.00`.
         tracing::warn!(
             categories = %outcome.unmapped.join(", "),
             "weekly spending has unmapped categories"
@@ -467,54 +470,12 @@ impl SpendingSource for HttpBudget {
         &self,
         start: NaiveDate,
         end: NaiveDate,
+        exclude: &[String],
     ) -> Result<Vec<CategorySpend>, String> {
-        let url = format!(
-            "{}/api/v1/spending/by-category?start_date={start}&end_date={end}",
-            self.base
-        );
-        let response = self
-            .client
-            .get(&url)
-            .header("X-API-Key", &self.key)
-            .send()
+        crate::weekly_net::BudgetHttp::new(&self.client, &self.base, &self.key)
+            .fetch(start, end, exclude)
             .await
-            .map_err(transport_error)?;
-        let status = response.status();
-        if !status.is_success() {
-            return Err(format!("budget API status {}", status.as_u16()));
-        }
-        let body: serde_json::Value = response
-            .json()
-            .await
-            .map_err(|_| "budget API response was not JSON".to_string())?;
-        Ok(parse_categories(&body))
     }
-}
-
-fn transport_error(err: reqwest::Error) -> String {
-    liberado_common::redact_secrets(&err.without_url().to_string())
-}
-
-fn parse_categories(value: &serde_json::Value) -> Vec<CategorySpend> {
-    let Some(rows) = value
-        .get("categories")
-        .and_then(serde_json::Value::as_array)
-    else {
-        return Vec::new();
-    };
-    let mut out = Vec::new();
-    for row in rows {
-        if let Some(spend) = one_category(row) {
-            out.push(spend);
-        }
-    }
-    out
-}
-
-fn one_category(row: &serde_json::Value) -> Option<CategorySpend> {
-    let name = row.get("category_name")?.as_str()?.to_string();
-    let total_cents = row.get("total_cents")?.as_i64()?;
-    Some(CategorySpend { name, total_cents })
 }
 
 #[cfg(test)]

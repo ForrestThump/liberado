@@ -23,6 +23,7 @@ mod react;
 mod types;
 mod vault_pings;
 mod vault_source;
+mod weekly_net;
 mod weekly_spending;
 
 pub use jobs::{JobOptions, JobRequest};

@@ -400,14 +400,28 @@ fold. A category in two buckets, or in a bucket and `exclude`, is a load error.
 
 `unmapped = "count"` is the default. A category that is not in a bucket and not in
 `exclude` is added to `unmapped_bucket`. The job still logs each of those categories
-with its whole-dollar amount. One category is `Shipping $12`. Several are
-`Shipping $12, Postage $4`. The dollars use the same nearest-dollar rounding as the
-message, one category at a time. Zero cents is not logged. `unmapped = "ignore"`
-leaves that spend out of the totals and still logs the name and amount. `count`
-requires `unmapped_bucket`, and that name must be a bucket. The default name is
-Everything else, which is one of the default buckets. If you omit the key, the
-loader fills Everything else. Shipping is unmapped in the live books, so it counts
-toward Everything else unless you set ignore.
+with its signed cent amount. One category is `Shipping $5.55`. Several are
+`Shipping $12.00, Postage $4.00`. A net credit is negative, for example
+`Shipping -$2.50`. Zero cents is not logged. `unmapped = "ignore"` leaves that
+spend out of the totals and still logs the name and amount. `count` requires
+`unmapped_bucket`, and that name must be a bucket. The default name is Everything
+else, which is one of the default buckets. If you omit the key, the loader fills
+Everything else. Shipping is unmapped in the live books, so it counts toward
+Everything else unless you set ignore.
+
+The spend side is `GET /api/v1/spending/by-category`. That route already drops
+transfers, split parents, split rows, and positive amounts. Refunds come from
+`GET /api/v1/transactions` with `min_amount_cents=1`, paged at `limit=2000` and
+`offset`. Income flags come from `GET /api/v1/categories`. A positive row reduces
+its category when the name is non-empty, is not `Uncategorized`, is not an income
+category (the category or its group has `is_income`), and is not in `exclude`.
+Empty and `Uncategorized` positive rows are skipped. The log records only the count.
+
+Each bucket line is `name $spent of $budget ($left left)` when the rounded spend
+is at or under the budget, and `name $spent of $budget (over by $over)` when it
+is over. Cents in a bucket are summed, then rounded once (nearest dollar, half
+away from zero). A net credit is shown as `$0` spent, and the full budget is left.
+The fresh-week clause stays `$240 groceries, $110 everything else`.
 
 The schedule uses `days` and `at`, with an empty `cron_expr`, in the same IANA zone
 as `[weekly_spending].timezone`. Only one enabled row may name the job. A disabled

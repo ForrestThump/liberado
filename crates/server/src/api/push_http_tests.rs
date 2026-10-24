@@ -39,6 +39,7 @@ impl SpendingSource for CountingSource {
         &self,
         _start: NaiveDate,
         _end: NaiveDate,
+        _exclude: &[String],
     ) -> Result<Vec<CategorySpend>, String> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         if let Some(error) = self.error {
@@ -228,7 +229,7 @@ async fn dry_run_renders_while_disabled_and_a_send_does_not_fetch() {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{body}");
-    assert!(body.contains("groceries $212 of $240"), "{body}");
+    assert!(body.contains("groceries $212 of $240 ($28 left)"), "{body}");
     assert!(!body.contains("example-budget-key"));
     assert_eq!(source.calls.load(Ordering::SeqCst), 1);
 

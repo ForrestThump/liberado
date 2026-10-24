@@ -66,6 +66,7 @@ impl SpendingSource for FixedSource {
         &self,
         _start: NaiveDate,
         _end: NaiveDate,
+        _exclude: &[String],
     ) -> Result<Vec<CategorySpend>, String> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         if let Some(error) = self.error {
@@ -138,9 +139,9 @@ async fn the_fixture_counts_shipping_and_excludes_rent() {
     .expect("dry run");
     assert_eq!(
         outcome.message,
-        "Last week: groceries $212 of $240, everything else $143 of $110. This week starts fresh: $240 groceries, $110 everything else."
+        "Last week: groceries $212 of $240 ($28 left), everything else $143 of $110 (over by $33). This week starts fresh: $240 groceries, $110 everything else."
     );
-    assert_eq!(outcome.unmapped, vec!["Shipping $8".to_string()]);
+    assert_eq!(outcome.unmapped, vec!["Shipping $8.00".to_string()]);
     assert_eq!(outcome.week_id, "2026-10-19");
     assert_eq!(outcome.start, "2026-10-12");
     assert_eq!(outcome.end, "2026-10-18");
@@ -150,23 +151,32 @@ async fn the_fixture_counts_shipping_and_excludes_rent() {
 #[tokio::test]
 async fn two_half_dollars_in_one_bucket_round_once() {
     let message = dry_message(vec![spend("Dining Out", -50), spend("Vending", -50)]).await;
-    assert!(message.contains("everything else $1 of $110"), "{message}");
+    assert!(
+        message.contains("everything else $1 of $110 ($109 left)"),
+        "{message}"
+    );
 }
 
 #[tokio::test]
-async fn a_net_refund_is_a_negative_dollar_amount() {
+async fn a_net_credit_shows_zero_spent_and_the_full_budget_left() {
     let message = dry_message(vec![spend("Groceries", 250)]).await;
-    assert!(message.contains("groceries -$3 of $240"), "{message}");
+    assert!(
+        message.contains("groceries $0 of $240 ($240 left)"),
+        "{message}"
+    );
 }
 
 #[tokio::test]
 async fn api_cents_round_after_they_are_flipped_to_spent() {
     let groceries = dry_message(vec![spend("Groceries", -44_665)]).await;
-    assert!(groceries.contains("groceries $447 of $240"), "{groceries}");
+    assert!(
+        groceries.contains("groceries $447 of $240 (over by $207)"),
+        "{groceries}"
+    );
     let one = dry_message(vec![spend("Groceries", -50)]).await;
-    assert!(one.contains("groceries $1 of $240"), "{one}");
+    assert!(one.contains("groceries $1 of $240 ($239 left)"), "{one}");
     let zero = dry_message(vec![spend("Groceries", -49)]).await;
-    assert!(zero.contains("groceries $0 of $240"), "{zero}");
+    assert!(zero.contains("groceries $0 of $240 ($240 left)"), "{zero}");
 }
 
 #[tokio::test]
@@ -188,9 +198,11 @@ async fn count_still_names_the_unmapped_category() {
     )
     .await
     .expect("count");
-    assert_eq!(outcome.unmapped, vec!["Shipping $1".to_string()]);
+    assert_eq!(outcome.unmapped, vec!["Shipping $1.00".to_string()]);
     assert!(
-        outcome.message.contains("everything else $1 of $110"),
+        outcome
+            .message
+            .contains("everything else $1 of $110 ($109 left)"),
         "{}",
         outcome.message
     );
@@ -214,11 +226,16 @@ async fn the_default_counts_shipping_into_everything_else_and_logs_dollars() {
     .expect("count");
     assert_eq!(
         outcome.unmapped,
-        vec!["Shipping $12".to_string(), "Postage $4".to_string()]
+        vec!["Shipping $12.00".to_string(), "Postage $4.00".to_string()]
     );
-    assert_eq!(outcome.unmapped.join(", "), "Shipping $12, Postage $4");
+    assert_eq!(
+        outcome.unmapped.join(", "),
+        "Shipping $12.00, Postage $4.00"
+    );
     assert!(
-        outcome.message.contains("everything else $16 of $110"),
+        outcome
+            .message
+            .contains("everything else $16 of $110 ($94 left)"),
         "{}",
         outcome.message
     );
@@ -244,9 +261,11 @@ async fn ignore_logs_the_amount_and_leaves_the_bucket_unchanged() {
     )
     .await
     .expect("ignore");
-    assert_eq!(outcome.unmapped, vec!["Shipping $8".to_string()]);
+    assert_eq!(outcome.unmapped, vec!["Shipping $8.00".to_string()]);
     assert!(
-        outcome.message.contains("everything else $135 of $110"),
+        outcome
+            .message
+            .contains("everything else $135 of $110 (over by $25)"),
         "{}",
         outcome.message
     );
@@ -352,9 +371,21 @@ async fn the_budget_get_sends_the_key_and_reads_negative_cents() {
         )
         .mount(&server)
         .await;
+    mount_json(
+        &server,
+        "/api/v1/categories",
+        serde_json::json!({"category_groups": []}),
+    )
+    .await;
+    mount_json(
+        &server,
+        "/api/v1/transactions",
+        serde_json::json!({"transactions": []}),
+    )
+    .await;
     let client = HttpBudget::from_parts(&server.uri(), "example-budget-key").expect("client");
     let rows = client
-        .spending(day(2026, 10, 12), day(2026, 10, 18))
+        .spending(day(2026, 10, 12), day(2026, 10, 18), &[])
         .await
         .expect("rows");
     assert_eq!(rows.len(), 1);
@@ -371,12 +402,24 @@ async fn a_budget_error_is_the_status_and_not_the_body() {
         .await;
     let client = HttpBudget::from_parts(&server.uri(), "example-budget-key").expect("client");
     let err = client
-        .spending(day(2026, 10, 12), day(2026, 10, 18))
+        .spending(day(2026, 10, 12), day(2026, 10, 18), &[])
         .await
         .expect_err("status");
     assert_eq!(err, "budget API status 500");
     assert!(!err.contains("do-not-echo-this-body"));
     assert!(!err.contains("example-budget-key"));
+}
+
+async fn mount_json(server: &wiremock::MockServer, path: &str, body: serde_json::Value) {
+    wiremock::Mock::given(wiremock::matchers::method("GET"))
+        .and(wiremock::matchers::path(path))
+        .and(wiremock::matchers::header(
+            "X-API-Key",
+            "example-budget-key",
+        ))
+        .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(body))
+        .mount(server)
+        .await;
 }
 
 async fn dry_message(rows: Vec<CategorySpend>) -> String {

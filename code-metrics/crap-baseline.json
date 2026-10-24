@@ -21632,7 +21632,7 @@
     {
       "file": "crates/config-loader/src/model/weekly_spending.rs",
       "function": "WeeklySpendingConfig::default",
-      "line": 121,
+      "line": 127,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -21641,15 +21641,6 @@
     {
       "file": "crates/config-loader/src/model/weekly_spending.rs",
       "function": "WeeklySpendingConfig::validate",
-      "line": 135,
-      "cyclomatic": 3.0,
-      "coverage": 100.0,
-      "crap": 3.0,
-      "crate": "liberado-config-loader"
-    },
-    {
-      "file": "crates/config-loader/src/model/weekly_spending.rs",
-      "function": "WeeklySpendingConfig::validate_identity",
       "line": 141,
       "cyclomatic": 3.0,
       "coverage": 100.0,
@@ -21658,7 +21649,7 @@
     },
     {
       "file": "crates/config-loader/src/model/weekly_spending.rs",
-      "function": "WeeklySpendingConfig::validate_names_and_mapping",
+      "function": "WeeklySpendingConfig::validate_identity",
       "line": 147,
       "cyclomatic": 3.0,
       "coverage": 100.0,
@@ -21667,8 +21658,17 @@
     },
     {
       "file": "crates/config-loader/src/model/weekly_spending.rs",
+      "function": "WeeklySpendingConfig::validate_names_and_mapping",
+      "line": 153,
+      "cyclomatic": 3.0,
+      "coverage": 100.0,
+      "crap": 3.0,
+      "crate": "liberado-config-loader"
+    },
+    {
+      "file": "crates/config-loader/src/model/weekly_spending.rs",
       "function": "bucket_named",
-      "line": 225,
+      "line": 231,
       "cyclomatic": 3.0,
       "coverage": 100.0,
       "crap": 3.0,
@@ -21677,7 +21677,7 @@
     {
       "file": "crates/config-loader/src/model/weekly_spending.rs",
       "function": "check_bucket",
-      "line": 235,
+      "line": 241,
       "cyclomatic": 4.0,
       "coverage": 100.0,
       "crap": 4.0,
@@ -21686,7 +21686,7 @@
     {
       "file": "crates/config-loader/src/model/weekly_spending.rs",
       "function": "check_weekly_row",
-      "line": 358,
+      "line": 364,
       "cyclomatic": 3.0,
       "coverage": 100.0,
       "crap": 3.0,
@@ -21695,7 +21695,7 @@
     {
       "file": "crates/config-loader/src/model/weekly_spending.rs",
       "function": "civil_clock",
-      "line": 378,
+      "line": 384,
       "cyclomatic": 3.0,
       "coverage": 100.0,
       "crap": 3.0,
@@ -21704,7 +21704,7 @@
     {
       "file": "crates/config-loader/src/model/weekly_spending.rs",
       "function": "claim_categories",
-      "line": 272,
+      "line": 278,
       "cyclomatic": 3.0,
       "coverage": 100.0,
       "crap": 3.0,
@@ -21713,7 +21713,7 @@
     {
       "file": "crates/config-loader/src/model/weekly_spending.rs",
       "function": "claim_category",
-      "line": 283,
+      "line": 289,
       "cyclomatic": 4.0,
       "coverage": 100.0,
       "crap": 4.0,
@@ -21722,7 +21722,7 @@
     {
       "file": "crates/config-loader/src/model/weekly_spending.rs",
       "function": "claim_name",
-      "line": 262,
+      "line": 268,
       "cyclomatic": 2.0,
       "coverage": 100.0,
       "crap": 2.0,
@@ -21731,7 +21731,7 @@
     {
       "file": "crates/config-loader/src/model/weekly_spending.rs",
       "function": "clock_at",
-      "line": 480,
+      "line": 486,
       "cyclomatic": 2.0,
       "coverage": 100.0,
       "crap": 2.0,
@@ -21740,7 +21740,7 @@
     {
       "file": "crates/config-loader/src/model/weekly_spending.rs",
       "function": "count_enabled_weekly",
-      "line": 324,
+      "line": 330,
       "cyclomatic": 3.0,
       "coverage": 100.0,
       "crap": 3.0,
@@ -21749,7 +21749,7 @@
     {
       "file": "crates/config-loader/src/model/weekly_spending.rs",
       "function": "count_target",
-      "line": 207,
+      "line": 213,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -21758,7 +21758,7 @@
     {
       "file": "crates/config-loader/src/model/weekly_spending.rs",
       "function": "default_buckets",
-      "line": 92,
+      "line": 98,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -21767,7 +21767,7 @@
     {
       "file": "crates/config-loader/src/model/weekly_spending.rs",
       "function": "default_exclude",
-      "line": 73,
+      "line": 79,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -21776,7 +21776,7 @@
     {
       "file": "crates/config-loader/src/model/weekly_spending.rs",
       "function": "default_timezone",
-      "line": 69,
+      "line": 75,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -21785,7 +21785,7 @@
     {
       "file": "crates/config-loader/src/model/weekly_spending.rs",
       "function": "enabled_at",
-      "line": 471,
+      "line": 477,
       "cyclomatic": 3.0,
       "coverage": 100.0,
       "crap": 3.0,
@@ -21794,7 +21794,7 @@
     {
       "file": "crates/config-loader/src/model/weekly_spending.rs",
       "function": "enabled_count",
-      "line": 350,
+      "line": 356,
       "cyclomatic": 2.0,
       "coverage": 100.0,
       "crap": 2.0,
@@ -21803,7 +21803,7 @@
     {
       "file": "crates/config-loader/src/model/weekly_spending.rs",
       "function": "enabled_count_message",
-      "line": 444,
+      "line": 450,
       "cyclomatic": 2.0,
       "coverage": 100.0,
       "crap": 2.0,
@@ -21812,7 +21812,7 @@
     {
       "file": "crates/config-loader/src/model/weekly_spending.rs",
       "function": "excluded",
-      "line": 309,
+      "line": 315,
       "cyclomatic": 3.0,
       "coverage": 100.0,
       "crap": 3.0,
@@ -21821,7 +21821,7 @@
     {
       "file": "crates/config-loader/src/model/weekly_spending.rs",
       "function": "fallback_zone",
-      "line": 419,
+      "line": 425,
       "cyclomatic": 2.0,
       "coverage": 0.0,
       "crap": 6.0,
@@ -21830,7 +21830,7 @@
     {
       "file": "crates/config-loader/src/model/weekly_spending.rs",
       "function": "has_at",
-      "line": 386,
+      "line": 392,
       "cyclomatic": 3.0,
       "coverage": 80.0,
       "crap": 3.072,
@@ -21839,7 +21839,7 @@
     {
       "file": "crates/config-loader/src/model/weekly_spending.rs",
       "function": "has_cron",
-      "line": 393,
+      "line": 399,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -21848,7 +21848,7 @@
     {
       "file": "crates/config-loader/src/model/weekly_spending.rs",
       "function": "has_days",
-      "line": 382,
+      "line": 388,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -21857,7 +21857,7 @@
     {
       "file": "crates/config-loader/src/model/weekly_spending.rs",
       "function": "has_enabled_weekly_schedule",
-      "line": 462,
+      "line": 468,
       "cyclomatic": 3.0,
       "coverage": 100.0,
       "crap": 3.0,
@@ -21866,7 +21866,7 @@
     {
       "file": "crates/config-loader/src/model/weekly_spending.rs",
       "function": "is_enabled_weekly",
-      "line": 487,
+      "line": 493,
       "cyclomatic": 2.0,
       "coverage": 100.0,
       "crap": 2.0,
@@ -21875,7 +21875,7 @@
     {
       "file": "crates/config-loader/src/model/weekly_spending.rs",
       "function": "note_weekly_row",
-      "line": 337,
+      "line": 343,
       "cyclomatic": 3.0,
       "coverage": 100.0,
       "crap": 3.0,
@@ -21893,7 +21893,7 @@
     {
       "file": "crates/config-loader/src/model/weekly_spending.rs",
       "function": "parse_clock",
-      "line": 491,
+      "line": 497,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -21902,7 +21902,7 @@
     {
       "file": "crates/config-loader/src/model/weekly_spending.rs",
       "function": "parse_part",
-      "line": 498,
+      "line": 504,
       "cyclomatic": 2.0,
       "coverage": 100.0,
       "crap": 2.0,
@@ -21911,7 +21911,7 @@
     {
       "file": "crates/config-loader/src/model/weekly_spending.rs",
       "function": "parsed_zone",
-      "line": 172,
+      "line": 178,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -21920,7 +21920,7 @@
     {
       "file": "crates/config-loader/src/model/weekly_spending.rs",
       "function": "require_bucket_identity",
-      "line": 247,
+      "line": 253,
       "cyclomatic": 3.0,
       "coverage": 100.0,
       "crap": 3.0,
@@ -21929,7 +21929,7 @@
     {
       "file": "crates/config-loader/src/model/weekly_spending.rs",
       "function": "require_buckets_when_enabled",
-      "line": 184,
+      "line": 190,
       "cyclomatic": 3.0,
       "coverage": 100.0,
       "crap": 3.0,
@@ -21938,7 +21938,7 @@
     {
       "file": "crates/config-loader/src/model/weekly_spending.rs",
       "function": "require_civil_clock",
-      "line": 368,
+      "line": 374,
       "cyclomatic": 2.0,
       "coverage": 100.0,
       "crap": 2.0,
@@ -21947,7 +21947,7 @@
     {
       "file": "crates/config-loader/src/model/weekly_spending.rs",
       "function": "require_matching_zone",
-      "line": 397,
+      "line": 403,
       "cyclomatic": 3.0,
       "coverage": 64.28571428571429,
       "crap": 3.4099854227405246,
@@ -21956,7 +21956,7 @@
     {
       "file": "crates/config-loader/src/model/weekly_spending.rs",
       "function": "require_named_bucket",
-      "line": 216,
+      "line": 222,
       "cyclomatic": 2.0,
       "coverage": 100.0,
       "crap": 2.0,
@@ -21965,7 +21965,7 @@
     {
       "file": "crates/config-loader/src/model/weekly_spending.rs",
       "function": "require_one_enabled_when_on",
-      "line": 437,
+      "line": 443,
       "cyclomatic": 3.0,
       "coverage": 100.0,
       "crap": 3.0,
@@ -21974,7 +21974,7 @@
     {
       "file": "crates/config-loader/src/model/weekly_spending.rs",
       "function": "require_switch_and_unmapped",
-      "line": 178,
+      "line": 184,
       "cyclomatic": 3.0,
       "coverage": 100.0,
       "crap": 3.0,
@@ -21983,7 +21983,7 @@
     {
       "file": "crates/config-loader/src/model/weekly_spending.rs",
       "function": "require_unmapped_target",
-      "line": 193,
+      "line": 199,
       "cyclomatic": 3.0,
       "coverage": 100.0,
       "crap": 3.0,
@@ -21992,7 +21992,7 @@
     {
       "file": "crates/config-loader/src/model/weekly_spending.rs",
       "function": "require_zone",
-      "line": 164,
+      "line": 170,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -22001,7 +22001,7 @@
     {
       "file": "crates/config-loader/src/model/weekly_spending.rs",
       "function": "validate_section",
-      "line": 158,
+      "line": 164,
       "cyclomatic": 3.0,
       "coverage": 100.0,
       "crap": 3.0,
@@ -22010,7 +22010,7 @@
     {
       "file": "crates/config-loader/src/model/weekly_spending.rs",
       "function": "validate_weekly_schedules",
-      "line": 318,
+      "line": 324,
       "cyclomatic": 3.0,
       "coverage": 100.0,
       "crap": 3.0,
@@ -22019,7 +22019,7 @@
     {
       "file": "crates/config-loader/src/model/weekly_spending.rs",
       "function": "weekly_open_clock",
-      "line": 454,
+      "line": 460,
       "cyclomatic": 3.0,
       "coverage": 100.0,
       "crap": 3.0,
@@ -22028,7 +22028,7 @@
     {
       "file": "crates/config-loader/src/model/weekly_spending.rs",
       "function": "zone_error",
-      "line": 168,
+      "line": 174,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -22037,7 +22037,7 @@
     {
       "file": "crates/config-loader/src/model/weekly_spending.rs",
       "function": "zone_source",
-      "line": 412,
+      "line": 418,
       "cyclomatic": 3.0,
       "coverage": 80.0,
       "crap": 3.072,
@@ -22046,10 +22046,19 @@
     {
       "file": "crates/config-loader/src/model/weekly_spending.rs",
       "function": "zones_match",
-      "line": 428,
+      "line": 434,
       "cyclomatic": 2.0,
       "coverage": 100.0,
       "crap": 2.0,
+      "crate": "liberado-config-loader"
+    },
+    {
+      "file": "crates/config-loader/src/model/weekly_spending/weekly_spending_defaults.rs",
+      "function": "unmapped_bucket",
+      "line": 6,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
       "crate": "liberado-config-loader"
     },
     {
@@ -24962,7 +24971,7 @@
     {
       "file": "crates/daemon/src/lib.rs",
       "function": "Daemon::event_sender",
-      "line": 179,
+      "line": 180,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -24971,7 +24980,7 @@
     {
       "file": "crates/daemon/src/lib.rs",
       "function": "Daemon::open",
-      "line": 60,
+      "line": 61,
       "cyclomatic": 2.0,
       "coverage": 100.0,
       "crap": 2.0,
@@ -24980,7 +24989,7 @@
     {
       "file": "crates/daemon/src/lib.rs",
       "function": "Daemon::proposal_reap_interval",
-      "line": 135,
+      "line": 136,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -24989,7 +24998,7 @@
     {
       "file": "crates/daemon/src/lib.rs",
       "function": "Daemon::run",
-      "line": 394,
+      "line": 395,
       "cyclomatic": 3.0,
       "coverage": 79.16666666666666,
       "crap": 3.0813802083333335,
@@ -24998,7 +25007,7 @@
     {
       "file": "crates/daemon/src/lib.rs",
       "function": "Daemon::signer",
-      "line": 385,
+      "line": 386,
       "cyclomatic": 1.0,
       "coverage": 0.0,
       "crap": 2.0,
@@ -25007,7 +25016,7 @@
     {
       "file": "crates/daemon/src/lib.rs",
       "function": "Daemon::spawn_extra_sources",
-      "line": 455,
+      "line": 456,
       "cyclomatic": 2.0,
       "coverage": 85.71428571428571,
       "crap": 2.011661807580175,
@@ -25016,7 +25025,7 @@
     {
       "file": "crates/daemon/src/lib.rs",
       "function": "Daemon::spawn_reaper",
-      "line": 466,
+      "line": 467,
       "cyclomatic": 2.0,
       "coverage": 72.72727272727273,
       "crap": 2.0811419984973702,
@@ -25025,7 +25034,7 @@
     {
       "file": "crates/daemon/src/lib.rs",
       "function": "Daemon::spawn_vault_source",
-      "line": 434,
+      "line": 435,
       "cyclomatic": 3.0,
       "coverage": 70.58823529411765,
       "crap": 3.2289843272949317,
@@ -25034,7 +25043,7 @@
     {
       "file": "crates/daemon/src/lib.rs",
       "function": "Daemon::user_timezone",
-      "line": 159,
+      "line": 160,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -25043,7 +25052,7 @@
     {
       "file": "crates/daemon/src/lib.rs",
       "function": "Daemon::vault",
-      "line": 378,
+      "line": 379,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -25052,7 +25061,7 @@
     {
       "file": "crates/daemon/src/lib.rs",
       "function": "Daemon::watcher_health",
-      "line": 195,
+      "line": 196,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -25061,7 +25070,7 @@
     {
       "file": "crates/daemon/src/lib.rs",
       "function": "Daemon::with_approval_ledger",
-      "line": 282,
+      "line": 283,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -25070,7 +25079,7 @@
     {
       "file": "crates/daemon/src/lib.rs",
       "function": "Daemon::with_capture_scope",
-      "line": 117,
+      "line": 118,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -25079,7 +25088,7 @@
     {
       "file": "crates/daemon/src/lib.rs",
       "function": "Daemon::with_cron_source",
-      "line": 267,
+      "line": 268,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -25088,7 +25097,7 @@
     {
       "file": "crates/daemon/src/lib.rs",
       "function": "Daemon::with_debounce",
-      "line": 200,
+      "line": 201,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -25097,7 +25106,7 @@
     {
       "file": "crates/daemon/src/lib.rs",
       "function": "Daemon::with_dispatcher",
-      "line": 309,
+      "line": 310,
       "cyclomatic": 3.0,
       "coverage": 100.0,
       "crap": 3.0,
@@ -25106,7 +25115,7 @@
     {
       "file": "crates/daemon/src/lib.rs",
       "function": "Daemon::with_fixed_now",
-      "line": 252,
+      "line": 253,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -25115,7 +25124,7 @@
     {
       "file": "crates/daemon/src/lib.rs",
       "function": "Daemon::with_goal_hub",
-      "line": 170,
+      "line": 171,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -25124,7 +25133,7 @@
     {
       "file": "crates/daemon/src/lib.rs",
       "function": "Daemon::with_inbox_ignore_globs",
-      "line": 108,
+      "line": 109,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -25133,7 +25142,7 @@
     {
       "file": "crates/daemon/src/lib.rs",
       "function": "Daemon::with_notifier",
-      "line": 208,
+      "line": 209,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -25142,7 +25151,7 @@
     {
       "file": "crates/daemon/src/lib.rs",
       "function": "Daemon::with_orchestrator",
-      "line": 361,
+      "line": 362,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -25151,7 +25160,7 @@
     {
       "file": "crates/daemon/src/lib.rs",
       "function": "Daemon::with_pool_dispatcher",
-      "line": 330,
+      "line": 331,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -25160,7 +25169,7 @@
     {
       "file": "crates/daemon/src/lib.rs",
       "function": "Daemon::with_pool_orchestrator",
-      "line": 368,
+      "line": 369,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -25169,7 +25178,7 @@
     {
       "file": "crates/daemon/src/lib.rs",
       "function": "Daemon::with_proposal_reap_interval",
-      "line": 129,
+      "line": 130,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -25178,7 +25187,7 @@
     {
       "file": "crates/daemon/src/lib.rs",
       "function": "Daemon::with_proposal_signer",
-      "line": 287,
+      "line": 288,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -25187,7 +25196,7 @@
     {
       "file": "crates/daemon/src/lib.rs",
       "function": "Daemon::with_push",
-      "line": 234,
+      "line": 235,
       "cyclomatic": 1.0,
       "coverage": 0.0,
       "crap": 2.0,
@@ -25196,7 +25205,7 @@
     {
       "file": "crates/daemon/src/lib.rs",
       "function": "Daemon::with_reminder_notifier",
-      "line": 215,
+      "line": 216,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -25205,7 +25214,7 @@
     {
       "file": "crates/daemon/src/lib.rs",
       "function": "Daemon::with_risk_waivers",
-      "line": 148,
+      "line": 149,
       "cyclomatic": 3.0,
       "coverage": 100.0,
       "crap": 3.0,
@@ -25214,7 +25223,7 @@
     {
       "file": "crates/daemon/src/lib.rs",
       "function": "Daemon::with_session_profile_caps",
-      "line": 142,
+      "line": 143,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -25223,7 +25232,7 @@
     {
       "file": "crates/daemon/src/lib.rs",
       "function": "Daemon::with_startup_jobs",
-      "line": 258,
+      "line": 259,
       "cyclomatic": 1.0,
       "coverage": 0.0,
       "crap": 2.0,
@@ -25232,7 +25241,7 @@
     {
       "file": "crates/daemon/src/lib.rs",
       "function": "Daemon::with_user_timezone",
-      "line": 99,
+      "line": 100,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -25241,7 +25250,7 @@
     {
       "file": "crates/daemon/src/lib.rs",
       "function": "Daemon::with_vault_reminders",
-      "line": 223,
+      "line": 224,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -25250,7 +25259,7 @@
     {
       "file": "crates/daemon/src/lib.rs",
       "function": "Daemon::with_weekly_runtime",
-      "line": 240,
+      "line": 241,
       "cyclomatic": 1.0,
       "coverage": 0.0,
       "crap": 2.0,
@@ -26436,9 +26445,504 @@
       "crate": "liberado-daemon"
     },
     {
+      "file": "crates/daemon/src/weekly_net.rs",
+      "function": "BudgetHttp::collect_pages",
+      "line": 78,
+      "cyclomatic": 3.0,
+      "coverage": 100.0,
+      "crap": 3.0,
+      "crate": "liberado-daemon"
+    },
+    {
+      "file": "crates/daemon/src/weekly_net.rs",
+      "function": "BudgetHttp::fetch",
+      "line": 34,
+      "cyclomatic": 2.0,
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "liberado-daemon"
+    },
+    {
+      "file": "crates/daemon/src/weekly_net.rs",
+      "function": "BudgetHttp::get_json",
+      "line": 118,
+      "cyclomatic": 2.0,
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "liberado-daemon"
+    },
+    {
+      "file": "crates/daemon/src/weekly_net.rs",
+      "function": "BudgetHttp::load_income",
+      "line": 65,
+      "cyclomatic": 2.0,
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "liberado-daemon"
+    },
+    {
+      "file": "crates/daemon/src/weekly_net.rs",
+      "function": "BudgetHttp::load_positives",
+      "line": 70,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "liberado-daemon"
+    },
+    {
+      "file": "crates/daemon/src/weekly_net.rs",
+      "function": "BudgetHttp::load_spent",
+      "line": 56,
+      "cyclomatic": 2.0,
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "liberado-daemon"
+    },
+    {
+      "file": "crates/daemon/src/weekly_net.rs",
+      "function": "BudgetHttp::new",
+      "line": 30,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "liberado-daemon"
+    },
+    {
+      "file": "crates/daemon/src/weekly_net.rs",
+      "function": "BudgetHttp::one_page",
+      "line": 105,
+      "cyclomatic": 2.0,
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "liberado-daemon"
+    },
+    {
+      "file": "crates/daemon/src/weekly_net.rs",
+      "function": "BudgetHttp::pull_page",
+      "line": 91,
+      "cyclomatic": 2.0,
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "liberado-daemon"
+    },
+    {
+      "file": "crates/daemon/src/weekly_net.rs",
+      "function": "BudgetHttp::send",
+      "line": 123,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "liberado-daemon"
+    },
+    {
+      "file": "crates/daemon/src/weekly_net.rs",
+      "function": "BudgetHttp::with_refunds",
+      "line": 44,
+      "cyclomatic": 3.0,
+      "coverage": 100.0,
+      "crap": 3.0,
+      "crate": "liberado-daemon"
+    },
+    {
+      "file": "crates/daemon/src/weekly_net.rs",
+      "function": "PageCursor::start",
+      "line": 141,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "liberado-daemon"
+    },
+    {
+      "file": "crates/daemon/src/weekly_net.rs",
+      "function": "add_cents",
+      "line": 407,
+      "cyclomatic": 2.0,
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "liberado-daemon"
+    },
+    {
+      "file": "crates/daemon/src/weekly_net.rs",
+      "function": "add_refund",
+      "line": 396,
+      "cyclomatic": 2.0,
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "liberado-daemon"
+    },
+    {
+      "file": "crates/daemon/src/weekly_net.rs",
+      "function": "apply_refunds",
+      "line": 319,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "liberado-daemon"
+    },
+    {
+      "file": "crates/daemon/src/weekly_net.rs",
+      "function": "blank_skip",
+      "line": 385,
+      "cyclomatic": 2.0,
+      "coverage": 83.33333333333334,
+      "crap": 2.0185185185185186,
+      "crate": "liberado-daemon"
+    },
+    {
+      "file": "crates/daemon/src/weekly_net.rs",
+      "function": "bool_field",
+      "line": 312,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "liberado-daemon"
+    },
+    {
+      "file": "crates/daemon/src/weekly_net.rs",
+      "function": "bucket_clause",
+      "line": 449,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "liberado-daemon"
+    },
+    {
+      "file": "crates/daemon/src/weekly_net.rs",
+      "function": "cents_label",
+      "line": 437,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "liberado-daemon"
+    },
+    {
+      "file": "crates/daemon/src/weekly_net.rs",
+      "function": "charged_name",
+      "line": 374,
+      "cyclomatic": 3.0,
+      "coverage": 90.0,
+      "crap": 3.009,
+      "crate": "liberado-daemon"
+    },
+    {
+      "file": "crates/daemon/src/weekly_net.rs",
+      "function": "collect_group",
+      "line": 273,
+      "cyclomatic": 2.0,
+      "coverage": 90.0,
+      "crap": 2.004,
+      "crate": "liberado-daemon"
+    },
+    {
+      "file": "crates/daemon/src/weekly_net.rs",
+      "function": "collect_income",
+      "line": 255,
+      "cyclomatic": 3.0,
+      "coverage": 100.0,
+      "crap": 3.0,
+      "crate": "liberado-daemon"
+    },
+    {
+      "file": "crates/daemon/src/weekly_net.rs",
+      "function": "find_name",
+      "line": 413,
+      "cyclomatic": 3.0,
+      "coverage": 100.0,
+      "crap": 3.0,
+      "crate": "liberado-daemon"
+    },
+    {
+      "file": "crates/daemon/src/weekly_net.rs",
+      "function": "fold_refunds",
+      "line": 340,
+      "cyclomatic": 2.0,
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "liberado-daemon"
+    },
+    {
+      "file": "crates/daemon/src/weekly_net.rs",
+      "function": "gap_note",
+      "line": 460,
+      "cyclomatic": 2.0,
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "liberado-daemon"
+    },
+    {
+      "file": "crates/daemon/src/weekly_net.rs",
+      "function": "group_list",
+      "line": 263,
+      "cyclomatic": 3.0,
+      "coverage": 100.0,
+      "crap": 3.0,
+      "crate": "liberado-daemon"
+    },
+    {
+      "file": "crates/daemon/src/weekly_net.rs",
+      "function": "income_label",
+      "line": 296,
+      "cyclomatic": 2.0,
+      "coverage": 83.33333333333334,
+      "crap": 2.0185185185185186,
+      "crate": "liberado-daemon"
+    },
+    {
+      "file": "crates/daemon/src/weekly_net.rs",
+      "function": "is_blank_category",
+      "line": 392,
+      "cyclomatic": 2.0,
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "liberado-daemon"
+    },
+    {
+      "file": "crates/daemon/src/weekly_net.rs",
+      "function": "is_income_category",
+      "line": 303,
+      "cyclomatic": 2.0,
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "liberado-daemon"
+    },
+    {
+      "file": "crates/daemon/src/weekly_net.rs",
+      "function": "json_error",
+      "line": 176,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "liberado-daemon"
+    },
+    {
+      "file": "crates/daemon/src/weekly_net.rs",
+      "function": "listed",
+      "line": 422,
+      "cyclomatic": 3.0,
+      "coverage": 100.0,
+      "crap": 3.0,
+      "crate": "liberado-daemon"
+    },
+    {
+      "file": "crates/daemon/src/weekly_net.rs",
+      "function": "log_skipped",
+      "line": 330,
+      "cyclomatic": 2.0,
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "liberado-daemon"
+    },
+    {
+      "file": "crates/daemon/src/weekly_net.rs",
+      "function": "next_offset",
+      "line": 154,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "liberado-daemon"
+    },
+    {
+      "file": "crates/daemon/src/weekly_net.rs",
+      "function": "one_category",
+      "line": 205,
+      "cyclomatic": 3.0,
+      "coverage": 100.0,
+      "crap": 3.0,
+      "crate": "liberado-daemon"
+    },
+    {
+      "file": "crates/daemon/src/weekly_net.rs",
+      "function": "one_refund",
+      "line": 353,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "liberado-daemon"
+    },
+    {
+      "file": "crates/daemon/src/weekly_net.rs",
+      "function": "page_is_short",
+      "line": 150,
+      "cyclomatic": 2.0,
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "liberado-daemon"
+    },
+    {
+      "file": "crates/daemon/src/weekly_net.rs",
+      "function": "parse_categories",
+      "line": 184,
+      "cyclomatic": 2.0,
+      "coverage": 90.9090909090909,
+      "crap": 2.0030052592036065,
+      "crate": "liberado-daemon"
+    },
+    {
+      "file": "crates/daemon/src/weekly_net.rs",
+      "function": "parse_transactions",
+      "line": 220,
+      "cyclomatic": 3.0,
+      "coverage": 100.0,
+      "crap": 3.0,
+      "crate": "liberado-daemon"
+    },
+    {
+      "file": "crates/daemon/src/weekly_net.rs",
+      "function": "present_name",
+      "line": 307,
+      "cyclomatic": 4.0,
+      "coverage": 100.0,
+      "crap": 4.0,
+      "crate": "liberado-daemon"
+    },
+    {
+      "file": "crates/daemon/src/weekly_net.rs",
+      "function": "push_category",
+      "line": 198,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "liberado-daemon"
+    },
+    {
+      "file": "crates/daemon/src/weekly_net.rs",
+      "function": "push_positive",
+      "line": 238,
+      "cyclomatic": 1.0,
+      "coverage": 87.5,
+      "crap": 1.001953125,
+      "crate": "liberado-daemon"
+    },
+    {
+      "file": "crates/daemon/src/weekly_net.rs",
+      "function": "read_json",
+      "line": 168,
+      "cyclomatic": 2.0,
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "liberado-daemon"
+    },
+    {
+      "file": "crates/daemon/src/weekly_net.rs",
+      "function": "refund_name",
+      "line": 366,
+      "cyclomatic": 4.0,
+      "coverage": 100.0,
+      "crap": 4.0,
+      "crate": "liberado-daemon"
+    },
+    {
+      "file": "crates/daemon/src/weekly_net.rs",
+      "function": "remember_income",
+      "line": 286,
+      "cyclomatic": 2.0,
+      "coverage": 75.0,
+      "crap": 2.0625,
+      "crate": "liberado-daemon"
+    },
+    {
+      "file": "crates/daemon/src/weekly_net.rs",
+      "function": "required_i64",
+      "line": 216,
+      "cyclomatic": 2.0,
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "liberado-daemon"
+    },
+    {
+      "file": "crates/daemon/src/weekly_net.rs",
+      "function": "required_text",
+      "line": 212,
+      "cyclomatic": 3.0,
+      "coverage": 100.0,
+      "crap": 3.0,
+      "crate": "liberado-daemon"
+    },
+    {
+      "file": "crates/daemon/src/weekly_net.rs",
+      "function": "shown_dollars",
+      "line": 432,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "liberado-daemon"
+    },
+    {
+      "file": "crates/daemon/src/weekly_net.rs",
+      "function": "sign_of",
+      "line": 441,
+      "cyclomatic": 2.0,
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "liberado-daemon"
+    },
+    {
+      "file": "crates/daemon/src/weekly_net.rs",
+      "function": "spent_path",
+      "line": 158,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "liberado-daemon"
+    },
+    {
+      "file": "crates/daemon/src/weekly_net.rs",
+      "function": "text_field",
+      "line": 248,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "liberado-daemon"
+    },
+    {
+      "file": "crates/daemon/src/weekly_net.rs",
+      "function": "transaction_path",
+      "line": 162,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "liberado-daemon"
+    },
+    {
+      "file": "crates/daemon/src/weekly_net.rs",
+      "function": "transaction_rows",
+      "line": 228,
+      "cyclomatic": 3.0,
+      "coverage": 100.0,
+      "crap": 3.0,
+      "crate": "liberado-daemon"
+    },
+    {
+      "file": "crates/daemon/src/weekly_net.rs",
+      "function": "transport_error",
+      "line": 180,
+      "cyclomatic": 1.0,
+      "coverage": 0.0,
+      "crap": 2.0,
+      "crate": "liberado-daemon"
+    },
+    {
+      "file": "crates/daemon/src/weekly_net.rs",
+      "function": "unsigned_cents",
+      "line": 445,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "liberado-daemon"
+    },
+    {
+      "file": "crates/daemon/src/weekly_net.rs",
+      "function": "whole_money",
+      "line": 467,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "liberado-daemon"
+    },
+    {
       "file": "crates/daemon/src/weekly_spending.rs",
       "function": "HttpBudget::from_env",
-      "line": 456,
+      "line": 460,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -26447,7 +26951,7 @@
     {
       "file": "crates/daemon/src/weekly_spending.rs",
       "function": "HttpBudget::from_parts",
-      "line": 440,
+      "line": 444,
       "cyclomatic": 4.0,
       "coverage": 100.0,
       "crap": 4.0,
@@ -26456,16 +26960,16 @@
     {
       "file": "crates/daemon/src/weekly_spending.rs",
       "function": "HttpBudget::spending",
-      "line": 465,
-      "cyclomatic": 4.0,
-      "coverage": 66.66666666666666,
-      "crap": 4.5925925925925934,
+      "line": 469,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
       "crate": "liberado-daemon"
     },
     {
       "file": "crates/daemon/src/weekly_spending.rs",
       "function": "add_counted",
-      "line": 193,
+      "line": 197,
       "cyclomatic": 3.0,
       "coverage": 90.0,
       "crap": 3.009,
@@ -26474,7 +26978,7 @@
     {
       "file": "crates/daemon/src/weekly_spending.rs",
       "function": "add_spent",
-      "line": 211,
+      "line": 215,
       "cyclomatic": 2.0,
       "coverage": 100.0,
       "crap": 2.0,
@@ -26483,7 +26987,7 @@
     {
       "file": "crates/daemon/src/weekly_spending.rs",
       "function": "allocate",
-      "line": 152,
+      "line": 156,
       "cyclomatic": 2.0,
       "coverage": 100.0,
       "crap": 2.0,
@@ -26492,7 +26996,7 @@
     {
       "file": "crates/daemon/src/weekly_spending.rs",
       "function": "apply_row",
-      "line": 164,
+      "line": 168,
       "cyclomatic": 2.0,
       "coverage": 100.0,
       "crap": 2.0,
@@ -26501,7 +27005,7 @@
     {
       "file": "crates/daemon/src/weekly_spending.rs",
       "function": "before_open",
-      "line": 121,
+      "line": 125,
       "cyclomatic": 2.0,
       "coverage": 100.0,
       "crap": 2.0,
@@ -26510,7 +27014,7 @@
     {
       "file": "crates/daemon/src/weekly_spending.rs",
       "function": "bucket_by_name",
-      "line": 205,
+      "line": 209,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -26519,7 +27023,7 @@
     {
       "file": "crates/daemon/src/weekly_spending.rs",
       "function": "bucket_index",
-      "line": 217,
+      "line": 221,
       "cyclomatic": 3.0,
       "coverage": 100.0,
       "crap": 3.0,
@@ -26528,7 +27032,7 @@
     {
       "file": "crates/daemon/src/weekly_spending.rs",
       "function": "category_in",
-      "line": 226,
+      "line": 230,
       "cyclomatic": 3.0,
       "coverage": 100.0,
       "crap": 3.0,
@@ -26537,7 +27041,7 @@
     {
       "file": "crates/daemon/src/weekly_spending.rs",
       "function": "deliver",
-      "line": 354,
+      "line": 357,
       "cyclomatic": 4.0,
       "coverage": 93.33333333333331,
       "crap": 4.004740740740741,
@@ -26546,7 +27050,7 @@
     {
       "file": "crates/daemon/src/weekly_spending.rs",
       "function": "excluded",
-      "line": 235,
+      "line": 239,
       "cyclomatic": 3.0,
       "coverage": 100.0,
       "crap": 3.0,
@@ -26555,7 +27059,7 @@
     {
       "file": "crates/daemon/src/weekly_spending.rs",
       "function": "finish_buckets",
-      "line": 244,
+      "line": 248,
       "cyclomatic": 2.0,
       "coverage": 100.0,
       "crap": 2.0,
@@ -26564,7 +27068,7 @@
     {
       "file": "crates/daemon/src/weekly_spending.rs",
       "function": "fresh",
-      "line": 277,
+      "line": 280,
       "cyclomatic": 2.0,
       "coverage": 100.0,
       "crap": 2.0,
@@ -26573,7 +27077,7 @@
     {
       "file": "crates/daemon/src/weekly_spending.rs",
       "function": "last_week",
-      "line": 264,
+      "line": 268,
       "cyclomatic": 2.0,
       "coverage": 100.0,
       "crap": 2.0,
@@ -26582,7 +27086,7 @@
     {
       "file": "crates/daemon/src/weekly_spending.rs",
       "function": "local_now",
-      "line": 79,
+      "line": 83,
       "cyclomatic": 4.0,
       "coverage": 60.0,
       "crap": 5.024,
@@ -26591,7 +27095,7 @@
     {
       "file": "crates/daemon/src/weekly_spending.rs",
       "function": "log_outcome",
-      "line": 423,
+      "line": 426,
       "cyclomatic": 2.0,
       "coverage": 71.42857142857143,
       "crap": 2.0932944606413995,
@@ -26600,7 +27104,7 @@
     {
       "file": "crates/daemon/src/weekly_spending.rs",
       "function": "lower",
-      "line": 289,
+      "line": 292,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -26618,7 +27122,7 @@
     {
       "file": "crates/daemon/src/weekly_spending.rs",
       "function": "note_unmapped",
-      "line": 179,
+      "line": 183,
       "cyclomatic": 3.0,
       "coverage": 100.0,
       "crap": 3.0,
@@ -26626,17 +27130,8 @@
     },
     {
       "file": "crates/daemon/src/weekly_spending.rs",
-      "function": "one_category",
-      "line": 513,
-      "cyclomatic": 5.0,
-      "coverage": 100.0,
-      "crap": 5.0,
-      "crate": "liberado-daemon"
-    },
-    {
-      "file": "crates/daemon/src/weekly_spending.rs",
       "function": "open_time",
-      "line": 125,
+      "line": 129,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -26645,7 +27140,7 @@
     {
       "file": "crates/daemon/src/weekly_spending.rs",
       "function": "outcome",
-      "line": 371,
+      "line": 374,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -26653,17 +27148,8 @@
     },
     {
       "file": "crates/daemon/src/weekly_spending.rs",
-      "function": "parse_categories",
-      "line": 497,
-      "cyclomatic": 3.0,
-      "coverage": 91.66666666666666,
-      "crap": 3.0052083333333335,
-      "crate": "liberado-daemon"
-    },
-    {
-      "file": "crates/daemon/src/weekly_spending.rs",
       "function": "prepare_run",
-      "line": 329,
+      "line": 332,
       "cyclomatic": 3.0,
       "coverage": 100.0,
       "crap": 3.0,
@@ -26672,7 +27158,7 @@
     {
       "file": "crates/daemon/src/weekly_spending.rs",
       "function": "quiet",
-      "line": 340,
+      "line": 343,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -26681,7 +27167,7 @@
     {
       "file": "crates/daemon/src/weekly_spending.rs",
       "function": "render",
-      "line": 256,
+      "line": 260,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -26690,7 +27176,7 @@
     {
       "file": "crates/daemon/src/weekly_spending.rs",
       "function": "resolve_source",
-      "line": 414,
+      "line": 417,
       "cyclomatic": 3.0,
       "coverage": 100.0,
       "crap": 3.0,
@@ -26699,7 +27185,7 @@
     {
       "file": "crates/daemon/src/weekly_spending.rs",
       "function": "round_dollars",
-      "line": 130,
+      "line": 134,
       "cyclomatic": 2.0,
       "coverage": 100.0,
       "crap": 2.0,
@@ -26708,7 +27194,7 @@
     {
       "file": "crates/daemon/src/weekly_spending.rs",
       "function": "run_weekly",
-      "line": 300,
+      "line": 303,
       "cyclomatic": 4.0,
       "coverage": 100.0,
       "crap": 4.0,
@@ -26717,7 +27203,7 @@
     {
       "file": "crates/daemon/src/weekly_spending.rs",
       "function": "run_weekly_job",
-      "line": 392,
+      "line": 395,
       "cyclomatic": 5.0,
       "coverage": 100.0,
       "crap": 5.0,
@@ -26726,7 +27212,7 @@
     {
       "file": "crates/daemon/src/weekly_spending.rs",
       "function": "skip_fetch",
-      "line": 336,
+      "line": 339,
       "cyclomatic": 2.0,
       "coverage": 100.0,
       "crap": 2.0,
@@ -26735,7 +27221,7 @@
     {
       "file": "crates/daemon/src/weekly_spending.rs",
       "function": "this_monday",
-      "line": 116,
+      "line": 120,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -26743,17 +27229,8 @@
     },
     {
       "file": "crates/daemon/src/weekly_spending.rs",
-      "function": "transport_error",
-      "line": 493,
-      "cyclomatic": 1.0,
-      "coverage": 0.0,
-      "crap": 2.0,
-      "crate": "liberado-daemon"
-    },
-    {
-      "file": "crates/daemon/src/weekly_spending.rs",
       "function": "week_window",
-      "line": 97,
+      "line": 101,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -26762,7 +27239,7 @@
     {
       "file": "crates/daemon/src/weekly_spending.rs",
       "function": "weekly_runtime",
-      "line": 69,
+      "line": 73,
       "cyclomatic": 2.0,
       "coverage": 0.0,
       "crap": 6.0,
@@ -26771,7 +27248,7 @@
     {
       "file": "crates/daemon/src/weekly_spending.rs",
       "function": "window_for",
-      "line": 102,
+      "line": 106,
       "cyclomatic": 2.0,
       "coverage": 100.0,
       "crap": 2.0,
@@ -54473,7 +54950,7 @@
     {
       "file": "crates/telegram-approvals/src/lib.rs",
       "function": "ApprovalBot::spawn_typing_pulse",
-      "line": 338,
+      "line": 344,
       "cyclomatic": 2.0,
       "coverage": 100.0,
       "crap": 2.0,
@@ -57991,11 +58468,11 @@
     }
   ],
   "diagnostics": {
-    "analyzed_files": 862,
-    "lcov_files": 580,
-    "matched_files": 573,
+    "analyzed_files": 865,
+    "lcov_files": 582,
+    "matched_files": 575,
     "source_only": {
-      "count": 289,
+      "count": 290,
       "examples": [
         "crates/acp-bridge/src/coding_run_tests.rs",
         "crates/acp-bridge/src/face_client_stream_tests.rs",

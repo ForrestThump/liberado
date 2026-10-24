@@ -481,9 +481,10 @@ events = true
 # Weekly spending push is off until both switches are on: this table, and an
 # enabled schedule named below. Budgets are whole dollars. Category names match
 # exactly after trim. unmapped = "count" adds any other category to
-# unmapped_bucket and logs the name with whole dollars, for example
-# Shipping $12. unmapped = "ignore" leaves that spend out and still logs it.
+# unmapped_bucket and logs the name with cents, for example
+# Shipping $5.55. unmapped = "ignore" leaves that spend out and still logs it.
 # Shipping counts toward Everything else unless you set ignore.
+# Refunds net into that category. A net credit shows $0 spent.
 # A midweek over-budget alert is a later change, not this job.
 [weekly_spending]
 enabled = false
