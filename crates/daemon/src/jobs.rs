@@ -155,6 +155,18 @@ impl Daemon {
     pub(crate) fn handle_mechanical(&self, event: &Event) -> Option<ReactionOutcome> {
         let name = crate::helpers::cron_schedule_name(&event.source).unwrap_or("job");
         let request = JobRequest::from_event(name, &event.payload.data)?;
+        self.finish_mechanical(request)
+    }
+
+    fn finish_mechanical(&self, request: JobRequest) -> Option<ReactionOutcome> {
+        if request.kind == liberado_config::WEEKLY_SPENDING_JOB {
+            self.spawn_weekly(crate::weekly_spending::RunMode::Send);
+            return Some(ReactionOutcome::Observed);
+        }
+        self.finish_vault_job(request)
+    }
+
+    fn finish_vault_job(&self, request: JobRequest) -> Option<ReactionOutcome> {
         let (today, zone) = self.mechanical_clock();
         let tick = self.reminder_tick();
         match execute_on(self.vault.root(), &request, today, &zone, &tick) {
@@ -172,6 +184,7 @@ impl Daemon {
     }
 
     pub(crate) fn run_startup_jobs(&self) {
+        self.catch_up_weekly_spending();
         let (today, zone) = self.mechanical_clock();
         let tick = self.reminder_tick();
         for job in &self.startup_jobs {
@@ -211,6 +224,29 @@ impl Daemon {
             Some(now) => now,
             None => zone.now().naive_local(),
         }
+    }
+
+    fn catch_up_weekly_spending(&self) {
+        if !self.weekly_catchup {
+            return;
+        }
+        self.spawn_weekly(crate::weekly_spending::RunMode::Send);
+    }
+
+    fn spawn_weekly(&self, mode: crate::weekly_spending::RunMode) {
+        if !self.weekly_spending.enabled {
+            tracing::info!("weekly spending is off");
+            return;
+        }
+        let now = crate::weekly_spending::local_now(self.fixed_now, &self.weekly_spending.timezone);
+        let cfg = self.weekly_spending.clone();
+        let hour = self.weekly_open_hour;
+        let minute = self.weekly_open_minute;
+        let source = self.spending_source.clone();
+        let hub = std::sync::Arc::clone(&self.push);
+        tokio::spawn(crate::weekly_spending::run_weekly_job(
+            cfg, now, hour, minute, source, hub, mode,
+        ));
     }
 
     fn send_reminder(&self, text: &str) {

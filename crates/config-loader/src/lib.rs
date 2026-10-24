@@ -46,7 +46,9 @@ pub use model::{
     PoolConfig, ProjectConfig, ProviderFallback, ProviderProfile, ResolvedProfile, RoleOverride,
     ScheduleTiming, SessionProfile, ShepherdAuthConfig, ShepherdConfig, ShepherdProjectConfig,
     ShepherdReviewConfig, SubagentIsolation, TelegramApprovalsTuning, ToolImpact, Topology, Tuning,
-    VaultRemindersConfig, WebUiConfig, ZonePolicy, managed_binary_path, resolve_declared_zone,
+    UnmappedPolicy, VaultRemindersConfig, WEEKLY_SPENDING_JOB, WebUiConfig, WeeklySpendingConfig,
+    ZonePolicy, has_enabled_weekly_schedule, managed_binary_path, resolve_declared_zone,
+    weekly_open_clock,
 };
 pub use source::{ConfigLoadError, ConfigSource};
 pub use validation::validate_merged_config;

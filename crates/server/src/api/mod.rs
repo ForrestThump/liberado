@@ -9,6 +9,7 @@ mod grants;
 mod library;
 mod plugins;
 mod profiles;
+mod push;
 pub(crate) mod schedule_description;
 mod search;
 mod sessions;
@@ -30,6 +31,9 @@ pub use grants::{conversation_grants, get_header_grant};
 pub use library::list_library;
 pub use plugins::set_plugin_enabled;
 pub use profiles::{delete_profile, rename_profile};
+pub use push::{
+    delete_subscription, push_status, push_test, push_weekly, upsert_subscription, vapid_public_key,
+};
 pub use search::search_conversations;
 pub use sessions::{session_fork, sessions_list};
 pub use status::{catalog, models, reactions, reload_mcp_peers, select_model, status, vault};

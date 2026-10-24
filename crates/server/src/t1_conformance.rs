@@ -144,6 +144,8 @@ impl T1Harness {
             live_mcp: liberado_bootstrap::LiveMcpController::empty(),
             drain: crate::shutdown::DrainGate::default(),
             approval_hub: None,
+            push: crate::state::inert_push(),
+            spending: None,
         });
 
         let app = Router::new()

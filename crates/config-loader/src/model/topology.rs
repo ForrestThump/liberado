@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 pub use super::schedule_form::CronSchedule;
 use super::shepherd::ShepherdConfig;
 use super::vault_reminders::VaultRemindersConfig;
+use super::weekly_spending::WeeklySpendingConfig;
 use liberado_common::{
     Capability, CapabilitySet, Consequence, ModelProfile, ModelRole, ReasoningLevel, UserTimezone,
     Zone,
@@ -60,6 +61,9 @@ pub struct Topology {
     /// Minute-tick reminders from vault notes. Default off.
     #[serde(default)]
     pub vault_reminders: VaultRemindersConfig,
+    /// Monday spending reminder. Default off. See `docs/spec/config-spec.md`.
+    #[serde(default)]
+    pub weekly_spending: WeeklySpendingConfig,
     /// Named dispatcher/executor pools (Decision 18 checkpoint #3) — each gets its own
     /// `Policy::capabilities_for(name)` authority boundary, sharing the same provider/tuning/MCP
     /// registry as everything else. The always-present `"default"` pool (today's single-dispatcher

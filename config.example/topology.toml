@@ -477,6 +477,29 @@ writes_vault = false             # writes code workspaces, not the Obsidian vaul
 enabled = false
 tasks = true
 events = true
+#
+# Weekly spending push is off until both switches are on: this table, and an
+# enabled schedule named below. Budgets are whole dollars. Category names match
+# exactly after trim. unmapped = "count" adds any other category to
+# unmapped_bucket and logs the name with cents, for example
+# Shipping $5.55. unmapped = "ignore" leaves that spend out and still logs it.
+# Shipping counts toward Everything else unless you set ignore.
+# Refunds net into that category. A net credit shows $0 spent.
+# A midweek over-budget alert is a later change, not this job.
+[weekly_spending]
+enabled = false
+timezone = "America/Chicago"
+unmapped = "count"
+unmapped_bucket = "Everything else"
+exclude = ["Rent", "Tithing", "Utilities", "Loans", "Insurance", "Subscriptions", "Inference", "Payroll", "Transfers", "Credit Card", "Medical"]
+[[weekly_spending.buckets]]
+name = "Groceries"
+weekly_dollars = 240
+categories = ["Groceries"]
+[[weekly_spending.buckets]]
+name = "Everything else"
+weekly_dollars = 110
+categories = ["Dining Out", "Vending", "Housewares", "Fuel & Gas", "Entertainment", "Home Improvement", "Pet Care", "Travel", "Uncategorized"]
 # [[schedules]]
 # name = "morning-events"
 # cron_expr = "0 50 11 * * * *"  # 11:50 UTC = 06:50 America/Chicago CDT
@@ -495,6 +518,14 @@ events = true
 # cron_expr = "0 * * * * *"
 # job = "vault-reminder-tick"
 # enabled = false
+# deliver = false
+# [[schedules]]
+# name = "weekly-spending-push"
+# enabled = false
+# days = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
+# at = "07:00"
+# timezone = "America/Chicago"
+# job = "weekly-spending-push"
 # deliver = false
 #
 # `direct = true` skips the router (classifier) model and executes the schedule's `goal`

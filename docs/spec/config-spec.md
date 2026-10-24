@@ -289,10 +289,11 @@ Product meaning: [`chat-agent-surface-mode.md`](architecture/chat-agent-surface-
 
 A `[[schedules]]` entry with `job` set does not start a model session. The daemon runs the
 built-in kind. Kinds are `git-snapshot`, `task-ping`, `event-ping`, `habit-ping`,
-`inbox-if-present`, and `vault-reminder-tick`. An unknown kind is a load error.
-`habit-ping` requires `habit_text`. `inbox-if-present` requires `goal`, and that goal
-runs only when the capture file has text. `vault-reminder-tick` is allowed only while
-`[vault_reminders] enabled = true`.
+`inbox-if-present`, `vault-reminder-tick`, and `weekly-spending-push`. An unknown kind
+is a load error. `habit-ping` requires `habit_text`. `inbox-if-present` requires `goal`,
+and that goal runs only when the capture file has text. `vault-reminder-tick` is allowed
+only while `[vault_reminders] enabled = true`. `weekly-spending-push` is allowed only
+while `[weekly_spending] enabled = true`.
 
 `git-snapshot` commits the vault when it is dirty and pushes. It also runs at startup unless
 `run_on_start = false`.
@@ -365,6 +366,86 @@ Creating or editing a task or event is a vault markdown edit. TurboVault already
 those notes. This path has no separate notification record.
 
 See ADR-0020.
+
+### Weekly spending — `[weekly_spending]`
+
+Off by default. The job sends one Web Push for the Monday–Sunday week that just
+ended. It does not call a model. List every day on the schedule so a missed Monday
+still sends later that week, once. A week that is still unsent after the next Monday
+at the open clock is not backlogged.
+
+```toml
+[weekly_spending]
+enabled = false
+timezone = "America/Chicago"
+unmapped = "count"           # or "ignore"
+unmapped_bucket = "Everything else"
+exclude = ["Rent", "Tithing", "Utilities", "Loans", "Insurance", "Subscriptions", "Inference", "Payroll", "Transfers", "Credit Card", "Medical"]
+
+[[weekly_spending.buckets]]
+name = "Groceries"
+weekly_dollars = 240
+categories = ["Groceries"]
+
+[[weekly_spending.buckets]]
+name = "Everything else"
+weekly_dollars = 110
+categories = ["Dining Out", "Vending", "Housewares", "Fuel & Gas", "Entertainment", "Home Improvement", "Pet Care", "Travel", "Uncategorized"]
+```
+
+A missing table uses those defaults, including the two buckets. `buckets = []` with
+`enabled = true` is a load error. Category match is the trimmed name, with no case
+fold. A category in two buckets, or in a bucket and `exclude`, is a load error.
+`weekly_dollars = 0` and a blank bucket name are load errors.
+
+`unmapped = "count"` is the default. A category that is not in a bucket and not in
+`exclude` is added to `unmapped_bucket`. The job still logs each of those categories
+with its signed cent amount. One category is `Shipping $5.55`. Several are
+`Shipping $12.00, Postage $4.00`. A net credit is negative, for example
+`Shipping -$2.50`. Zero cents is not logged. `unmapped = "ignore"` leaves that
+spend out of the totals and still logs the name and amount. `count` requires
+`unmapped_bucket`, and that name must be a bucket. The default name is Everything
+else, which is one of the default buckets. If you omit the key, the loader fills
+Everything else. Shipping is unmapped in the live books, so it counts toward
+Everything else unless you set ignore.
+
+The spend side is `GET /api/v1/spending/by-category`. That route already drops
+transfers, split parents, split rows, and positive amounts. Refunds come from
+`GET /api/v1/transactions` with `min_amount_cents=1`, paged at `limit=2000` and
+`offset`. Income flags come from `GET /api/v1/categories`. A positive row reduces
+its category when the name is non-empty, is not `Uncategorized`, is not an income
+category (the category or its group has `is_income`), and is not in `exclude`.
+Empty and `Uncategorized` positive rows are skipped. The log records only the count.
+
+Each bucket line is `name $spent of $budget ($left left)` when the rounded spend
+is at or under the budget, and `name $spent of $budget (over by $over)` when it
+is over. Cents in a bucket are summed, then rounded once (nearest dollar, half
+away from zero). A net credit is shown as `$0` spent, and the full budget is left.
+The fresh-week clause stays `$240 groceries, $110 everything else`.
+
+The schedule uses `days` and `at`, with an empty `cron_expr`, in the same IANA zone
+as `[weekly_spending].timezone`. Only one enabled row may name the job. A disabled
+row may still name it. The row is checked even while the table is off, so a typo
+fails at load. Set `deliver = false`. The open clock defaults to 07:00 when the
+enabled row is missing. The message covers the previous Monday through Sunday once
+local time is at or after that clock on Monday, and also on Tuesday through Sunday.
+Before the clock on Monday, the message is still the week before.
+
+Spend comes from the budget service. Set `LIBERADO_BUDGET_API_URL` and
+`LIBERADO_BUDGET_API_KEY` in the homelab env file on node-ai. Do not commit them.
+The key is sent as `X-API-Key` and is never logged.
+
+Web Push needs `LIBERADO_VAPID_PUBLIC_KEY`, `LIBERADO_VAPID_PRIVATE_KEY`, and
+`LIBERADO_VAPID_SUBJECT` (`mailto:…`) in that same env file. Generate a pair with
+`npx web-push generate-vapid-keys` or `liberado config vapid-keys`. If any value is
+missing or invalid, pushes stay off and the daemon logs the variable names, not the
+values. iOS needs the WebUI on a real HTTPS origin. On node-ai the WebUI listens on
+port 4201. Expose it with Tailscale Serve, for example
+`tailscale serve --bg --https=443 http://127.0.0.1:4201`. This repo does not change
+the homelab compose file.
+
+A later change may add a midweek alert when a bucket is already over, or pacing
+more than 25% over. That alert is not per transaction, and it is not this job.
 
 ## 9a. Direct cron dispatch (`direct = true`)
 

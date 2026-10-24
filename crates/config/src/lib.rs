@@ -52,7 +52,8 @@ pub use liberado_config_loader::{
     ProviderFallback, ProviderProfile, ResolvedProfile, RoleOverride, ScheduleTiming,
     SessionProfile, ShepherdAuthConfig, ShepherdConfig, ShepherdProjectConfig,
     ShepherdReviewConfig, SubagentIsolation, TelegramApprovalsTuning, ToolImpact, Topology, Tuning,
-    VaultRemindersConfig, ZonePolicy, managed_binary_path, resolve_declared_zone,
+    UnmappedPolicy, VaultRemindersConfig, WEEKLY_SPENDING_JOB, WeeklySpendingConfig, ZonePolicy,
+    has_enabled_weekly_schedule, managed_binary_path, resolve_declared_zone, weekly_open_clock,
 };
 
 /// Records which source file contributed each section of a loaded [`Config`],

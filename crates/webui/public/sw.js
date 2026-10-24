@@ -26,3 +26,40 @@ self.addEventListener("fetch", function (event) {
   }
   event.respondWith(fetch(event.request));
 });
+
+self.addEventListener("push", function (event) {
+  var payload = { title: "Liberado", body: "", data: { url: "/" } };
+  if (event.data) {
+    try {
+      payload = event.data.json();
+    } catch (e) {
+      payload.body = event.data.text();
+    }
+  }
+  var title = payload.title || "Liberado";
+  var options = {
+    body: payload.body || "",
+    data: payload.data || { url: "/" },
+  };
+  event.waitUntil(self.registration.showNotification(title, options));
+});
+
+self.addEventListener("notificationclick", function (event) {
+  event.notification.close();
+  var target = "/";
+  if (event.notification.data && event.notification.data.url) {
+    target = event.notification.data.url;
+  }
+  event.waitUntil(
+    self.clients.matchAll({ type: "window", includeUncontrolled: true }).then(function (list) {
+      for (var i = 0; i < list.length; i++) {
+        if (list[i].focus) {
+          return list[i].focus();
+        }
+      }
+      if (self.clients.openWindow) {
+        return self.clients.openWindow(target);
+      }
+    })
+  );
+});

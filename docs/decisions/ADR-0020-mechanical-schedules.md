@@ -29,6 +29,7 @@ A schedule may set `job` to a built-in kind. The daemon runs that kind directly.
 - `habit-ping` sends `habit_text` unchanged.
 - `inbox-if-present` dispatches `goal` only when the capture file has text. An empty file does not call a model.
 - `vault-reminder-tick` sends remind-marked tasks and calendar notes when local time matches a clock time on the note. It runs only while `[vault_reminders] enabled = true` (default false). Date-only tasks and all-day events stay on the digest jobs. Opt-in is `#remind` and/or `remind` / `reminder` set to a truthy value; the rightmost marker wins.
+- `weekly-spending-push` sends one Web Push for the previous Monday–Sunday spending totals. It runs only while `[weekly_spending] enabled = true` (default false) and an enabled days-and-at schedule names the job. It does not call a model.
 
 "Today" follows `topology.timezone` (default `America/Chicago`). `cron_expr` stays UTC. Set `deliver = false` so the reminder is not also written into the sticky chat. Creating or editing a task or event is a vault markdown edit.
 

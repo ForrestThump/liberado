@@ -27,6 +27,7 @@ impl Default for Topology {
             hooks: Vec::new(),
             schedules: Vec::new(),
             vault_reminders: super::VaultRemindersConfig::default(),
+            weekly_spending: super::WeeklySpendingConfig::default(),
             pools: Vec::new(),
             session_profiles: Vec::new(),
             projects: Vec::new(),

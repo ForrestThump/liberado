@@ -13,6 +13,7 @@
 //!   LIBERADO_VAULT=\\<\1\\> liberado  same, taking the vault from the environment
 //!   liberado chat [session-id]       the streaming terminal client of a running daemon
 //!   liberado config check            load + validate config, print a summary (or an error)
+//!   liberado config vapid-keys       print Web Push key env lines for the homelab env file
 //!   liberado ci                      full local CI; ratchet and stage/amend code-metrics/crap-baseline.json
 //!   liberado ci check                ship preflight (fmt, clippy, tests, deny)
 //!   liberado ci crap                 compare CRAP scores to code-metrics/crap-baseline.json (no write)
@@ -235,30 +236,48 @@ fn cmd_docs_auxiliary(
 
 /// `liberado config …`
 fn cmd_config(args: &mut impl Iterator<Item = String>) -> Result<(), Box<dyn std::error::Error>> {
+    dispatch_config(args)
+}
+
+fn dispatch_config(
+    args: &mut impl Iterator<Item = String>,
+) -> Result<(), Box<dyn std::error::Error>> {
     match args.next().as_deref() {
-        // `config check` is synchronous (no daemon): resolve the default dir via bootstrap
-        // (passing None) and run the loader. Routed through the server so the cli keeps a single
-        // dependency.
         Some("check") => liberado_server::config_check(None),
-        // `config explain <component> <mcp:tool> <path>` — answers "would this write be
-        // allowed, and if not, which guard stops it?" from config alone. Every guard's verdict
-        // is printed, not just the first failure: the first `no` is rarely the only one, and
-        // discovering them one deploy at a time is the slow path.
-        Some("explain") => {
-            let component = args.next();
-            let tool = args.next();
-            let path = args.next();
-            match (component, tool, path) {
-                (Some(c), Some(t), Some(p)) => liberado_server::explain_write(None, &c, &t, &p),
-                _ => Err(
-                    "usage: liberado config explain <component> <mcp:tool> <vault/path.md>\n  \
-                     e.g. liberado config explain dispatcher turbovault:write_note Learning/x.md"
-                        .into(),
-                ),
-            }
-        }
-        _ => Err("usage: liberado config <check|explain>".into()),
+        Some("explain") => explain_config(args),
+        Some("vapid-keys") => print_vapid_keys(args),
+        _ => Err("usage: liberado config <check|explain|vapid-keys>".into()),
     }
+}
+
+fn explain_config(
+    args: &mut impl Iterator<Item = String>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let component = args.next();
+    let tool = args.next();
+    let path = args.next();
+    match (component, tool, path) {
+        (Some(c), Some(t), Some(p)) => liberado_server::explain_write(None, &c, &t, &p),
+        _ => Err(
+            "usage: liberado config explain <component> <mcp:tool> <vault/path.md>\n  \
+             e.g. liberado config explain dispatcher turbovault:write_note Learning/x.md"
+                .into(),
+        ),
+    }
+}
+
+fn print_vapid_keys(
+    args: &mut impl Iterator<Item = String>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if args.next().is_some() {
+        return Err("usage: liberado config vapid-keys".into());
+    }
+    let lines = liberado_server::vapid_env_lines()?;
+    println!("{lines}");
+    eprintln!(
+        "Put these in the homelab env file. Set LIBERADO_VAPID_SUBJECT=mailto:you@example.com. Do not commit them."
+    );
+    Ok(())
 }
 
 /// `liberado serve [<vault>]` — run the daemon in the foreground, or fall back to the
@@ -299,6 +318,20 @@ mod dispatch_tests {
                 "{command}: expected usage text, got: {err}"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn config_vapid_keys_rejects_extra_arguments() {
+        let args = [
+            "config".to_string(),
+            "vapid-keys".to_string(),
+            "extra".to_string(),
+        ];
+        let err = dispatch(&mut args.into_iter())
+            .await
+            .expect_err("extra")
+            .to_string();
+        assert!(err.contains("usage: liberado config vapid-keys"), "{err}");
     }
 
     #[tokio::test(flavor = "multi_thread")]

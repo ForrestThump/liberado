@@ -17,14 +17,20 @@ pub(crate) fn schedule_description(schedule: &CronSchedule) -> String {
     }
 }
 
-/// `system` for the vault-reminder engine. Every other row is an automation.
-///
-/// The tick delivers Obsidian `#remind` pings. It is plumbing, not a reminder.
+/// `system` for background plumbing. Every other row is an automation.
 pub(crate) fn schedule_category(job: Option<&str>) -> &'static str {
-    match job.map(str::trim) {
-        Some("vault-reminder-tick") => "system",
-        _ => "automation",
+    if system_job(job) {
+        "system"
+    } else {
+        "automation"
     }
+}
+
+fn system_job(job: Option<&str>) -> bool {
+    matches!(
+        job.map(str::trim),
+        Some("vault-reminder-tick" | "weekly-spending-push")
+    )
 }
 
 fn job_description(schedule: &CronSchedule, kind: &str) -> String {
@@ -33,6 +39,7 @@ fn job_description(schedule: &CronSchedule, kind: &str) -> String {
         "task-ping" => task_ping(schedule),
         "habit-ping" => habit_ping(schedule),
         "vault-reminder-tick" => reminder_tick(),
+        "weekly-spending-push" => weekly_spending(),
         "git-snapshot" => git_snapshot(schedule),
         "inbox-if-present" => inbox_description(schedule),
         other => unknown_job(schedule, other),
@@ -65,6 +72,10 @@ fn habit_ping(schedule: &CronSchedule) -> String {
 
 fn reminder_tick() -> String {
     "Background system job. Each minute, delivers the timed pings for Obsidian tasks and calendar notes you marked #remind / remind: true. Stays quiet when nothing is due or reminders are off. Your reminders themselves live in the vault, not here.".to_string()
+}
+
+fn weekly_spending() -> String {
+    "Background system job. Monday through Sunday at the configured clock, sends one Web Push for last week's spending. Stays quiet when the reminder is off, keys are missing, or this week's notice was already sent. No model session.".to_string()
 }
 
 fn git_snapshot(schedule: &CronSchedule) -> String {
