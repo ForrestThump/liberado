@@ -2105,6 +2105,12 @@
     "functions": 51,
     "cyclomatic": 120
   },
+  "crates/config-loader/src/model/weekly_spending/weekly_spending_defaults.rs": {
+    "ploc": 3,
+    "lloc": 0,
+    "functions": 1,
+    "cyclomatic": 2
+  },
   "crates/config-loader/src/model/weekly_spending_tests.rs": {
     "ploc": 234,
     "lloc": 125,
@@ -2597,11 +2603,23 @@
     "functions": 27,
     "cyclomatic": 29
   },
+  "crates/daemon/src/weekly_net.rs": {
+    "ploc": 400,
+    "lloc": 92,
+    "functions": 55,
+    "cyclomatic": 108
+  },
+  "crates/daemon/src/weekly_net_tests.rs": {
+    "ploc": 444,
+    "lloc": 105,
+    "functions": 23,
+    "cyclomatic": 34
+  },
   "crates/daemon/src/weekly_spending.rs": {
-    "ploc": 457,
-    "lloc": 94,
-    "functions": 41,
-    "cyclomatic": 98
+    "ploc": 418,
+    "lloc": 80,
+    "functions": 37,
+    "cyclomatic": 85
   },
   "crates/daemon/src/weekly_spending_tests.rs": {
     "ploc": 442,
