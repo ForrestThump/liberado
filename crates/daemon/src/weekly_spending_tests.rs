@@ -1,4 +1,5 @@
-//! Week window, dollar rounding, and the budget HTTP client. No live network.
+//! Week window, dollar rounding, the budget HTTP client, and the weekly job.
+//! No live network.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -6,11 +7,19 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use async_trait::async_trait;
 use chrono::{NaiveDate, NaiveDateTime};
 use liberado_config::{UnmappedPolicy, WeeklySpendingConfig};
-use liberado_notify::PushHub;
+use liberado_notify::{NewSubscription, PushHub};
 
 use super::{
-    CategorySpend, HttpBudget, RunMode, SpendingSource, round_dollars, run_weekly, week_window,
+    CategorySpend, HttpBudget, RunMode, SpendingSource, round_dollars, run_weekly, run_weekly_job,
+    week_window,
 };
+
+const AS_PRIVATE: &str = "yfWPiYE-n46HLnH0KqZOF1fJJU3MYrct3AELtAQ-oRw";
+const AS_PUBLIC: &str =
+    "BP4z9KsN6nGRTbVYI_c7VJSPQTBtkgcy27mlmlMoZIIgDll6e3vCYLocInmYWAmS6TlzAC8wEqKK6PBru3jl7A8";
+const UA_PUBLIC: &str =
+    "BCVxsr7N_eNgVRqvHtD0zTZsEc6-VV-JvLexhqUzORcxaOzi6-AYWXvTBHm4bjyPjs7Vd8pZGH6SRpkNtoIAiw4";
+const AUTH: &str = "BTBZMqHH6r4Tts7J_aSIgg";
 
 fn at(year: i32, month: u32, day: u32, hour: u32, minute: u32) -> NaiveDateTime {
     NaiveDate::from_ymd_opt(year, month, day)
@@ -40,6 +49,14 @@ impl FixedSource {
 
     fn calls(&self) -> usize {
         self.calls.load(Ordering::SeqCst)
+    }
+
+    fn fail(error: &'static str) -> Self {
+        Self {
+            rows: Vec::new(),
+            calls: AtomicUsize::new(0),
+            error: Some(error),
+        }
     }
 }
 
@@ -318,4 +335,157 @@ async fn dry_message(rows: Vec<CategorySpend>) -> String {
     .await
     .expect("dry run");
     outcome.message
+}
+
+fn enabled_config() -> WeeklySpendingConfig {
+    WeeklySpendingConfig {
+        enabled: true,
+        ..WeeklySpendingConfig::default()
+    }
+}
+
+fn phone(endpoint: &str) -> NewSubscription {
+    NewSubscription {
+        endpoint: endpoint.to_string(),
+        p256dh: UA_PUBLIC.to_string(),
+        auth: AUTH.to_string(),
+        label: "phone".to_string(),
+    }
+}
+
+fn hub_path(name: &str) -> std::path::PathBuf {
+    std::env::temp_dir().join(format!("liberado-weekly-{name}-{}", std::process::id()))
+}
+
+/// Clears the budget env for this test and writes the previous values back on drop.
+/// The job reads them only when the caller passes no source. The values are never logged.
+struct ClearedBudgetEnv {
+    url: Option<String>,
+    key: Option<String>,
+}
+
+impl ClearedBudgetEnv {
+    fn clear() -> Self {
+        let url = std::env::var("LIBERADO_BUDGET_API_URL").ok();
+        let key = std::env::var("LIBERADO_BUDGET_API_KEY").ok();
+        // SAFETY: env mutation is process-global. This test is the only daemon
+        // reader of these two names, and Drop writes the previous values back.
+        unsafe {
+            std::env::remove_var("LIBERADO_BUDGET_API_URL");
+            std::env::remove_var("LIBERADO_BUDGET_API_KEY");
+        }
+        Self { url, key }
+    }
+}
+
+impl Drop for ClearedBudgetEnv {
+    fn drop(&mut self) {
+        restore_env("LIBERADO_BUDGET_API_URL", self.url.take());
+        restore_env("LIBERADO_BUDGET_API_KEY", self.key.take());
+    }
+}
+
+fn restore_env(name: &str, value: Option<String>) {
+    // SAFETY: pairs with `ClearedBudgetEnv::clear`. The previous value is put back
+    // and is not logged.
+    unsafe {
+        match value {
+            Some(value) => std::env::set_var(name, value),
+            None => std::env::remove_var(name),
+        }
+    }
+}
+
+#[tokio::test]
+async fn a_job_sends_once_and_the_next_send_does_not_fetch() {
+    let server = wiremock::MockServer::start().await;
+    wiremock::Mock::given(wiremock::matchers::method("POST"))
+        .respond_with(wiremock::ResponseTemplate::new(201))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let path = hub_path("send");
+    let hub = Arc::new(
+        PushHub::with_keys(
+            path.clone(),
+            AS_PUBLIC,
+            AS_PRIVATE,
+            "mailto:push@example.com",
+        )
+        .expect("keys"),
+    );
+    let endpoint = format!("{}/fake-subscription", server.uri());
+    hub.upsert(phone(&endpoint)).expect("subscribe");
+    let source = Arc::new(FixedSource::rows(vec![spend("Groceries", -100)]));
+    let now = at(2026, 10, 23, 15, 0);
+    let injected = Arc::clone(&source) as Arc<dyn SpendingSource>;
+    run_weekly_job(
+        enabled_config(),
+        now,
+        7,
+        0,
+        Some(Arc::clone(&injected)),
+        Arc::clone(&hub),
+        RunMode::Send,
+    )
+    .await;
+    assert_eq!(source.calls(), 1);
+    assert!(!hub.needs_week("2026-10-19"));
+    run_weekly_job(
+        enabled_config(),
+        now,
+        7,
+        0,
+        Some(injected),
+        hub,
+        RunMode::Send,
+    )
+    .await;
+    assert_eq!(source.calls(), 1);
+    let _ = std::fs::remove_file(path);
+}
+
+#[tokio::test]
+async fn a_job_keeps_the_week_due_when_the_source_errors() {
+    let path = hub_path("source-err");
+    let hub = Arc::new(PushHub::at_path(path.clone()));
+    hub.upsert(phone("https://push.example.test/fake-subscription"))
+        .expect("subscribe");
+    let source = Arc::new(FixedSource::fail("budget down"));
+    run_weekly_job(
+        enabled_config(),
+        at(2026, 10, 23, 15, 0),
+        7,
+        0,
+        Some(Arc::clone(&source) as Arc<dyn SpendingSource>),
+        Arc::clone(&hub),
+        RunMode::Send,
+    )
+    .await;
+    assert_eq!(source.calls(), 1);
+    assert!(hub.needs_week("2026-10-19"));
+    let _ = std::fs::remove_file(path);
+}
+
+#[tokio::test]
+async fn a_job_stops_when_the_budget_env_is_missing() {
+    let _guard = ClearedBudgetEnv::clear();
+    let err = budget_config_error(HttpBudget::from_env());
+    assert_eq!(err, "budget API is not configured");
+    let path = hub_path("no-env");
+    let hub = Arc::new(PushHub::at_path(path.clone()));
+    hub.upsert(phone("https://push.example.test/fake-subscription"))
+        .expect("subscribe");
+    run_weekly_job(
+        enabled_config(),
+        at(2026, 10, 23, 15, 0),
+        7,
+        0,
+        None,
+        Arc::clone(&hub),
+        RunMode::Send,
+    )
+    .await;
+    assert!(hub.needs_week("2026-10-19"));
+    let _ = std::fs::remove_file(path);
 }
