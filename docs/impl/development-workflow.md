@@ -201,11 +201,11 @@ Don't duplicate what already exists elsewhere — this doc is process, not archi
 | Question | Where |
 |---|---|
 | What is this system, at a high level? | `docs/spec/architecture/overview.md` |
-| Why does it exist / how does it compare to alternatives? | `docs/spec/architecture/positioning.md` |
+| Why does it exist / how does it compare to alternatives? | `docs/direction.md` (current). `docs/spec/architecture/positioning.md` is historical. |
 | The seam/modularity plan | `docs/spec/architecture/modularity.md` |
 | How do I build and test it? | Root `AGENTS.md` |
 | How do I run and configure it? | `crates/cli/ARCHITECTURE.md` and `docs/spec/config-spec.md` |
-| What's the phased roadmap, what's landed, what's next? | `docs/roadmap.md` |
+| What's next? | `docs/future-work/backlog.md`. `docs/roadmap.md` points at `docs/direction.md` and the backlog. |
 | Why was decision N made? | `docs/decisions/ADR-NNNN-*.md` |
 | Per-crate design detail | `crates/<name>/ARCHITECTURE.md` (each crate has one) |
 | The chat/SSE API contract | `docs/spec/reference/api.md` |

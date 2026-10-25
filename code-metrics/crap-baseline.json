@@ -24199,8 +24199,8 @@
       "function": "twelve_hour",
       "line": 91,
       "cyclomatic": 5.0,
-      "coverage": 71.42857142857143,
-      "crap": 5.5830903790087465,
+      "coverage": 85.71428571428571,
+      "crap": 5.072886297376093,
       "crate": "liberado-cron"
     },
     {
@@ -32963,7 +32963,7 @@
     {
       "file": "crates/main-agent/src/sessions.rs",
       "function": "ChatSessions::dispatch_turn",
-      "line": 1498,
+      "line": 1511,
       "cyclomatic": 9.0,
       "coverage": 82.1917808219178,
       "crap": 9.457453016192094,

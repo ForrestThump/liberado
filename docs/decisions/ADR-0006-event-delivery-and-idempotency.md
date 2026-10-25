@@ -11,13 +11,17 @@ open_items: false
 
 | Field | Value |
 |-------|-------|
-| Status | accepted |
+| Status | not implemented |
 | Date | 2026-07-02 (from consolidated decision log; see git history) |
 | ID | ADR-0006 |
 
+The metadata `status` stays `accepted` because the decision vocabulary has no `not implemented` value. `accepted` means the design was selected. The status table is the implementation mark.
+
+The durable journal in this decision is not in the code. Webhook idempotency is an in-memory cache. `crates/server/src/hooks.rs` says the `.liberado/reactions/<id>.json` marker was never built.
+
 ## Context
 
-See **Full historical body** for the original framing, open questions, and design discussion.
+See **Full historical body** for the original framing, open questions, and design discussion. The historical body still says "Status: Complete". That sentence is the July 2026 log.
 
 ## Decision
 

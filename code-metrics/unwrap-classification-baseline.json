@@ -4,7 +4,7 @@
     "proven_invariant": 65,
     "local_failure": 0,
     "process_fatal": 46,
-    "files_scanned": 661,
+    "files_scanned": 658,
     "files_with_unwraps": 49
   },
   "files": {
@@ -501,7 +501,7 @@
       "occurrences": [
         {
           "file": "crates/common/src/proposal.rs",
-          "line": 377,
+          "line": 363,
           "column": 23,
           "method": "expect",
           "snippet": "<Hmac<Sha256> as Mac>::new_from_slice(&self.key)\n            .expect(\"HMAC accepts a key of any length\")",
@@ -512,7 +512,7 @@
         },
         {
           "file": "crates/common/src/proposal.rs",
-          "line": 385,
+          "line": 371,
           "column": 27,
           "method": "expect",
           "snippet": "serde_json::to_vec(&proposal.proposed_action)\n            .expect(\"ProposedAction serializes to JSON\")",
@@ -523,7 +523,7 @@
         },
         {
           "file": "crates/common/src/proposal.rs",
-          "line": 396,
+          "line": 379,
           "column": 28,
           "method": "expect",
           "snippet": "serde_json::to_vec(cap).expect(\"Capability serializes to JSON\")",
@@ -534,7 +534,7 @@
         },
         {
           "file": "crates/common/src/proposal.rs",
-          "line": 440,
+          "line": 423,
           "column": 9,
           "method": "expect",
           "snippet": "write!(s, \"{b:02x}\").expect(\"writing to a String cannot fail\")",

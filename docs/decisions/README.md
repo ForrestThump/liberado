@@ -15,6 +15,11 @@ Authority: accepted ADRs answer *why this design was selected*. Current behavior
 code, tests, and Rustdoc. Cross-crate contracts live in
 [`docs/spec/architecture/contracts.md`](../spec/architecture/contracts.md).
 
+ADR-0006 and ADR-0010 keep metadata `status: accepted` (the design was selected). Their status
+table says **not implemented**, because the decision vocabulary has no such value. ADR-0003 stays
+accepted: stdio and streamable HTTP implement that transport decision. There is no separate SSE
+MCP connector. The code comment on `McpTransport::Http` cites Decision 3.
+
 | ADR | Title | Status | File |
 |-----|-------|--------|------|
 | ADR-0001 | Liberado Invocation Model + Inference Responsibility | accepted | [ADR-0001-invocation-model-and-inference.md](ADR-0001-invocation-model-and-inference.md) |
@@ -22,11 +27,11 @@ code, tests, and Rustdoc. Cross-crate contracts live in
 | ADR-0003 | MCP Transport and Process Model (Multiple Consumers) | accepted | [ADR-0003-mcp-transport-and-process-model.md](ADR-0003-mcp-transport-and-process-model.md) |
 | ADR-0004 | Capability / Zone Model — Concrete Data Structures and Semantics | accepted | [ADR-0004-capability-zone-model.md](ADR-0004-capability-zone-model.md) |
 | ADR-0005 | Vault Concurrency, Write Provenance, and Loop-Breaking | accepted | [ADR-0005-vault-concurrency-and-provenance.md](ADR-0005-vault-concurrency-and-provenance.md) |
-| ADR-0006 | Event Delivery Semantics, Idempotency, and Durability | accepted | [ADR-0006-event-delivery-and-idempotency.md](ADR-0006-event-delivery-and-idempotency.md) |
+| ADR-0006 | Event Delivery Semantics, Idempotency, and Durability | not implemented | [ADR-0006-event-delivery-and-idempotency.md](ADR-0006-event-delivery-and-idempotency.md) |
 | ADR-0007 | Monorepo vs. Separate Repos Strategy | accepted | [ADR-0007-monorepo-workspace.md](ADR-0007-monorepo-workspace.md) |
 | ADR-0008 | Subagent Execution Model (Isolation Level) | accepted | [ADR-0008-subagent-execution-model.md](ADR-0008-subagent-execution-model.md) |
 | ADR-0009 | How Hook Messages Reach the Main Agent | accepted | [ADR-0009-hook-messages-via-vault.md](ADR-0009-hook-messages-via-vault.md) |
-| ADR-0010 | Secrets Backend and Inter-Component Auth | accepted | [ADR-0010-secrets-and-inter-component-auth.md](ADR-0010-secrets-and-inter-component-auth.md) |
+| ADR-0010 | Secrets Backend and Inter-Component Auth | not implemented | [ADR-0010-secrets-and-inter-component-auth.md](ADR-0010-secrets-and-inter-component-auth.md) |
 | ADR-0011 | Human-in-the-Loop / Proposal & Approval Boundary | accepted | [ADR-0011-proposal-and-approval-boundary.md](ADR-0011-proposal-and-approval-boundary.md) |
 | ADR-0012 | Runtime Audit / Tracing Substrate | accepted | [ADR-0012-runtime-audit-tracing.md](ADR-0012-runtime-audit-tracing.md) |
 | ADR-0013 | Provider Capability Floor / Minimum Contract | accepted | [ADR-0013-provider-capability-floor.md](ADR-0013-provider-capability-floor.md) |
