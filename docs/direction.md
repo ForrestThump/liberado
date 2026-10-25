@@ -7,7 +7,7 @@ canonical_for: product-direction
 open_items: true
 ---
 
-Last edited 2026-10-18 by Forrest
+Last edited 2026-10-25. The 2026-10-18 direction stands. This edit only clarifies the coordination non-goal.
 
 # Liberado direction
 
@@ -37,7 +37,7 @@ Liberado is a user-owned information space and single source of truth for notes,
 ## Non-goals
 - A UI feature race with commercial assistants.
 - A general-purpose assistant competitor.
-- Chasing an optimal coordination substrate before the personal basics work.
+- Only an optimal coordination substrate is deferred until the personal basics work. Specialist agents with a durable mailbox are in scope.
 
 ## Decision filter
 Would this still be valuable if the owner's preferred hosted assistant were already excellent at reasoning, planning, coding and tool use? If no, deprioritize.

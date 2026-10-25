@@ -9,13 +9,14 @@ open_items: true
 
 # Jev integration (post chat|agent shelves)
 
-**Status**: blocked on CAS4 dogfood (≥1 week). This is the canonical phase plan for
-TypeSafe Jev inside Liberado. It does **not** change CAS1–CAS4; those stay in
+**Status**: parked. The backlog holds this at order 14 (A9, group rooms and Jev). Do not
+start it from this plan. This is the phase plan for TypeSafe Jev inside Liberado. It does
+**not** change CAS1–CAS4; those stay in
 [`chat-agent-surface-mode.md`](chat-agent-surface-mode.md).
 
 **Related**: [`chat-agent-surface-mode.md`](chat-agent-surface-mode.md) (Reading B +
-CAS1–CAS4) · [`../../future-work/backlog.md`](../../future-work/backlog.md) (JEV1 / CAS5) ·
-[`../../roadmap.md`](../../roadmap.md) (near-term callout).
+CAS1–CAS4) · [`../../future-work/backlog.md`](../../future-work/backlog.md) (order 14, A9) ·
+[`../../direction.md`](../../direction.md).
 
 **Create-path note**: addressable Agent-shelf sessions are created by the Agent Creator
 (`POST /api/conversations` with `agent_creator: true`) and the privileged face `create_agent`

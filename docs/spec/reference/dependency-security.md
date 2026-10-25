@@ -26,6 +26,22 @@ rejects for the unauthenticated ServerHello key-exchange downgrade.
 The build script is the same file as in 0.23.45. The exemption is
 still debt, not an audit.
 
+The 2026-10 TLS and Tokio advisories moved four exemptions to the patched
+versions. No exemption was added and no criteria changed; each one names a
+release that fixes the advisory cargo-deny reports against the version it
+replaced.
+
+| Crate | Was | Now | Advisory |
+|---|---|---|---|
+| `rustls-webpki` | 0.103.15 | 0.103.16 | RUSTSEC-2026-0382, distrusted intermediates accepted |
+| `webpki-roots` | 1.0.8 | 1.0.11 | RUSTSEC-2026-0381, bundled emSign roots |
+| `webpki-root-certs` | 1.0.8 | 1.0.11 | RUSTSEC-2026-0383, bundled emSign roots |
+| `tokio` | 1.52.3 | 1.53.3 | RUSTSEC-2026-0386, `AsyncFd::new` I/O safety |
+
+`tokio` is pinned to 1.53.3, the first release in the 1.53 line that carries
+the fix, rather than the newest 1.54. The smaller step is the one the lockfile
+can carry on its own.
+
 GitHub Actions use full commit SHAs. Dependabot proposes Action SHA changes.
 `turbovault*` and `turbomcp*` are git+tag pins on the public ForrestThump forks.
 `turbovault*` is pinned to `tag = "liberado-2026-10-15"` and `turbomcp*` stays

@@ -88,10 +88,13 @@ Authority model: [doc-authority.md](spec/reference/doc-authority.md).
 | [docs/future-work/turbovault-modules-integration-roadmap.md](future-work/turbovault-modules-integration-roadmap.md) | plan | draft | advisory | turbovault | turbovault-modules |
 | [docs/future-work/turbovault-vault-events-plugin-plan.md](future-work/turbovault-vault-events-plugin-plan.md) | plan | draft | advisory | turbovault | turbovault-vault-events |
 | [docs/impl/live-conformance.md](impl/live-conformance.md) | runbook | active | implementation | conformance | live-conformance-operation |
+| [docs/reviews/2026-10-opus-agent-runtime.md](reviews/2026-10-opus-agent-runtime.md) | finding | historical | evidence | product | opus-agent-runtime-2026-10 |
+| [docs/reviews/2026-10-opus-review.md](reviews/2026-10-opus-review.md) | finding | historical | evidence | product | opus-review-2026-10 |
 | [docs/roadmap.md](roadmap.md) | plan | active | advisory | product | product-roadmap |
 | [docs/spec/architecture-decisions.md](spec/architecture-decisions.md) | index | superseded | advisory | architecture | — |
 | [docs/spec/architecture/chat-agent-surface-mode.md](spec/architecture/chat-agent-surface-mode.md) | plan | active | implementation | product | chat-agent-surface-mode |
 | [docs/spec/architecture/jev-integration.md](spec/architecture/jev-integration.md) | plan | draft | advisory | product | jev-integration |
+| [docs/spec/architecture/positioning.md](spec/architecture/positioning.md) | architecture | historical | advisory | product | positioning-2026-07 |
 | [docs/spec/reference/cargo-targets.md](spec/reference/cargo-targets.md) | reference | active | normative | coding-harness | cargo-targets |
 | [docs/spec/reference/doc-authority.md](spec/reference/doc-authority.md) | policy | active | normative | docs | document-authority |
 | [docs/spec/reference/local-readiness.md](spec/reference/local-readiness.md) | reference | active | normative | ci | local-readiness |
