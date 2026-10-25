@@ -695,12 +695,16 @@ impl RiskGatedToolRuntime {
         self.signer.sign(proposal)
     }
 
-    /// Routing metadata. Unsigned, so it is safe to set before the signature is computed.
+    /// Stamp the request with who raised it. Called before the signature is computed, because
+    /// `grant_component` is signed — it decides which component an `Everywhere` approval widens,
+    /// so it has to be as tamper-evident as the capability itself. `session_id` and `origin`
+    /// stay unsigned routing metadata.
     fn stamp_permission_origin(&self, proposal: &mut Proposal) {
         match &self.approval {
             Some(stamp) => {
                 proposal.session_id = Some(stamp.session_id.clone());
                 proposal.origin = Some(stamp.origin);
+                proposal.grant_component = stamp.grant_component.clone();
             }
             None => proposal.origin = Some(ApprovalOrigin::Background),
         }

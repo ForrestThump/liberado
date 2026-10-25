@@ -516,7 +516,8 @@ vault-wide tool (`begin_fanout`, `commit_fanout`, `abandon_fanout`, `set_active_
 `Write(Vault("<zone>"))` check doesn't apply. Instead the runtime gate requires the
 **explicit** vault-wide marker grant `Capability::Write(Zone::vault("vault-wide-any"))`,
 checked via `CapabilitySet::holds_vault_wide_grant`. The same capability is what the
-four-button permission card applies when the human picks Once / Session / Everywhere.
+four-button permission card applies when the human picks Once / "Until restart, all chats" /
+Everywhere.
 `Write(<zone>)` for some specific zone is **not** enough: a session that holds
 `Write(Tasks)` can rearrange Tasks, but cannot pick the active vault for the whole
 process or rebuild the index, because those affect every concurrent session. The

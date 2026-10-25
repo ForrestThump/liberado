@@ -151,6 +151,18 @@ pub struct Proposal {
     /// still parses.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pool: Option<String>,
+    /// The `policy.toml` grant `component` whose authority this request belongs to — the component
+    /// an `Everywhere` approval widens.
+    ///
+    /// A chat sets it to the requesting session's own component, so approving a researcher's
+    /// request widens `research` and not the shared `dispatcher` ceiling that every chat can reach
+    /// through `delegate`. `None` means "use the pool's component", which is what every proposal
+    /// written before this field existed means, and what a background pool request still means.
+    ///
+    /// Signed, like `pool` and `requested_grant`: it decides where authority lands, so a rewrite
+    /// between propose and approve must be as evident as a rewritten capability.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grant_component: Option<String>,
     /// When present, this proposal is a **permission request**: the capability the agent was missing
     /// (today only `Write(<zone>)`) that the human is being asked to grant. Approving one applies the
     /// grant at the chosen scope (once/session/everywhere) as well as executing `proposed_action`.
@@ -187,7 +199,7 @@ pub struct Proposal {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub decided_via: Option<crate::permission::DecisionVia>,
     /// HMAC-SHA256 (hex-encoded) over `id`/`correlation_id`/`source`/`proposed_action`/`pool`/
-    /// `requested_grant`/`created`, computed by a [`ProposalSigner`] at creation and checked before
+    /// `grant_component`/`requested_grant`/`created`, computed by a [`ProposalSigner`] at creation and checked before
     /// an approval executes.
     /// Deliberately excludes `status`/`expires`/`approved_scope`/`session_id`/`origin`/
     /// `decided_at`/`decided_via`, which are meant to change as part of the normal
@@ -226,6 +238,8 @@ impl Proposal {
             // existing call sites, and every proposal note written before pools existed) get
             // today's exact single-pool behavior.
             pool: None,
+            // Falls back to the pool's component unless the caller names one — see `grant_component`.
+            grant_component: None,
             // Ordinary proposal by default; `with_requested_grant` marks it a permission request.
             requested_grant: None,
             approved_scope: None,
@@ -373,6 +387,9 @@ impl ProposalSigner {
         mac.update(&action_json);
         mac.update(b"\0");
         mac.update(proposal.pool.as_deref().unwrap_or("").as_bytes());
+        mac.update(b"\0");
+        // Where an `Everywhere` approval lands is authority-bearing — tamper-evident like `pool`.
+        mac.update(proposal.grant_component.as_deref().unwrap_or("").as_bytes());
         mac.update(b"\0");
         // A permission request's granted capability is authority-bearing — tamper-evident like `pool`.
         if let Some(cap) = &proposal.requested_grant {
@@ -810,8 +827,9 @@ mod proptest_tests {
             "[ -~]{1,200}",
             arb_action(),
             arb_status(),
-            proptest::option::of(".{1,20}"), // pool
-            proptest::option::of(arb_cap()), // requested_grant
+            proptest::option::of(".{1,20}"),      // pool
+            proptest::option::of("[a-z-]{1,20}"), // grant_component
+            proptest::option::of(arb_cap()),      // requested_grant
             proptest::option::of(prop_oneof![
                 // approved_scope
                 Just(GrantScope::Once),
@@ -823,7 +841,7 @@ mod proptest_tests {
             ), // expires
         )
             .prop_map(
-                |(id, cid, src, rat, act, st, pool, grant, scope, expires)| Proposal {
+                |(id, cid, src, rat, act, st, pool, component, grant, scope, expires)| Proposal {
                     id,
                     correlation_id: cid,
                     source: src,
@@ -833,6 +851,7 @@ mod proptest_tests {
                     created: chrono::Utc::now(),
                     integrity: String::new(),
                     pool,
+                    grant_component: component,
                     requested_grant: grant,
                     approved_scope: scope,
                     session_id: None,

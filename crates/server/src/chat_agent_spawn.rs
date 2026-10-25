@@ -1,11 +1,12 @@
 //! Wire chat-surface boot settings onto [`ChatSessions`] at daemon boot.
 //!
-//! Two small attachers live here so the boot file stays at its function-count baseline:
+//! Three small attachers live here so the boot file stays at its function-count baseline:
 //!
 //! * [`install`] (privileged `create_agent`) — the profile→grant closure and the weak
 //!   self-handle the face tool needs.
 //! * [`apply_user_timezone`] — the operator IANA timezone, with a fail-soft shape that
 //!   mirrors `apply_timezone` in `liberado-bootstrap`.
+//! * [`apply_profile_components`] — the profile→policy-component map an approval widens.
 //!
 //! Pulling the timezone wiring out of `lib.rs` keeps `build_chat`'s cognitive complexity
 //! under the workspace clippy gate and the file's function count under the module-health
@@ -13,6 +14,7 @@
 //! `ChatSessions` at boot" — small, fail-closed wrappers that exist to keep the boot path
 //! readable.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use liberado_bootstrap::Config;
@@ -37,6 +39,23 @@ pub(crate) fn apply_user_timezone(sessions: ChatSessions, config: &Config) -> Ch
             sessions
         }
     }
+}
+
+/// Wire the profile→component map that says whose authority a chat approval widens.
+///
+/// A permission request raised in a chat carries the `policy.toml` component that chat borrows
+/// its grant from, so tapping "Everywhere" appends to *that* component's overlay. Without this
+/// the daemon falls back to the pool component (`dispatcher`), the one shared principal every
+/// chat can reach through `delegate` — approving the researcher's request would widen all of them.
+pub(crate) fn apply_profile_components(sessions: ChatSessions, config: &Config) -> ChatSessions {
+    let components: HashMap<String, String> = config
+        .topology
+        .session_profiles
+        .iter()
+        .filter(|profile| profile.enabled)
+        .map(|profile| (profile.name.clone(), profile.component_key().to_string()))
+        .collect();
+    sessions.with_profile_components(Arc::new(move |name: &str| components.get(name).cloned()))
 }
 
 /// Attach the fail-closed profile resolver and install the weak self-handle

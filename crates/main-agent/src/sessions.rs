@@ -327,6 +327,9 @@ pub struct ChatSessions {
     face_bridge: Option<Arc<DispatchBridge>>,
     /// Profile→grant resolver for privileged `create_agent` (wired from Config at boot).
     profile_resolver: Option<agent_spawn::ProfileGrantResolver>,
+    /// Profile→`policy.toml` component resolver (wired from Config at boot). Names the component
+    /// an `Everywhere` approval of this chat's permission request widens.
+    profile_components: Option<approval::ProfileComponentResolver>,
     /// Weak self after `Arc::new` so face tools can call `create_with_grant`.
     self_handle: std::sync::OnceLock<std::sync::Weak<ChatSessions>>,
     /// Automatic context compaction (CH3) — config + the provider that writes summaries.
@@ -407,6 +410,7 @@ impl ChatSessions {
             delegation_mode: false,
             face_bridge: None,
             profile_resolver: None,
+            profile_components: None,
             self_handle: std::sync::OnceLock::new(),
             compaction: None,
             agent_profiles: AgentProfiles::default(),
@@ -834,6 +838,7 @@ impl ChatSessions {
                             session,
                             &relevant_mcps,
                             &settings.capabilities,
+                            settings.profile.as_deref(),
                         );
                         self.state_tool_surface(
                             &mut convo,
@@ -956,6 +961,7 @@ impl ChatSessions {
                             session,
                             &relevant_mcps,
                             &settings.capabilities,
+                            settings.profile.as_deref(),
                         );
                         self.state_tool_surface(
                             &mut convo,
@@ -1378,6 +1384,7 @@ impl ChatSessions {
         user: &str,
         session: Ulid,
         capabilities: CapabilitySet,
+        profile: Option<&str>,
     ) -> Arc<dyn ToolRuntime> {
         if capabilities.granted_mcps().is_empty() && capabilities.granted_tools().is_empty() {
             return Arc::new(NoToolsRuntime);
@@ -1391,7 +1398,7 @@ impl ChatSessions {
         if !self.risk_gate_enabled() {
             return scoped;
         }
-        Arc::new(self.gate_with_session_grant(scoped, capabilities, user, session))
+        Arc::new(self.gate_with_session_grant(scoped, capabilities, user, session, profile))
     }
 
     /// Every conversation header, newest first — the sidebar listing.
@@ -1615,6 +1622,7 @@ impl ChatSessions {
         session: Ulid,
         relevant_mcps: &[String],
         capabilities: &CapabilitySet,
+        profile: Option<&str>,
     ) -> Box<dyn ToolRuntime> {
         // Deliberately still `self.capabilities`: this asks "is this daemon guarded at all", which is
         // a property of the *process*, not of one session. Reading the session's set here would let a
@@ -1683,7 +1691,13 @@ impl ChatSessions {
         // here would shrink the gate. See the filter above.
         self.attach_workspace(
             session,
-            Box::new(self.gate_with_session_grant(inner, capabilities.clone(), user, session)),
+            Box::new(self.gate_with_session_grant(
+                inner,
+                capabilities.clone(),
+                user,
+                session,
+                profile,
+            )),
         )
     }
 

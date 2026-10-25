@@ -54,3 +54,6 @@ mod turn_clock_integration_tests;
 
 #[path = "delegate_authority_tests.rs"]
 mod delegate_authority_tests;
+
+#[path = "approval_attribution_tests.rs"]
+mod approval_attribution_tests;

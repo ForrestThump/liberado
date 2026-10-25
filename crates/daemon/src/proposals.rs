@@ -11,7 +11,7 @@ use liberado_orchestrator::{Disposition, EXPIRED_PROPOSAL_REFUSAL_SUMMARY, Orche
 use liberado_vault::{Vault, VaultError};
 use tokio::fs;
 
-use crate::helpers::{archive_outcome_subdir, grant_component_for_pool, slugify};
+use crate::helpers::{archive_outcome_subdir, grant_component_for_proposal, slugify};
 use crate::types::{DAEMON_SOURCE, Daemon, DaemonError, PROPOSALS_ARCHIVE_DIR, ReactionOutcome};
 
 impl Daemon {
@@ -398,8 +398,9 @@ impl Daemon {
     /// calls of the same shape still have to ask:
     ///
     /// - `Everywhere` → persist to the machine-owned overlay (durable; takes effect at the next boot
-    ///   / container recreate, when config is re-loaded). Only a human button tap ever reaches here,
-    ///   so the "agents can't edit their own permission config" invariant holds.
+    ///   / container recreate, when config is re-loaded) under the component the *requester* runs as
+    ///   (see [`grant_component_for_proposal`]). Only a human button tap ever reaches here, so the
+    ///   "agents can't edit their own permission config" invariant holds.
     /// - `Session` → process-lifetime, in-memory grant via `liberado_common::session_grants`, keyed by
     ///   the proposal's pool. Folded post-narrow into that pool's effective ceiling by
     ///   `Orchestrator::run`, so the next same-zone write in this process passes without a prompt.
@@ -411,7 +412,7 @@ impl Daemon {
         let Some(capability) = &proposal.requested_grant else {
             return; // ordinary proposal, not a permission request
         };
-        let component = grant_component_for_pool(proposal.pool.as_deref());
+        let component = grant_component_for_proposal(proposal);
         match proposal.approved_scope {
             Some(liberado_common::GrantScope::Everywhere) => {
                 persist_everywhere_grant(component, capability);

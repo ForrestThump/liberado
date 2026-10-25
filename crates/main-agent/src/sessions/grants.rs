@@ -724,7 +724,7 @@ async fn tool_only_grants_still_get_a_scoped_runtime() {
     let id = sessions.create(None).await.unwrap();
 
     let caps = CapabilitySet::from_iter([Capability::ExecuteTool("tasks-mcp:add".into())]);
-    let runtime = sessions.scoped_extras_runtime("u", id, caps);
+    let runtime = sessions.scoped_extras_runtime("u", id, caps, None);
     let names: Vec<String> = runtime.catalog().iter().map(|t| t.name.clone()).collect();
     assert_eq!(
         names,

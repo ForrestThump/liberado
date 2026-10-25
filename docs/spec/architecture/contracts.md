@@ -157,13 +157,21 @@ not an accident of history; it is a layer rule doing its job. See [`sessions.md`
   adopted when that Telegram peer has no binding yet, so the chat keeps the same conversation.
   Any other human chat shows the card only. A background run keeps the Telegram push it already
   had, and the card also appears in the bound Telegram chat. Matrix does not take that push.
-  The scope buttons stay Deny / Once / Session / Everywhere. On Matrix the card is text, and
-  the owner replies with `once`, `session`, `everywhere`, or `deny`. When another surface
+  The scope buttons stay Deny / Once / Until restart, all chats / Everywhere. On Matrix the card
+  is text, and the owner replies with `once`, `session`, `everywhere`, or `deny` (the action ids
+  are unchanged; only the "session" label is). The middle scope is named for what it does: the
+  grant is in memory and keyed by pool, so it covers every chat on that pool until the daemon
+  restarts. It is not scoped to one conversation.
+  **Everywhere widens the agent that asked.** A chat request carries the `policy.toml` component
+  that chat runs as (`grant_component`), and the daemon appends the grant to *that* component's
+  overlay. A request that names no component — a background pool run, or a note written before
+  the field existed — still falls back to the pool's component. When another surface
   decides a request a channel already showed, that channel edits the message to the decided
   receipt. Telegram and Matrix both do this.
 - **Store**: the proposal note under `proposals/` (and `proposals/archive/` once the daemon
   files it). `session_id`, `origin`, `decided_at`, and `decided_via` are unsigned workflow
-  fields. The approval ledger still records the decision once, `by` `telegram`, `matrix`, or `webui`.
+  fields. `grant_component` is signed, with `pool` and `requested_grant`: it decides which
+  component an `Everywhere` approval widens. The approval ledger still records the decision once, `by` `telegram`, `matrix`, or `webui`.
   The first decision wins. A later tap answers `already decided: …` and does not append
   another ledger line.
 - **HTTP**: `POST /api/approvals/{id}/resolve` and `GET /api/conversations/{id}/approvals`.

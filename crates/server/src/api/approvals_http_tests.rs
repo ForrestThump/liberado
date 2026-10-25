@@ -173,7 +173,7 @@ async fn post_resolves_and_telegram_then_http_share_the_resolver() {
     let (status, body) = post(&app, "perm-shared", "deny").await;
     assert_eq!(status, StatusCode::CONFLICT, "{body}");
     assert!(
-        body.contains("already decided: Approved for this session"),
+        body.contains("already decided: Approved until restart, for all chats"),
         "{body}"
     );
     let note = Proposal::from_note(&vault.read("proposals/perm-shared.md").await.unwrap()).unwrap();

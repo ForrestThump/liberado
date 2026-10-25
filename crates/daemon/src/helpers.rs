@@ -52,6 +52,19 @@ pub(crate) fn grant_component_for_pool(pool: Option<&str>) -> &str {
     }
 }
 
+/// Which component a proposal's approved grant widens.
+///
+/// A request that names its own component wins: a chat stamps the requesting session's component,
+/// so approving the researcher's request widens `research`, not the shared `dispatcher` ceiling
+/// every chat can reach through `delegate`. Without one — a background pool request, or a note
+/// written before the field existed — the pool's component is still the answer.
+pub(crate) fn grant_component_for_proposal(proposal: &liberado_common::Proposal) -> &str {
+    match proposal.grant_component.as_deref() {
+        Some(component) if !component.is_empty() => component,
+        _ => grant_component_for_pool(proposal.pool.as_deref()),
+    }
+}
+
 /// The `proposals/archive/` subdirectory a resolved note is filed under, keyed by its terminal
 /// status — so the folder self-describes the outcome. Non-terminal statuses return `None` (they
 /// have no archive home yet), which is what keeps `archive_terminal_proposal` a no-op for them.

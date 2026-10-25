@@ -119,7 +119,9 @@ Two files live outside the three section files and are written by the running sy
 
 - **Grants overlay** (`<data_dir>/grants.overlay.toml`). When a human taps
   "Approve everywhere", the daemon appends the grant here - never into the
-  hand-edited `policy.toml`. At boot the overlay is parsed and its
+  hand-edited `policy.toml`. It lands on the component the requesting agent
+  runs as, which a chat stamps onto its request; a request that names none
+  falls back to its pool's component. At boot the overlay is parsed and its
   grants/zones APPENDED to the base policy (base entries keep priority, so
   the overlay can only add authority for a zone the base never declared),
   and the merged candidate is validated like any policy. It is deliberately

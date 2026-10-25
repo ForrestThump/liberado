@@ -99,6 +99,7 @@ async fn edit_note_without_a_zone_grant_is_now_a_permission_request() {
     .with_approval(crate::ApprovalStamp {
         session_id: "01M3ZB89WK54HGNG6ATJ9FPJMX".into(),
         origin: liberado_common::ApprovalOrigin::Web,
+        grant_component: None,
     });
 
     let call = ToolInvocation::new(
@@ -206,6 +207,7 @@ async fn move_file_with_destination_out_of_grant_requests_the_destination_zone()
         crate::ApprovalStamp {
             session_id: "sess".into(),
             origin: liberado_common::ApprovalOrigin::Web,
+            grant_component: None,
         },
     ); // no sandbox
     let call = ToolInvocation::new(
@@ -246,6 +248,7 @@ async fn move_file_with_source_out_of_grant_requests_the_source_zone() {
         crate::ApprovalStamp {
             session_id: "sess".into(),
             origin: liberado_common::ApprovalOrigin::Web,
+            grant_component: None,
         },
     ); // no Tasks
     let call = ToolInvocation::new(
@@ -275,6 +278,7 @@ async fn move_file_with_both_zones_out_of_grant_lists_both_missing_zones() {
     let rt = gate_with_grant(dir.path(), inner.clone(), &[]).with_approval(crate::ApprovalStamp {
         session_id: "sess".into(),
         origin: liberado_common::ApprovalOrigin::Web,
+        grant_component: None,
     }); // no zones at all
     let call = ToolInvocation::new(
         "c-no-zones",
@@ -453,6 +457,7 @@ async fn the_tools_missing_from_the_old_write_tools_list_are_now_gated() {
     .with_approval(crate::ApprovalStamp {
         session_id: "sess".into(),
         origin: liberado_common::ApprovalOrigin::Web,
+        grant_component: None,
     });
     for (tool, path) in [
         ("turbovault:manage_tags", "conformance/tags.md"),
@@ -519,6 +524,7 @@ async fn a_vault_wide_write_refuses_a_session_with_no_zone_write_authority() {
     .with_approval(crate::ApprovalStamp {
         session_id: "sess".into(),
         origin: liberado_common::ApprovalOrigin::Web,
+        grant_component: None,
     });
     let call = ToolInvocation::new("c1", "turbovault:begin_fanout", serde_json::json!({}));
     let msg = rt
@@ -570,6 +576,7 @@ async fn a_vault_wide_write_only_zone_grant_raises_a_permission_request() {
     .with_approval(crate::ApprovalStamp {
         session_id: "sess".into(),
         origin: liberado_common::ApprovalOrigin::Web,
+        grant_component: None,
     });
     let call = ToolInvocation::new("c1", "turbovault:begin_fanout", serde_json::json!({}));
     let result = rt.invoke(&call).await.expect("a chat surface must ask");
