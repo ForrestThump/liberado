@@ -117,7 +117,7 @@ async fn scoped_extras_gates_on_the_session_grant_not_the_process_grant() -> Res
     let dir = tempfile::tempdir().map_err(|err| err.to_string())?;
     let (sessions, id) = disjoint_grant_sessions(dir.path(), false).await?;
     let grant = sessions.turn_settings(id).await.capabilities;
-    let runtime = sessions.scoped_extras_runtime("list mail", id, grant);
+    let runtime = sessions.scoped_extras_runtime("list mail", id, grant, None);
     assert_session_tool_allowed_and_process_tool_refused(runtime.as_ref()).await
 }
 
@@ -129,6 +129,6 @@ async fn build_turn_runtime_gates_on_the_session_grant_not_the_process_grant() -
     // change the capability check; it only proves that branch still uses the session grant.
     let (sessions, id) = disjoint_grant_sessions(dir.path(), true).await?;
     let grant = sessions.turn_settings(id).await.capabilities;
-    let runtime = sessions.build_turn_runtime("list mail", id, &[], &grant);
+    let runtime = sessions.build_turn_runtime("list mail", id, &[], &grant, None);
     assert_session_tool_allowed_and_process_tool_refused(runtime.as_ref()).await
 }

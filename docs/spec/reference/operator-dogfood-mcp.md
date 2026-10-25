@@ -95,7 +95,7 @@ This tool does not change the grant.
 ## No approve tool
 
 There is no approve tool and no resolve tool. `POST /api/approvals/{id}/resolve`
-records a human decision (Deny / Once / Session / Everywhere). That route is
+records a human decision (Deny / Once / "Until restart, all chats" / Everywhere). That route is
 not a `GET`, and it is not registered on this MCP. A test scans the tool
 declarations and fails if an approve or resolve tool appears. A second test
 fails if `list_pending_approvals` or `get_agent_grants` stop using `GET`.

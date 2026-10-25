@@ -110,7 +110,12 @@ pack, not a fake.
 |---|---|---|
 | `/spawn`, `POST /api/goals` | coding / life / … | Foreground when a human starts them |
 | cron / webhook / vault reaction | `dispatch` | `ReactionOutcome::Dispatched { session_id }` |
-| face-agent `delegate` | `dispatch` | Awaits terminal inside the chat turn; no `AskHuman` (D-e) |
+| face-agent `delegate` | `dispatch` | Awaits terminal inside the chat turn. The child grant is the caller's grant narrowed to the dispatcher ceiling, then `AskHuman` is removed (D-e). |
+
+Cancelling a chat turn cancels the hub sessions that conversation started. The child is addressed
+by `GoalSpec.origin.conversation_id`, so a worker another chat delegated is untouched. The cascade
+runs whether or not a turn is still in flight: a cancel that arrives just after the turn retired
+still has to stop what the turn left running.
 
 See [`../../future-work/archive/one-execution-engine-plan.md`](../../future-work/archive/one-execution-engine-plan.md) for the
 convergence (E1–E7).
@@ -120,7 +125,11 @@ convergence (E1–E7).
 `SessionGrant { capabilities, profile, overrides }` is resolved by the **server** from
 `[[session_profiles]]` in `topology.toml` + `[[grants]]` in `policy.toml`, recorded on the session,
 and **never widened** thereafter. The kernel never reads config — it is handed an already-resolved
-authority, never a key to look up.
+authority, never a key to look up. A face-agent `delegate`, and a pre-turn dispatch hosted from
+that chat, narrows the recorded grant to the dispatcher ceiling before the child starts. A profile
+whose grant is only `Read` and `ReadSummary` (and not empty) resolves `delegation` to false when the
+key is omitted. `AskHuman` is not a read, so a coding chat still delegates. An explicit
+`delegation = true` still delegates, and the child stays inside the caller's grant.
 
 `Capability::AskHuman` is what makes interactivity a *capability* rather than a subtype
 ([`channels-and-interactivity.md`](channels-and-interactivity.md), Decision A). A grant without it

@@ -28,11 +28,13 @@ const CHOICES: [PermissionChoice; 4] = [
         decided: "Approved once",
         row: 0,
     },
+    // Not one session. The grant is in-memory and keyed by *pool*, so it covers every chat on
+    // that pool until the daemon restarts (`liberado_common::session_grants`). The label says so.
     PermissionChoice {
         action: "session",
-        label: "🔁 This session",
+        label: "🔁 Until restart, all chats",
         emoji: "🔁",
-        decided: "Approved for this session",
+        decided: "Approved until restart, for all chats",
         row: 0,
     },
     PermissionChoice {

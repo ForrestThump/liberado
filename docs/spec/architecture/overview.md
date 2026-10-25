@@ -166,7 +166,9 @@ domain pack** (first pack — not the product center; see [`agentic-loops.md`](a
 - **Capability/zone containment (Decision 4)** — `CapabilitySet` is narrow-only; authority only
   shrinks down a chain. **Subagents** get a risk-gate set of `dispatcher_ceiling ∩ allowed_mcps`
   (classifier-scoped MCP names; empty decision `capabilities` derives from `allowed_mcps`, never
-  full inherit of every dispatcher tool). **Main chat** is thin by default (face agent +
+  full inherit of every dispatcher tool). Face `delegate` narrows further: the child grant is the
+  calling session's grant intersected with the dispatcher ceiling, then without `AskHuman`.
+  **Main chat** is thin by default (face agent +
   `delegate`); specialist MCPs (e.g. `turbovault`) are granted on the **`dispatcher`** component in
   `policy.toml`. See [`delegate_dogfood_issues.md`](../../future-work/archive/delegate_dogfood_issues.md).
 - **Provider-agnostic inference (Decision 13)** — one `Provider` trait, swappable from config, with

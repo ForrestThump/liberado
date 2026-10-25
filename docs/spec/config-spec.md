@@ -119,7 +119,9 @@ Two files live outside the three section files and are written by the running sy
 
 - **Grants overlay** (`<data_dir>/grants.overlay.toml`). When a human taps
   "Approve everywhere", the daemon appends the grant here - never into the
-  hand-edited `policy.toml`. At boot the overlay is parsed and its
+  hand-edited `policy.toml`. It lands on the component the requesting agent
+  runs as, which a chat stamps onto its request; a request that names none
+  falls back to its pool's component. At boot the overlay is parsed and its
   grants/zones APPENDED to the base policy (base entries keep priority, so
   the overlay can only add authority for a zone the base never declared),
   and the merged candidate is validated like any policy. It is deliberately
@@ -183,6 +185,17 @@ the default backend.
 
 A profile that names a provider, including the daemon default, gets its own client when that key
 is set. Only an omitted `provider` shares the face client.
+
+### Delegation
+
+`delegation` on `[[session_profiles]]` is optional.
+
+- `delegation = true` or `delegation = false` is used as written.
+- Omit the key and the profile inherits `topology.main_agent.delegation_mode`, except when the resolved grant is read-only.
+- A read-only grant is non-empty and every capability is `Read` or `ReadSummary`. That profile resolves to `delegation = false`. `AskHuman` is not a read, so a coding chat that can ask a person still inherits.
+- An empty grant is not read-only. It still inherits the daemon setting.
+
+`delegate`, and a pre-turn dispatch hosted from that chat, gives the child the caller's grant narrowed to the `dispatcher` ceiling. `AskHuman` is then removed. The child is never wider than the caller.
 
 ## 4.5 Schedule file writer
 

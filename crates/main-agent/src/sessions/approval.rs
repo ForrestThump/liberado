@@ -15,6 +15,10 @@ use liberado_executor::{ApprovalStamp, PermissionSink, RiskGatedToolRuntime, Too
 
 use super::ChatSessions;
 
+/// Resolves a chat profile name → the `policy.toml` grant `component` it borrows its authority
+/// from. Wired from the daemon's config at boot; `None` for an unknown or disabled profile.
+pub type ProfileComponentResolver = Arc<dyn Fn(&str) -> Option<String> + Send + Sync>;
+
 /// Bound channel sessions and the scope-button senders. The server fills both after `Arc::new`.
 pub(super) struct ApprovalHooks {
     binding_slot: Arc<Mutex<Vec<SessionChannel>>>,
@@ -31,6 +35,15 @@ impl ApprovalHooks {
 }
 
 impl ChatSessions {
+    /// Attach the profile→component resolver that says whose authority a chat approval widens.
+    ///
+    /// Without it every chat approval falls back to the daemon's pool component (`dispatcher`),
+    /// which is the shared principal every chat can already reach through `delegate`.
+    pub fn with_profile_components(mut self, resolver: ProfileComponentResolver) -> Self {
+        self.profile_components = Some(resolver);
+        self
+    }
+
     /// The slot the server fills with the channel-binding snapshot.
     pub fn binding_slot(&self) -> Arc<Mutex<Vec<SessionChannel>>> {
         Arc::clone(&self.approval_hooks.binding_slot)
@@ -76,16 +89,24 @@ impl ChatSessions {
             .map(|(_, sink)| Arc::clone(sink))
     }
 
-    /// Stamp session and origin onto a chat risk gate, and attach that channel's sink when this
-    /// session is bound to one. The grant already chosen by the caller is left alone.
+    /// Stamp session, origin and grant component onto a chat risk gate, and attach that channel's
+    /// sink when this session is bound to one. The grant already chosen by the caller is left alone.
+    ///
+    /// `profile` is this turn's profile name, resolved to the `policy.toml` component it borrows
+    /// its authority from. That is where an `Everywhere` approval of this chat's request lands.
     pub(super) fn stamp_approval(
         &self,
         session: Ulid,
+        profile: Option<&str>,
         mut gated: RiskGatedToolRuntime,
     ) -> RiskGatedToolRuntime {
         let session_id = session.to_string();
         let origin = approval_origin(&session_id, self.bound_channel(&session_id));
-        gated = gated.with_approval(ApprovalStamp { session_id, origin });
+        gated = gated.with_approval(ApprovalStamp {
+            session_id,
+            origin,
+            grant_component: self.grant_component_for_profile(profile),
+        });
         if let Some(channel) = origin.channel()
             && let Some(sink) = self.sink_for(channel)
         {
@@ -103,13 +124,17 @@ impl ChatSessions {
     ///
     /// Chat is not one of the daemon's named pools. Proposals are tagged
     /// [`DEFAULT_POOL`] so an approved chat proposal runs on the daemon's default
-    /// pool orchestrator.
+    /// pool orchestrator. The pool says where the approved call *runs*; `profile`
+    /// says whose authority it widens. They are not the same question, and reading
+    /// the first as an answer to the second is what sent every chat approval to
+    /// `dispatcher`.
     pub(super) fn gate_with_session_grant(
         &self,
         inner: Arc<dyn ToolRuntime>,
         grant: CapabilitySet,
         user: &str,
         session: Ulid,
+        profile: Option<&str>,
     ) -> RiskGatedToolRuntime {
         let mut gated = RiskGatedToolRuntime::new(
             inner,
@@ -127,7 +152,16 @@ impl ChatSessions {
         if let Some(catalog) = &self.live_catalog {
             gated = gated.with_live_catalog(catalog.clone());
         }
-        self.stamp_approval(session, gated)
+        self.stamp_approval(session, profile, gated)
+    }
+
+    /// The `policy.toml` component a chat profile borrows its grant from.
+    ///
+    /// `None` when no resolver is wired (test fixtures) or the profile is unknown, which leaves
+    /// the daemon on its pool-keyed fallback — the behavior before this was carried at all.
+    fn grant_component_for_profile(&self, profile: Option<&str>) -> Option<String> {
+        let resolver = self.profile_components.as_ref()?;
+        resolver(profile?)
     }
 
     /// Whether runtime risk/zone/consequence gates must wrap tool calls.

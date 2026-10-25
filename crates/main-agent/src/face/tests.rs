@@ -2,13 +2,15 @@
 
 use super::*;
 use liberado_common::{
-    Capability, CapabilityCatalog, Delivery, DispatchAction, DispatchDecision, ProposalSigner,
+    Capability, CapabilityCatalog, Delivery, DispatchAction, DispatchDecision, ProposalSigner, Zone,
 };
 use liberado_dispatch_pack::DispatchPack;
 use liberado_executor::{RuntimeFactory, RuntimeSetupError, SUBMIT_REPORT_TOOL};
 use liberado_orchestrator::Orchestrator;
 use liberado_provider::{CompletionResponse, MockProvider, ToolInvocation};
-use liberado_session::{GoalSessionHub, GoalSessionStore};
+use liberado_session::{
+    DomainPackRunner, GoalResult, GoalSessionHub, GoalSessionStore, PackError, TerminalKind,
+};
 use std::sync::Arc;
 
 struct NoopFactory;
@@ -89,17 +91,23 @@ async fn delegate_strips_askhuman_but_keeps_the_rest_of_the_grant() {
     unsafe { std::env::set_var("LIBERADO_DATA_DIR", data.path()) };
 
     let hub = hub_with_succeeding_pack().await;
+    let caller = CapabilitySet::from_iter([
+        Capability::ExecuteMcp("tasks-mcp".into()),
+        Capability::AskHuman,
+    ]);
     let bridge = DispatchBridge {
         hub: hub.clone(),
-        dispatcher_capabilities: CapabilitySet::from_iter([
-            Capability::ExecuteMcp("tasks-mcp".into()),
-            Capability::AskHuman,
-        ]),
+        dispatcher_capabilities: caller.clone(),
     };
     let deferral = AtomicBool::new(false);
 
     let report = bridge
-        .delegate("count my open tasks", Some("parent-chat"), &deferral)
+        .delegate(
+            "count my open tasks",
+            Some("parent-chat"),
+            &deferral,
+            &caller,
+        )
         .await
         .expect("delegation succeeds");
 
@@ -144,6 +152,105 @@ async fn delegate_strips_askhuman_but_keeps_the_rest_of_the_grant() {
             .unwrap()
             .starts_with("chat-delegate-"),
         "journal stitching survives"
+    );
+
+    unsafe { std::env::remove_var("LIBERADO_DATA_DIR") };
+}
+
+/// Succeeds only when the child grant can write the `tasks` zone.
+/// A read-only caller must come back refused.
+struct WriteProbePack;
+
+#[async_trait]
+impl DomainPackRunner for WriteProbePack {
+    fn domain_id(&self) -> &str {
+        "dispatch"
+    }
+
+    async fn run(
+        &self,
+        _session_id: &str,
+        _goal: &liberado_session::GoalSpec,
+        ctx: &liberado_session::PackContext<'_>,
+        _events: tokio::sync::mpsc::Sender<liberado_session::SessionEvent>,
+        _inputs: liberado_session::InputChannel,
+        _cancel: tokio::sync::watch::Receiver<bool>,
+    ) -> Result<GoalResult, PackError> {
+        let write = Capability::Write(Zone::vault("tasks"));
+        if ctx.can(&write) {
+            Ok(GoalResult {
+                terminal: TerminalKind::Succeeded,
+                summary: "wrote the task".into(),
+                artifacts: Vec::new(),
+                diagnostics: serde_json::Value::Null,
+            })
+        } else {
+            Ok(GoalResult {
+                terminal: TerminalKind::Failed,
+                summary: "refused: write not granted".into(),
+                artifacts: Vec::new(),
+                diagnostics: serde_json::Value::Null,
+            })
+        }
+    }
+}
+
+/// A research (read-only) caller that asks `delegate` to write a task is refused.
+/// The child grant is the caller's grant narrowed to the dispatcher ceiling.
+#[tokio::test]
+async fn a_read_only_caller_cannot_write_through_delegate() {
+    let _env = crate::dispatch_journal::survivor_tests::data_dir_lock().await;
+    let data = tempfile::tempdir().unwrap();
+    unsafe { std::env::set_var("LIBERADO_DATA_DIR", data.path()) };
+
+    let mut hub = GoalSessionHub::new(GoalSessionStore::new());
+    hub.register_pack(Arc::new(WriteProbePack));
+    let hub = Arc::new(hub);
+
+    let research = CapabilitySet::from_iter([Capability::Read(Zone::vault("tasks"))]);
+    let ceiling = CapabilitySet::from_iter([
+        Capability::Read(Zone::vault("tasks")),
+        Capability::Write(Zone::vault("tasks")),
+        Capability::ExecuteMcp("tasks-mcp".into()),
+    ]);
+    assert!(
+        !research.contains(&Capability::Write(Zone::vault("tasks"))),
+        "the research caller cannot write tasks"
+    );
+    assert!(ceiling.contains(&Capability::Write(Zone::vault("tasks"))));
+
+    let bridge = DispatchBridge {
+        hub: hub.clone(),
+        dispatcher_capabilities: ceiling,
+    };
+    let deferral = AtomicBool::new(false);
+    let report = bridge
+        .delegate(
+            "write a task: buy milk",
+            Some("research-chat"),
+            &deferral,
+            &research,
+        )
+        .await
+        .expect("the bridge returns a report");
+
+    assert!(
+        report.contains("refused"),
+        "a read-only research caller must not write through delegate: {report}"
+    );
+    assert!(
+        !report.contains("wrote the task"),
+        "the write must not succeed: {report}"
+    );
+    let rows = hub.list().await;
+    assert_eq!(rows.len(), 1);
+    assert!(
+        !rows[0]
+            .grant
+            .capabilities
+            .contains(&Capability::Write(Zone::vault("tasks"))),
+        "child grant must not include Write: {:?}",
+        rows[0].grant.capabilities
     );
 
     unsafe { std::env::remove_var("LIBERADO_DATA_DIR") };

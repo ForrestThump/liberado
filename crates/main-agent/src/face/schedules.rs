@@ -311,6 +311,7 @@ mod tests {
             None,
             Arc::new(AtomicBool::new(false)),
             None,
+            liberado_common::CapabilitySet::empty(),
         );
         let names: Vec<_> = rt.catalog().into_iter().map(|tool| tool.name).collect();
         assert!(names.iter().all(|name| !is_schedule_write_tool(name)));

@@ -1,7 +1,8 @@
 //! Permission card rendered in the owning chat.
 //!
-//! Labels come from the wire payload. This module does not know Deny / Once / Session /
-//! Everywhere. A test pins that: a card whose option label is `CUSTOM` renders `CUSTOM`.
+//! Labels come from the wire payload. This module does not know Deny / Once / the
+//! until-restart scope / Everywhere. A test pins that: a card whose option label is
+//! `CUSTOM` renders `CUSTOM`.
 
 use dioxus::prelude::*;
 

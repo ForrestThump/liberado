@@ -81,6 +81,8 @@ mod agent_hooks;
 mod agent_profiles;
 #[path = "sessions/automation_editor.rs"]
 mod automation_editor;
+#[path = "sessions/cancel_cascade.rs"]
+mod cancel_cascade;
 pub use automation_editor::{AUTOMATION_EDITOR_OPENER, EditorTarget};
 #[path = "sessions/face_gate.rs"]
 mod face_gate;
@@ -175,7 +177,8 @@ pub fn default_conversation_title(user_text: &str) -> String {
 /// chase, and the cost of preventing it is one type.
 struct TurnSettings {
     capabilities: CapabilitySet,
-    /// Whether the face agent may `delegate`. Resolved: the profile's setting, else the daemon's.
+    /// Whether the face agent may `delegate`. The profile's setting, else the daemon's.
+    /// A read-only grant that omits the setting is off.
     delegation: bool,
     /// Extra system-prompt text for this profile, injected per turn.
     prompt_append: Option<String>,
@@ -326,6 +329,9 @@ pub struct ChatSessions {
     face_bridge: Option<Arc<DispatchBridge>>,
     /// Profile→grant resolver for privileged `create_agent` (wired from Config at boot).
     profile_resolver: Option<agent_spawn::ProfileGrantResolver>,
+    /// Profile→`policy.toml` component resolver (wired from Config at boot). Names the component
+    /// an `Everywhere` approval of this chat's permission request widens.
+    profile_components: Option<approval::ProfileComponentResolver>,
     /// Weak self after `Arc::new` so face tools can call `create_with_grant`.
     self_handle: std::sync::OnceLock<std::sync::Weak<ChatSessions>>,
     /// Automatic context compaction (CH3) — config + the provider that writes summaries.
@@ -406,6 +412,7 @@ impl ChatSessions {
             delegation_mode: false,
             face_bridge: None,
             profile_resolver: None,
+            profile_components: None,
             self_handle: std::sync::OnceLock::new(),
             compaction: None,
             agent_profiles: AgentProfiles::default(),
@@ -822,7 +829,7 @@ impl ChatSessions {
                 // agent's now-redundant reply to a tiny pointer at that notification.
                 collapse_if_deferred(reply, &turn_deferral)
             } else {
-                match self.dispatch_turn(user, settings.delegation).await {
+                match self.dispatch_turn(user, &settings).await {
                     DispatchOutcome::Answered(reply) => {
                         convo.answer(user, &reply);
                         reply
@@ -833,6 +840,7 @@ impl ChatSessions {
                             session,
                             &relevant_mcps,
                             &settings.capabilities,
+                            settings.profile.as_deref(),
                         );
                         self.state_tool_surface(
                             &mut convo,
@@ -942,7 +950,7 @@ impl ChatSessions {
                     .await;
                 turn_failure::keep_or_record(self, session, ran).await?;
             } else {
-                match self.dispatch_turn(user, settings.delegation).await {
+                match self.dispatch_turn(user, &settings).await {
                     DispatchOutcome::Answered(reply) => {
                         convo.answer(user, &reply);
                         // Deliver the already-resolved reply as a single token so it renders through the
@@ -955,6 +963,7 @@ impl ChatSessions {
                             session,
                             &relevant_mcps,
                             &settings.capabilities,
+                            settings.profile.as_deref(),
                         );
                         self.state_tool_surface(
                             &mut convo,
@@ -1028,8 +1037,11 @@ impl ChatSessions {
             self.default_turn_settings()
         } else {
             TurnSettings {
+                delegation: header
+                    .grant
+                    .capabilities
+                    .delegation_allowed(header.grant.delegation, self.delegation_mode),
                 capabilities: header.grant.capabilities,
-                delegation: header.grant.delegation.unwrap_or(self.delegation_mode),
                 prompt_append: header.grant.prompt_append,
                 profile: header.grant.profile,
                 model: header.grant.model,
@@ -1203,28 +1215,6 @@ impl ChatSessions {
             .collect()
     }
 
-    /// Stop the turn running for `session`. `true` if there was one.
-    ///
-    /// The explicit counterpart to what a disconnect used to do implicitly. It has to exist *before*
-    /// turns are detached, or there would be no way to stop one at all — closing the stream was the
-    /// only cancel this system had.
-    pub fn cancel_turn(&self, session: Ulid) -> bool {
-        let entry = {
-            let mut running = self.running.lock().unwrap_or_else(|p| p.into_inner());
-            running.remove(&session)
-        };
-        let Some(entry) = entry else {
-            return false;
-        };
-        if let Some(handle) = entry.abort.lock().unwrap_or_else(|p| p.into_inner()).take() {
-            handle.abort();
-        }
-        // Tell anyone watching why their stream ended. Without this a cancelled turn looks
-        // indistinguishable from one still thinking.
-        entry.publish(AgentEvent::Error("turn cancelled".into()));
-        true
-    }
-
     /// Run one turn detached, forwarding its events to `entry` and retiring the entry at the end.
     fn spawn_turn(self: Arc<Self>, session: Ulid, message: String, entry: Arc<RunningTurn>) {
         // `turn_stream` still speaks mpsc, unchanged. Bridging here rather than changing its
@@ -1374,6 +1364,7 @@ impl ChatSessions {
         user: &str,
         session: Ulid,
         capabilities: CapabilitySet,
+        profile: Option<&str>,
     ) -> Arc<dyn ToolRuntime> {
         if capabilities.granted_mcps().is_empty() && capabilities.granted_tools().is_empty() {
             return Arc::new(NoToolsRuntime);
@@ -1387,7 +1378,7 @@ impl ChatSessions {
         if !self.risk_gate_enabled() {
             return scoped;
         }
-        Arc::new(self.gate_with_session_grant(scoped, capabilities, user, session))
+        Arc::new(self.gate_with_session_grant(scoped, capabilities, user, session, profile))
     }
 
     /// Every conversation header, newest first — the sidebar listing.
@@ -1508,7 +1499,8 @@ impl ChatSessions {
 
     /// Classify `user` via the dispatcher (when attached and this session still delegates).
     /// `delegation = false` returns [`DispatchOutcome::Proceed`] with no classifier call.
-    async fn dispatch_turn(&self, user: &str, delegation: bool) -> DispatchOutcome {
+    async fn dispatch_turn(&self, user: &str, settings: &TurnSettings) -> DispatchOutcome {
+        let delegation = settings.delegation;
         let Some(dispatcher) = delegation.then_some(self.dispatcher.as_ref()).flatten() else {
             return DispatchOutcome::Proceed(Vec::new()); // no dispatcher, or a direct profile
         };
@@ -1548,11 +1540,9 @@ impl ChatSessions {
             );
         };
         let correlation_id = format!("chat-{}", Ulid::new());
-        let mut grant_caps = dispatch_caps;
-        // Pre-turn work inside a chat turn cannot block on AskHuman (same as D-e for delegate).
-        grant_caps
-            .capabilities
-            .retain(|c| !matches!(c, liberado_common::Capability::AskHuman));
+        // Same bound as `delegate`: the caller ∩ the dispatcher ceiling, then no AskHuman.
+        let grant_caps =
+            crate::face::delegated_capabilities(&settings.capabilities, &dispatch_caps);
         let goal = GoalSpec {
             id: None,
             description: user.to_string(),
@@ -1612,6 +1602,7 @@ impl ChatSessions {
         session: Ulid,
         relevant_mcps: &[String],
         capabilities: &CapabilitySet,
+        profile: Option<&str>,
     ) -> Box<dyn ToolRuntime> {
         // Deliberately still `self.capabilities`: this asks "is this daemon guarded at all", which is
         // a property of the *process*, not of one session. Reading the session's set here would let a
@@ -1680,7 +1671,13 @@ impl ChatSessions {
         // here would shrink the gate. See the filter above.
         self.attach_workspace(
             session,
-            Box::new(self.gate_with_session_grant(inner, capabilities.clone(), user, session)),
+            Box::new(self.gate_with_session_grant(
+                inner,
+                capabilities.clone(),
+                user,
+                session,
+                profile,
+            )),
         )
     }
 

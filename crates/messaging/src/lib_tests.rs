@@ -42,7 +42,7 @@ fn telegram_rows_and_card_options_come_from_one_table() {
     assert_eq!(decided_phrase("expired"), "Expired");
     assert_eq!(
         already_decided_phrase("session"),
-        "already decided: Approved for this session"
+        "already decided: Approved until restart, for all chats"
     );
     assert_eq!(
         permission_receipt("✅", "Approved once", "needs write"),

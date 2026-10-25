@@ -1775,6 +1775,12 @@
     "functions": 92,
     "cyclomatic": 151
   },
+  "crates/common/src/capability/delegation.rs": {
+    "ploc": 57,
+    "lloc": 19,
+    "functions": 5,
+    "cyclomatic": 12
+  },
   "crates/common/src/catalog.rs": {
     "ploc": 376,
     "lloc": 140,
@@ -2020,6 +2026,18 @@
     "lloc": 35,
     "functions": 7,
     "cyclomatic": 10
+  },
+  "crates/config-loader/src/model/config_readonly_delegation.rs": {
+    "ploc": 30,
+    "lloc": 2,
+    "functions": 2,
+    "cyclomatic": 7
+  },
+  "crates/config-loader/src/model/config_readonly_delegation_tests.rs": {
+    "ploc": 99,
+    "lloc": 62,
+    "functions": 7,
+    "cyclomatic": 9
   },
   "crates/config-loader/src/model/config_turn_budgets.rs": {
     "ploc": 26,
@@ -3283,9 +3301,9 @@
   },
   "crates/main-agent/src/sessions.rs": {
     "ploc": 1235,
-    "lloc": 282,
-    "functions": 108,
-    "cyclomatic": 220
+    "lloc": 279,
+    "functions": 104,
+    "cyclomatic": 215
   },
   "crates/main-agent/src/sessions/agent_hooks.rs": {
     "ploc": 54,
@@ -3317,6 +3335,12 @@
     "functions": 12,
     "cyclomatic": 22
   },
+  "crates/main-agent/src/sessions/approval_attribution_tests.rs": {
+    "ploc": 142,
+    "lloc": 32,
+    "functions": 9,
+    "cyclomatic": 13
+  },
   "crates/main-agent/src/sessions/automation_editor.rs": {
     "ploc": 284,
     "lloc": 43,
@@ -3328,6 +3352,18 @@
     "lloc": 128,
     "functions": 24,
     "cyclomatic": 29
+  },
+  "crates/main-agent/src/sessions/cancel_cascade.rs": {
+    "ploc": 56,
+    "lloc": 23,
+    "functions": 5,
+    "cyclomatic": 12
+  },
+  "crates/main-agent/src/sessions/cancel_cascade_tests.rs": {
+    "ploc": 157,
+    "lloc": 43,
+    "functions": 7,
+    "cyclomatic": 18
   },
   "crates/main-agent/src/sessions/compaction.rs": {
     "ploc": 660,
@@ -3346,6 +3382,12 @@
     "lloc": 78,
     "functions": 5,
     "cyclomatic": 6
+  },
+  "crates/main-agent/src/sessions/delegate_authority_tests.rs": {
+    "ploc": 161,
+    "lloc": 24,
+    "functions": 8,
+    "cyclomatic": 10
   },
   "crates/main-agent/src/sessions/dispatch.rs": {
     "ploc": 516,

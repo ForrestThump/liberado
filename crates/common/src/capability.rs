@@ -15,6 +15,8 @@ use crate::error::{Error, Result};
 mod vault_grant;
 pub use vault_grant::VaultWideGrant;
 
+mod delegation;
+
 /// A logical scope of data or system access.
 ///
 /// Zones are declared in policy config (Decision 14); the values here are how a capability
