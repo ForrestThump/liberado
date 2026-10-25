@@ -612,6 +612,9 @@ name = "researcher"
 component = "research"
 description = "Read-only research hat chat (Agents shelf)"
 enabled = true
+# A read-only grant resolves to delegation = false when this key is omitted.
+# The key is set so the example states that default.
+delegation = false
 
 [[session_profiles]]
 name = "operator"

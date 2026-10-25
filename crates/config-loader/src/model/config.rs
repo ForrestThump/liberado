@@ -175,17 +175,7 @@ impl Config {
             .iter()
             .find(|p| p.enabled && p.name == name);
         match found {
-            Some(p) => Ok(ResolvedProfile {
-                name: Some(p.name.clone()),
-                description: p.description.clone(),
-                domain: p.domain.clone(),
-                capabilities: self.profile_capabilities(p),
-                overrides: p.overrides.clone(),
-                max_idle_secs: p.max_idle_secs,
-                delegation: p.delegation,
-                model: p.model.clone(),
-                prompt_append: p.prompt_append.clone(),
-            }),
+            Some(p) => Ok(super::config_readonly_delegation::declared_profile(self, p)),
             None => super::config_builtin_editor::profile_or_unknown(self, name),
         }
     }
@@ -201,7 +191,7 @@ impl Config {
     /// The narrowing is `CapabilitySet::narrow`, which understands that `ExecuteMcp` subsumes
     /// `ExecuteTool` — so a ceiling granting the whole `turbovault` server permits a profile that
     /// asks for two of its tools, which is the case this feature exists for.
-    fn profile_capabilities(&self, profile: &SessionProfile) -> CapabilitySet {
+    pub(super) fn profile_capabilities(&self, profile: &SessionProfile) -> CapabilitySet {
         if !profile.declares_authority() {
             return self.policy.capabilities_for(profile.component_key());
         }

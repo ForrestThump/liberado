@@ -746,9 +746,11 @@ pub struct SessionProfile {
     /// The tools this profile may call — a whole server, or named tools within one.
     #[serde(default)]
     pub mcps: Vec<McpGrant>,
-    /// Whether the face agent may `delegate` in this session. `None` = the daemon's default
-    /// (`topology.main_agent.delegation_mode`). `Some(false)` is what makes a "basic chat" profile a
-    /// mode rather than merely a shorter tool list.
+    /// Whether the face agent may `delegate` in this session. `None` inherits
+    /// `topology.main_agent.delegation_mode`, except when the resolved grant is only
+    /// `Read` and `ReadSummary` (and not empty). That grant resolves to `false`.
+    /// `AskHuman` is not a read, so a coding chat still inherits. An explicit
+    /// `true` or `false` is kept. An empty grant still inherits.
     #[serde(default)]
     pub delegation: Option<bool>,
     /// Model to pin for sessions under this profile. `None` = the daemon's current face model.

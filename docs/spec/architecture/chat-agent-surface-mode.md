@@ -275,7 +275,7 @@ behavior is §6e. `POST /api/conversations` with `{profile}` stays for other cli
 
 ### Not this path
 
-- `delegate` — GoalSessionHub dispatch jobs; strips AskHuman; awaits terminal result.
+- `delegate` — GoalSessionHub dispatch jobs. The child grant is the caller narrowed to the dispatcher ceiling, then without AskHuman. Awaits the terminal result.
 - Mid-conversation `set_profile` — human authority switch, not create-time stamp.
 
 ## 6c. Every site reads the deployment's tuned set

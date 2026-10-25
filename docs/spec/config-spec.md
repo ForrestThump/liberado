@@ -184,6 +184,17 @@ the default backend.
 A profile that names a provider, including the daemon default, gets its own client when that key
 is set. Only an omitted `provider` shares the face client.
 
+### Delegation
+
+`delegation` on `[[session_profiles]]` is optional.
+
+- `delegation = true` or `delegation = false` is used as written.
+- Omit the key and the profile inherits `topology.main_agent.delegation_mode`, except when the resolved grant is read-only.
+- A read-only grant is non-empty and every capability is `Read` or `ReadSummary`. That profile resolves to `delegation = false`. `AskHuman` is not a read, so a coding chat that can ask a person still inherits.
+- An empty grant is not read-only. It still inherits the daemon setting.
+
+`delegate`, and a pre-turn dispatch hosted from that chat, gives the child the caller's grant narrowed to the `dispatcher` ceiling. `AskHuman` is then removed. The child is never wider than the caller.
+
 ## 4.5 Schedule file writer
 
 `[[schedules]]` is the only schedule store. The daemon copies enabled rows into the cron task

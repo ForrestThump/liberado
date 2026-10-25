@@ -403,6 +403,35 @@ async fn a_profile_silent_on_delegation_inherits_the_daemon_setting() {
     );
 }
 
+/// A read-only profile that omits `delegation` must not inherit an on switch.
+/// An empty grant still inherits. That case is the test above.
+#[tokio::test]
+async fn a_read_only_profile_silent_on_delegation_does_not_delegate() {
+    use liberado_common::{Capability, Zone};
+
+    let dir = tempfile::tempdir().unwrap();
+    let sessions = sessions_at(dir.path(), vec![])
+        .await
+        .with_delegation_mode(true);
+    let id = sessions
+        .create_with_grant(
+            None,
+            SessionGrant {
+                capabilities: CapabilitySet::from_iter([Capability::Read(Zone::vault("tasks"))]),
+                profile: Some("researcher".into()),
+                delegation: None,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+    assert!(
+        !sessions.turn_settings(id).await.delegation,
+        "a read-only researcher chat must not delegate"
+    );
+}
+
 #[tokio::test]
 async fn a_profiles_prompt_append_reaches_the_turn() {
     let dir = tempfile::tempdir().unwrap();

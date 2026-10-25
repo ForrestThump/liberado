@@ -299,6 +299,7 @@ impl ChatSessions {
                 self.schedule_editor_ops(),
             ));
         }
+        let caller_capabilities = capabilities.clone();
         let extras = self.scoped_extras_runtime(user, session, capabilities);
         let agent_spawner = self.agent_spawner_for_profile(settings.profile.as_deref());
         self.attach_workspace(
@@ -309,6 +310,7 @@ impl ChatSessions {
                 Some(session.to_string()),
                 turn_deferral,
                 agent_spawner,
+                caller_capabilities,
             )),
         )
     }

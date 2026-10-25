@@ -175,7 +175,8 @@ pub fn default_conversation_title(user_text: &str) -> String {
 /// chase, and the cost of preventing it is one type.
 struct TurnSettings {
     capabilities: CapabilitySet,
-    /// Whether the face agent may `delegate`. Resolved: the profile's setting, else the daemon's.
+    /// Whether the face agent may `delegate`. The profile's setting, else the daemon's.
+    /// A read-only grant that omits the setting is off.
     delegation: bool,
     /// Extra system-prompt text for this profile, injected per turn.
     prompt_append: Option<String>,
@@ -822,7 +823,7 @@ impl ChatSessions {
                 // agent's now-redundant reply to a tiny pointer at that notification.
                 collapse_if_deferred(reply, &turn_deferral)
             } else {
-                match self.dispatch_turn(user, settings.delegation).await {
+                match self.dispatch_turn(user, &settings).await {
                     DispatchOutcome::Answered(reply) => {
                         convo.answer(user, &reply);
                         reply
@@ -942,7 +943,7 @@ impl ChatSessions {
                     .await;
                 turn_failure::keep_or_record(self, session, ran).await?;
             } else {
-                match self.dispatch_turn(user, settings.delegation).await {
+                match self.dispatch_turn(user, &settings).await {
                     DispatchOutcome::Answered(reply) => {
                         convo.answer(user, &reply);
                         // Deliver the already-resolved reply as a single token so it renders through the
@@ -1028,8 +1029,11 @@ impl ChatSessions {
             self.default_turn_settings()
         } else {
             TurnSettings {
+                delegation: header
+                    .grant
+                    .capabilities
+                    .delegation_allowed(header.grant.delegation, self.delegation_mode),
                 capabilities: header.grant.capabilities,
-                delegation: header.grant.delegation.unwrap_or(self.delegation_mode),
                 prompt_append: header.grant.prompt_append,
                 profile: header.grant.profile,
                 model: header.grant.model,
@@ -1508,7 +1512,8 @@ impl ChatSessions {
 
     /// Classify `user` via the dispatcher (when attached and this session still delegates).
     /// `delegation = false` returns [`DispatchOutcome::Proceed`] with no classifier call.
-    async fn dispatch_turn(&self, user: &str, delegation: bool) -> DispatchOutcome {
+    async fn dispatch_turn(&self, user: &str, settings: &TurnSettings) -> DispatchOutcome {
+        let delegation = settings.delegation;
         let Some(dispatcher) = delegation.then_some(self.dispatcher.as_ref()).flatten() else {
             return DispatchOutcome::Proceed(Vec::new()); // no dispatcher, or a direct profile
         };
@@ -1548,11 +1553,9 @@ impl ChatSessions {
             );
         };
         let correlation_id = format!("chat-{}", Ulid::new());
-        let mut grant_caps = dispatch_caps;
-        // Pre-turn work inside a chat turn cannot block on AskHuman (same as D-e for delegate).
-        grant_caps
-            .capabilities
-            .retain(|c| !matches!(c, liberado_common::Capability::AskHuman));
+        // Same bound as `delegate`: the caller ∩ the dispatcher ceiling, then no AskHuman.
+        let grant_caps =
+            crate::face::delegated_capabilities(&settings.capabilities, &dispatch_caps);
         let goal = GoalSpec {
             id: None,
             description: user.to_string(),

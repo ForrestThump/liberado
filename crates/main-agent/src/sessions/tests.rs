@@ -51,3 +51,6 @@ mod metering;
 
 #[path = "turn_clock_integration_tests.rs"]
 mod turn_clock_integration_tests;
+
+#[path = "delegate_authority_tests.rs"]
+mod delegate_authority_tests;

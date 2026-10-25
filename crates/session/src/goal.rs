@@ -356,7 +356,8 @@ pub struct SessionGrant {
     /// Opaque, pack-parsed configuration.
     #[serde(default, skip_serializing_if = "serde_json::Value::is_null")]
     pub overrides: serde_json::Value,
-    /// Whether the face agent may `delegate` in this session. `None` = the daemon's default.
+    /// Whether the face agent may `delegate` in this session. `None` is unspecified:
+    /// a read-only capability set resolves to off, and any other set inherits the daemon default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub delegation: Option<bool>,
     /// Model to run this session on. `None` = the daemon's current model for the role.
