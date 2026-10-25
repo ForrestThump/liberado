@@ -57,3 +57,6 @@ mod delegate_authority_tests;
 
 #[path = "approval_attribution_tests.rs"]
 mod approval_attribution_tests;
+
+#[path = "cancel_cascade_tests.rs"]
+mod cancel_cascade_tests;

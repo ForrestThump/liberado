@@ -112,6 +112,11 @@ pack, not a fake.
 | cron / webhook / vault reaction | `dispatch` | `ReactionOutcome::Dispatched { session_id }` |
 | face-agent `delegate` | `dispatch` | Awaits terminal inside the chat turn. The child grant is the caller's grant narrowed to the dispatcher ceiling, then `AskHuman` is removed (D-e). |
 
+Cancelling a chat turn cancels the hub sessions that conversation started. The child is addressed
+by `GoalSpec.origin.conversation_id`, so a worker another chat delegated is untouched. The cascade
+runs whether or not a turn is still in flight: a cancel that arrives just after the turn retired
+still has to stop what the turn left running.
+
 See [`../../future-work/archive/one-execution-engine-plan.md`](../../future-work/archive/one-execution-engine-plan.md) for the
 convergence (E1–E7).
 

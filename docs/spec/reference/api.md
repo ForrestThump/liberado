@@ -274,6 +274,12 @@ their results to corrupt the next turn. The conversation lock is released immedi
 message starts fresh. This is one primitive that works identically for every client, which is why
 it's a connection lifecycle event and not a bespoke endpoint.
 
+**Cancel cascades to delegated work.** A turn blocked in `delegate` is waiting on a hub session.
+Aborting the turn alone left that child running with its own grant and nobody watching it, so a
+cancel now also cancels every non-terminal hub session whose `origin.conversation_id` is this
+conversation. The child ends `cancelled`, the same cooperative stop as
+`POST /api/goals/{id}/cancel`. Workers started by other conversations are not touched.
+
 Properties that make this client-agnostic:
 - **Standard SSE** — consumable by browser `fetch`-streaming (WASM can't use reqwest streaming) and
   by native `reqwest` byte-streaming in the TUI. Same bytes, two parsers.

@@ -81,6 +81,8 @@ mod agent_hooks;
 mod agent_profiles;
 #[path = "sessions/automation_editor.rs"]
 mod automation_editor;
+#[path = "sessions/cancel_cascade.rs"]
+mod cancel_cascade;
 pub use automation_editor::{AUTOMATION_EDITOR_OPENER, EditorTarget};
 #[path = "sessions/face_gate.rs"]
 mod face_gate;
@@ -1211,28 +1213,6 @@ impl ChatSessions {
             .keys()
             .copied()
             .collect()
-    }
-
-    /// Stop the turn running for `session`. `true` if there was one.
-    ///
-    /// The explicit counterpart to what a disconnect used to do implicitly. It has to exist *before*
-    /// turns are detached, or there would be no way to stop one at all — closing the stream was the
-    /// only cancel this system had.
-    pub fn cancel_turn(&self, session: Ulid) -> bool {
-        let entry = {
-            let mut running = self.running.lock().unwrap_or_else(|p| p.into_inner());
-            running.remove(&session)
-        };
-        let Some(entry) = entry else {
-            return false;
-        };
-        if let Some(handle) = entry.abort.lock().unwrap_or_else(|p| p.into_inner()).take() {
-            handle.abort();
-        }
-        // Tell anyone watching why their stream ended. Without this a cancelled turn looks
-        // indistinguishable from one still thinking.
-        entry.publish(AgentEvent::Error("turn cancelled".into()));
-        true
     }
 
     /// Run one turn detached, forwarding its events to `entry` and retiring the entry at the end.
