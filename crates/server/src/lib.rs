@@ -8,6 +8,7 @@
 
 mod api;
 mod approvals;
+mod auth;
 mod chat_agent_spawn;
 mod coding_pack;
 mod cron_delivery;
@@ -79,15 +80,11 @@ fn dist_dir() -> String {
 
 use crate::state::AppState;
 
-const DEFAULT_PORT: u16 = 4201;
-
 /// Run the daemon over `vault_path`: build the shared provider/MCP, assemble the chat agent and the
 /// vault daemon (watch loop), then serve the HTTP/SSE API and static frontend until killed. This is
 /// the daemon's foreground entry point — `liberado serve` calls it. The caller is expected to have
 /// already initialised the tracing subscriber.
 pub async fn run(vault_path: String) -> Result<(), Box<dyn std::error::Error>> {
-    let port = resolve_port();
-
     // Load + validate the config up front (Decision 14 fail-fast). A bad config is a hard error
     // here rather than a half-booted daemon; the message names the file/setting to fix.
     let (config, _, coder_tuning) =
@@ -97,9 +94,47 @@ pub async fn run(vault_path: String) -> Result<(), Box<dyn std::error::Error>> {
     // an empty argument falls back to `topology.vault_path`. Both empty is a hard error.
     let vault_path = resolve_vault_path(vault_path, &config)?;
 
-    let (daemon_handle, app, state) = assemble_daemon(config, coder_tuning, vault_path).await?;
-    let addr = format!("0.0.0.0:{port}");
-    finish_serve(daemon_handle, app, state, &addr).await
+    // Credentials and the listen address, before a single component is assembled. Everything
+    // below this point assumes the control plane is either loopback-only or authenticated, and
+    // the whole value of that assumption is that it is checked where it can still refuse.
+    let guard = Arc::new(resolve_api_guard(&config.topology.api)?);
+    let plan = auth::resolve_bind(
+        std::env::var(auth::bind::BIND_ENV).ok().as_deref(),
+        std::env::var(auth::bind::PORT_ENV).ok().as_deref(),
+        &config.topology.api,
+    )?;
+    auth::ensure_bind_is_credentialed(&plan, !guard.auth.is_open())?;
+    log_api_posture(&guard, &plan);
+
+    let (daemon_handle, app, state) =
+        assemble_daemon(config, coder_tuning, vault_path, Arc::clone(&guard)).await?;
+    finish_serve(daemon_handle, app, state, &plan.addr.to_string()).await
+}
+
+/// Resolve `[api]` credentials into the live guard. Separated so the error says `API auth`
+/// before the loader's own message, which names a setting but not the subsystem.
+fn resolve_api_guard(
+    api: &liberado_config::ApiConfig,
+) -> Result<auth::ApiGuard, Box<dyn std::error::Error>> {
+    let resolved = auth::ApiAuth::resolve(api).map_err(|e| format!("API auth: {e}"))?;
+    Ok(auth::ApiGuard::new(resolved, api.allowed_origins.clone()))
+}
+
+/// One startup line saying how closed the control plane actually is.
+///
+/// A configuration that silently grants more than its author thought is the failure this whole
+/// change is about, so the daemon states its posture rather than leaving it to be inferred.
+/// Counts and names only — never a token.
+fn log_api_posture(guard: &auth::ApiGuard, plan: &auth::BindPlan) {
+    info!(
+        addr = %plan.addr,
+        source = plan.source.describe(),
+        loopback = auth::bind::is_loopback(&plan.addr),
+        authenticated = !guard.auth.is_open(),
+        human_login = guard.auth.has_human_credential(),
+        cross_origin_allowed = guard.allowed_origins.len(),
+        "API control plane"
+    );
 }
 
 /// Serve until drain, then stop the vault-watch task.
@@ -136,6 +171,7 @@ async fn assemble_daemon(
     config: liberado_bootstrap::Config,
     coder_tuning: liberado_coder_core::CoderTuning,
     vault_path: String,
+    guard: Arc<auth::ApiGuard>,
 ) -> Result<(tokio::task::JoinHandle<()>, Router, Arc<AppState>), Box<dyn std::error::Error>> {
     // One live catalog + shared MCP registry (boot apply + hot-reload). Every consumer (API,
     // daemon pools, chat, dispatch pack) uses the same cloneable registry handle.
@@ -294,7 +330,7 @@ async fn assemble_daemon(
         daemon.run(reaction_tx).await.ok();
     });
 
-    let app = build_app_router(&state);
+    let app = build_app_router(&state, &guard);
     Ok((daemon_handle, app, state))
 }
 
@@ -358,12 +394,80 @@ async fn open_session_store(
     (sessions_root, sessions)
 }
 
+/// Routes that change authority rather than exercise it, and therefore need the owner.
+///
+/// A client token authenticates an agent, a tool, or an MCP server. None of those is Forrest,
+/// and none of them may decide an approval, repoint a conversation at another profile, rename
+/// or delete a profile, change which plugins chat can see, hot-swap the model, or reload the
+/// MCP peer set. Each of those either *is* the human decision or changes what every later
+/// decision is made with.
+///
+/// `POST /api/goals` and `POST /api/chat` are deliberately not here: starting work is what a
+/// client token is for. The boundary is deciding, not doing.
+fn owner_only_routes(state: &Arc<AppState>) -> Router {
+    Router::new()
+        // Human-only. POST so a web-fetching MCP (GET only) cannot decide; owner-only so the
+        // shell a coding run opens cannot decide either, which POST never stopped.
+        .route(
+            "/api/approvals/{id}/resolve",
+            axum::routing::post(api::resolve_approval),
+        )
+        // Surface-only authority change. Deliberately POST, and deliberately absent from every
+        // tool catalog — see the handler's docs for why both halves matter.
+        .route(
+            "/api/conversations/{id}/profile",
+            axum::routing::post(api::set_conversation_profile),
+        )
+        .route(
+            "/api/profiles/{name}",
+            axum::routing::patch(api::rename_profile).delete(api::delete_profile),
+        )
+        .route(
+            "/api/plugins/{id}",
+            axum::routing::put(api::set_plugin_enabled),
+        )
+        .route("/api/models/select", axum::routing::post(api::select_model))
+        .route(
+            "/api/mcp/reload",
+            axum::routing::post(api::reload_mcp_peers),
+        )
+        .route_layer(axum::middleware::from_fn(auth::require_owner))
+        .with_state(state.clone())
+}
+
+/// Routes that need no credential, and why each one is safe without.
+///
+/// `GET /api/health` says only that the process is up. The three `auth` routes are how a
+/// credential is obtained in the first place. `POST /api/hooks/{name}` carries its own
+/// per-hook shared secret (`X-Liberado-Hook-Secret`), which is the whole point of a webhook:
+/// it is called by software that will never hold an API token.
+fn unauthenticated_routes(state: &Arc<AppState>, guard: &Arc<auth::ApiGuard>) -> Router {
+    let hooks = Router::new()
+        .route(
+            "/api/hooks/{name}",
+            axum::routing::post(hooks::trigger_hook),
+        )
+        .with_state(state.clone());
+    let sign_in = Router::new()
+        .route("/api/health", axum::routing::get(api::health))
+        .route("/api/auth/login", axum::routing::post(api::auth_login))
+        .route("/api/auth/logout", axum::routing::post(api::auth_logout))
+        .route("/api/auth/session", axum::routing::get(api::auth_session))
+        .with_state(guard.clone());
+    hooks.merge(sign_in)
+}
+
 /// The full HTTP/SSE API router plus the static frontend fallback. Work-starting routes are
 /// grouped behind the drain middleware (it refuses with `shutting_down` once drain begins);
 /// attach/cancel/park/list stay on the main router so clients can rejoin or stop work already in
 /// flight. `POST /api/goals` is gated for the same reason as chat — the gate is the capability,
 /// not the surface that happened to be wired first.
-fn build_app_router(state: &Arc<AppState>) -> Router {
+///
+/// Three bands, outermost first: everything under `/api` except [`unauthenticated_routes`]
+/// needs a credential; [`owner_only_routes`] additionally needs the owner's. The credential
+/// layer is a `route_layer`, so it covers matched API routes and not the static fallback —
+/// the sign-in page has to load before anyone can sign in.
+fn build_app_router(state: &Arc<AppState>, guard: &Arc<auth::ApiGuard>) -> Router {
     let work_start_routes = Router::new()
         .route("/api/chat", axum::routing::post(api::chat))
         .route(
@@ -377,16 +481,11 @@ fn build_app_router(state: &Arc<AppState>) -> Router {
         ))
         .with_state(state.clone());
 
-    Router::new()
+    let authenticated = Router::new()
         .merge(work_start_routes)
         .route("/api/status", axum::routing::get(api::status))
         .route("/api/models", axum::routing::get(api::models))
-        .route("/api/models/select", axum::routing::post(api::select_model))
         .route("/api/catalog", axum::routing::get(api::catalog))
-        .route(
-            "/api/mcp/reload",
-            axum::routing::post(api::reload_mcp_peers),
-        )
         .route("/api/reactions", axum::routing::get(api::reactions))
         .route("/api/vault", axum::routing::get(api::vault))
         .route("/api/library", axum::routing::get(api::list_library))
@@ -403,18 +502,6 @@ fn build_app_router(state: &Arc<AppState>) -> Router {
             axum::routing::get(api::get_conversation)
                 .patch(api::patch_conversation_title)
                 .delete(api::delete_conversation),
-        )
-        // Surface-only authority change. Deliberately POST, and deliberately absent from every tool
-        // catalog — see the handler's docs for why both halves matter.
-        .route(
-            "/api/conversations/{id}/profile",
-            axum::routing::post(api::set_conversation_profile),
-        )
-        // Human-only. POST so a web-fetching MCP (GET only) cannot decide. Not registered
-        // as an agent tool or on the operator dogfood MCP.
-        .route(
-            "/api/approvals/{id}/resolve",
-            axum::routing::post(api::resolve_approval),
         )
         // Read-only. The operator dogfood MCP lists these rows. It does not decide them.
         .route(
@@ -446,18 +533,6 @@ fn build_app_router(state: &Arc<AppState>) -> Router {
             axum::routing::post(api::cancel_conversation_turn),
         )
         .route("/api/profiles", axum::routing::get(api::list_profiles))
-        .route(
-            "/api/profiles/{name}",
-            axum::routing::patch(api::rename_profile).delete(api::delete_profile),
-        )
-        .route(
-            "/api/plugins/{id}",
-            axum::routing::put(api::set_plugin_enabled),
-        )
-        .route(
-            "/api/hooks/{name}",
-            axum::routing::post(hooks::trigger_hook),
-        )
         .route("/api/hooks", axum::routing::get(api::list_hooks))
         .route("/api/schedules", axum::routing::get(api::list_schedules))
         // The one unified list (S5′): chats and goal sessions, same rows.
@@ -491,8 +566,26 @@ fn build_app_router(state: &Arc<AppState>) -> Router {
             "/api/goals/{id}/rewind",
             axum::routing::post(api::goals_rewind),
         )
-        .layer(CorsLayer::permissive())
-        .with_state(state.clone())
+        .with_state(state.clone());
+
+    let api_surface = authenticated
+        .merge(owner_only_routes(state))
+        .route_layer(axum::middleware::from_fn_with_state(
+            guard.clone(),
+            auth::require_credential,
+        ))
+        .merge(unauthenticated_routes(state, guard));
+
+    let app = match cors_layer(guard) {
+        Some(cors) => api_surface.layer(cors),
+        // No CORS response headers at all, which is what makes a cross-origin `fetch` fail.
+        // `CorsLayer::permissive()` stood here and answered every origin with
+        // `Access-Control-Allow-Origin: *`, so any page the browser loaded could read the
+        // control plane.
+        None => api_surface,
+    };
+
+    app
         // Compression is scoped to the static fallback, deliberately not applied to the router as
         // a whole. The payload that needs it is the release .wasm (multi-MB, ~4x compressible, and
         // the whole page blocks on it over the tailnet); the payload that must never be buffered
@@ -504,6 +597,40 @@ fn build_app_router(state: &Arc<AppState>) -> Router {
                 .layer(CompressionLayer::new())
                 .service(ServeDir::new(dist_dir())),
         )
+}
+
+/// A CORS layer for the exact origins the operator listed, or `None` when the list is empty.
+///
+/// Empty is the default and the normal deployment: the WebUI is served by this same daemon on
+/// this same origin, so it needs no CORS at all. The list exists for the `dx serve` dev loop,
+/// where the UI is on `:8080` and the API on `:4201`. Every entry is matched exactly — there is
+/// no wildcard, and `ApiConfig::problems` refuses `*` before the daemon starts.
+fn cors_layer(guard: &Arc<auth::ApiGuard>) -> Option<CorsLayer> {
+    let origins: Vec<axum::http::HeaderValue> = guard
+        .allowed_origins
+        .iter()
+        .filter_map(|o| o.parse().ok())
+        .collect();
+    if origins.is_empty() {
+        return None;
+    }
+    Some(
+        CorsLayer::new()
+            .allow_origin(origins)
+            .allow_credentials(true)
+            .allow_headers([
+                axum::http::header::AUTHORIZATION,
+                axum::http::header::CONTENT_TYPE,
+                axum::http::HeaderName::from_static(auth::sessions::CSRF_HEADER),
+            ])
+            .allow_methods([
+                axum::http::Method::GET,
+                axum::http::Method::POST,
+                axum::http::Method::PUT,
+                axum::http::Method::PATCH,
+                axum::http::Method::DELETE,
+            ]),
+    )
 }
 
 /// Bind and serve the router with a graceful shutdown: on SIGTERM/Ctrl+C, drain refuses new turns
@@ -538,14 +665,6 @@ async fn serve_with_drain(
         })
         .await?;
     Ok(())
-}
-
-/// The port the daemon serves on: `LIBERADO_PORT` if set and parseable, else [`DEFAULT_PORT`].
-fn resolve_port() -> u16 {
-    std::env::var("LIBERADO_PORT")
-        .ok()
-        .and_then(|p| p.parse().ok())
-        .unwrap_or(DEFAULT_PORT)
 }
 
 /// The vault path this daemon serves, CLI-over-config: the `run` argument wins (the CLI always
