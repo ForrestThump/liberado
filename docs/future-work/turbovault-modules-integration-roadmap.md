@@ -9,7 +9,7 @@ open_items: true
 
 > **Not the work queue** (2026-09-22). Retained design, not selectable work.
 > The only implementation queue is [`backlog.md`](backlog.md).
-> The current item is operator dogfood: use the system and write down what hurts.
+> The work queue is [`backlog.md`](backlog.md). Take the first open row there. This file is not that queue.
 
 # TurboVault modules — integration roadmap (umbrella)
 
@@ -267,9 +267,9 @@ bundle two modules in one PR series.
 
 ## 8. How this reshapes the Liberado roadmap (`roadmap.md`)
 
-The plugin API does **not** change Liberado's top-line strategy (**daemon → chat → coding**; get one
-thing over the daily-driver line). Modules already paid back; remaining Liberado P1 is **W1 / E5-b
-interfacing**, not vault storage. Concretely:
+This section describes the July 2026 roadmap. It is not the current order. Product direction is
+[`../direction.md`](../direction.md). The queue is [`backlog.md`](backlog.md). The table below is
+kept as a record of how the modules were expected to land against that old page.
 
 | `roadmap.md` item | Effect of the modules |
 |---|---|

@@ -9,7 +9,7 @@ domain: docs
 
 **Single source of truth** for humans and agents. Liberado is a Rust-native **agentic orchestration** system: one daemon, capability-bounded tools (MCP), domain packs (life-ops, coding), and thin surfaces (TUI, WebUI, CLI, Telegram).
 
-If you are an agent: start at the [roadmap](roadmap.md) → [architecture overview](spec/architecture/overview.md) → [failure modes](spec/architecture/failure-modes.md). Read the failure modes document before changing safety or tests.
+If you are an agent: start at the [backlog](future-work/backlog.md) → [direction](direction.md) → [architecture overview](spec/architecture/overview.md) → [failure modes](spec/architecture/failure-modes.md). Read the failure modes document before changing safety or tests.
 
 **Authority model:** [doc-authority.md](spec/reference/doc-authority.md). **Catalog:** [CATALOG.md](CATALOG.md). **ADRs:** [decisions/](decisions/README.md).
 
@@ -24,7 +24,7 @@ If you are an agent: start at the [roadmap](roadmap.md) → [architecture overvi
 | Why was this design selected? | Accepted ADR under [decisions/](decisions/README.md) |
 | What should an agent implement next? | [future-work/backlog.md](future-work/backlog.md) only |
 | What is the product mission and strategic direction? | [direction.md](direction.md) |
-| What is the broader direction and status snapshot? | [roadmap.md](roadmap.md) |
+| What is the broader direction and status snapshot? | [direction.md](direction.md). [roadmap.md](roadmap.md) only points there and at the backlog. |
 | What did an experiment prove? | Dated record under [validation/](validation/README.md) |
 | What might we do later? | Proposed plan under [future-work/](future-work/README.md) |
 | What happened before? | [future-work/archive/](future-work/archive/README.md) and git history |
@@ -47,7 +47,7 @@ If you are an agent: start at the [roadmap](roadmap.md) → [architecture overvi
 ## Cold-start (humans & agents)
 
 1. [Direction](direction.md) — mission, layers, and decision filter
-2. [Roadmap](roadmap.md) — what is open next
+2. [Roadmap](roadmap.md) — pointer to direction and the backlog
 3. [Architecture overview](spec/architecture/overview.md) — pillars, daemon-first loop, safety
 4. [Sessions](spec/architecture/sessions.md) — everything is a `Session` (D7)
 5. [Contracts](spec/architecture/contracts.md) — narrow waists / frozen seams
@@ -64,7 +64,7 @@ Per-crate detail: generated [crate map](spec/reference/crate-map.md) + each crat
 | Document | Path | Purpose |
 |----------|------|---------|
 | **Direction** | [direction.md](direction.md) | Product mission, layers, principles, decision filter |
-| **Roadmap** | [roadmap.md](roadmap.md) | Living single-page roadmap |
+| **Roadmap** | [roadmap.md](roadmap.md) | Pointer to direction and the backlog |
 | **Backlog** | [future-work/backlog.md](future-work/backlog.md) | Next implementation items only |
 | **Doc authority** | [spec/reference/doc-authority.md](spec/reference/doc-authority.md) | What each document may claim |
 | **Failure modes** | [spec/architecture/failure-modes.md](spec/architecture/failure-modes.md) | Six recurring bug classes |
@@ -81,9 +81,9 @@ Per-crate detail: generated [crate map](spec/reference/crate-map.md) + each crat
 
 ## Product frame
 
-Liberado is sequenced **daemon (life-ops) → chat surface → coding pack**, not "three products at once."
+Personal assistant first: the data, the rules, and reliable delivery. The coding pack is frozen. Security and reliability basics are next. See [direction.md](direction.md) and the [backlog](future-work/backlog.md).
 
-**Recently hardened (2026-07-30):** complete mutation testing pass (13 crates), Tier-1 conformance suite (L1–L11), dual-guard conformance tests, negative-case API tests, cargo-deny CI gate, session state-machine invariants, JSONL rehydration fuzzing, provider wire-body seam tests. See [roadmap.md](roadmap.md) and [validation/](validation/).
+**Recently hardened (2026-07-30):** complete mutation testing pass (13 crates), Tier-1 conformance suite (L1–L11), dual-guard conformance tests, negative-case API tests, cargo-deny CI gate, session state-machine invariants, JSONL rehydration fuzzing, provider wire-body seam tests. See [validation/](validation/).
 
 ---
 

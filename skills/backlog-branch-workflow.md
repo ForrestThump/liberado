@@ -2,7 +2,7 @@
 
 ## When to use
 
-- Picking up self-scoped work from `docs/roadmap.md` / `docs/future-work/backlog.md`
+- Picking up self-scoped work from `docs/future-work/backlog.md`
 - Shipping one backlog item per branch without merging it yet
 - Keeping several unmerged agent branches straight without polluting git history
 
@@ -27,8 +27,9 @@
 ### 1. Pick an open item
 
 ```text
-docs/roadmap.md          → why / priority
+docs/direction.md        → why
 docs/future-work/backlog.md → what next (one row per PR)
+docs/roadmap.md          → pointer only
 ```
 
 Check dependencies: do not start an item that needs an unmerged prerequisite (e.g. 0.6 needs 0.5).
