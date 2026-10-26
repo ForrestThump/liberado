@@ -125,6 +125,15 @@ baseline clean; the ploc delta is purely mechanical field plumbing. The same fie
 carry different grant / status / payload values). Hard ceilings and review dates are recorded;
 any further growth in these files must be split, not waived.
 
+Roadmap step 1 (close the control plane) adds three narrow waivers reviewed
+2026-10-26. `crates/server/src/lib.rs` `functions` (45): the public /
+authenticated / owner-only router bands and auth middleware mount order stay in
+the server composition root. `crates/coder-sandbox/src/lib.rs` `cyclomatic` (180)
+and `functions` (72): Docker `--network none` by default and API-token env
+denylist filtering live on `DockerWorkspace::docker_run_args` beside the trait
+impl; `sandbox_env.rs` holds the deny predicate. Further growth splits, not
+waives.
+
 After an accepted improvement, run `just module-health-ratchet` and commit the
 lower baseline. The command does not save worse values. Linux `just ci` also
 ratchets this file; other hosts compare only. GitHub runs only the read-only
