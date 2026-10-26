@@ -246,3 +246,24 @@ metric = "ploc"
 ceiling = 1142
 reason = "feat(cron): GoalSpec gained `direct: bool`; every inline `GoalSpec { ... }` initializer in this demo/test file needs one `direct: false,` line (18 sites). Each carries different grant / status / payload values, so they cannot collapse into a single helper without losing scenario clarity. Purely mechanical field plumbing."
 reviewed_on = "2026-09-27"
+
+[[waiver]]
+path = "crates/server/src/lib.rs"
+metric = "functions"
+ceiling = 45
+reason = "Roadmap step 1 control plane: public/authenticated/owner-only router bands and auth wiring stay in the server composition root so mount order matches the security model."
+reviewed_on = "2026-10-26"
+
+[[waiver]]
+path = "crates/coder-sandbox/src/lib.rs"
+metric = "cyclomatic"
+ceiling = 180
+reason = "Docker sandbox defaults (--network none) and denied API-token env filtering are part of the command boundary in this crate root; logic lives beside DockerWorkspace::docker_run_args."
+reviewed_on = "2026-10-26"
+
+[[waiver]]
+path = "crates/coder-sandbox/src/lib.rs"
+metric = "functions"
+ceiling = 72
+reason = "sandbox_env split to sandbox_env.rs; remaining DockerWorkspace helpers stay with the trait impl that owns docker_run_args."
+reviewed_on = "2026-10-26"

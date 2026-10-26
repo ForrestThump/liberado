@@ -9,15 +9,9 @@
 //! (`ToolCallChip`, `ToolResultChip`) remain here because they are constructed from
 //! `SessionEventKind` data and never serialized.
 
-use reqwest::header::AUTHORIZATION;
 use reqwest::{Client, StatusCode};
 
-fn with_bearer(builder: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
-    match chat_client_contract::api_auth::bearer_token_from_env() {
-        Some(token) => builder.header(AUTHORIZATION, format!("Bearer {token}")),
-        None => builder,
-    }
-}
+use crate::api_bearer::with_bearer;
 
 // Re-export the shared wire types so the rest of the crate can still import them
 // from `crate::api::*` without changing call sites.

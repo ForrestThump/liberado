@@ -227,6 +227,7 @@
 //!   helper, not `Rect::intersects` with a 1×1 rect hack.
 
 pub mod api;
+mod api_bearer;
 pub mod app;
 pub mod command_context;
 pub mod conversations;
