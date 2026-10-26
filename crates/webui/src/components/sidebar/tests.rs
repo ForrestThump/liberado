@@ -151,8 +151,8 @@ fn agent_rows_call_the_profile_routes() {
     assert!(sidebar.contains("/api/conversations/{id}"));
     let profile_api = include_str!("profile_api.rs");
     assert!(profile_api.contains("/api/profiles/{name}"));
-    assert!(profile_api.contains("Method::PATCH"));
-    assert!(profile_api.contains("Method::DELETE"));
+    assert!(profile_api.contains("patch_json"));
+    assert!(profile_api.contains("http::delete"));
     assert!(sidebar.contains("rename_profile"));
     assert!(sidebar.contains("delete_profile"));
 }

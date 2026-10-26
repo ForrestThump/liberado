@@ -35,7 +35,8 @@ async fn send_profile(
 ) -> Result<(), String> {
     let url = format!("{api_base}/api/profiles/{name}");
     let resp = if patch {
-        crate::http::patch_json(&url, &body.expect("patch needs a body"))
+        let payload = body.ok_or_else(|| "Rename needs a body".to_string())?;
+        crate::http::patch_json(&url, &payload)
             .await
             .map_err(|e| format!("Failed to reach daemon: {e}"))?
     } else {

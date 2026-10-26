@@ -95,9 +95,9 @@ fn App() -> Element {
     let mut need_login = use_signal(|| false);
     let base_for_session = base.clone();
     use_effect(move || {
-        let base = base_for_session.clone();
         #[cfg(target_arch = "wasm32")]
         wasm_bindgen_futures::spawn_local(async move {
+            let base = base_for_session.clone();
             match components::login_gate::probe_session(&base).await {
                 Ok(session) => {
                     need_login.set(session.login_required && !session.authenticated);

@@ -424,7 +424,7 @@ async fn receive_parses_callback_query_into_action_and_advances_cursor() {
                 "callback_query": {
                     "id": "q1",
                     "data": "approve:prop-1",
-                    "message": {"message_id": 55},
+                    "message": {"message_id": 55, "chat": {"id": 42}},
                 },
             }]
         })))
