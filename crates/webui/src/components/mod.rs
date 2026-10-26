@@ -1,5 +1,4 @@
 pub mod approval_card;
-pub mod login_gate;
 pub mod automations;
 pub mod chat;
 mod chat_submission;
@@ -9,6 +8,7 @@ pub mod grants_popover;
 pub mod imagine;
 pub mod incognito;
 pub mod library;
+pub mod login_gate;
 pub mod markdown;
 pub mod mcp_panel;
 mod message_row;

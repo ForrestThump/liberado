@@ -78,8 +78,8 @@ pub(super) async fn post_decision(
             decision: decision.to_string(),
         },
     )
-        .await
-        .map_err(|error| error.to_string())?;
+    .await
+    .map_err(|error| error.to_string())?;
     let status = response.status().as_u16();
     let body: ApprovalResolveResponse = response.json().await.map_err(|error| error.to_string())?;
     if status == 200 || status == 409 {

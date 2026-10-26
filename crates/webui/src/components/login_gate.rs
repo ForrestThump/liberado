@@ -10,10 +10,7 @@ pub struct SessionResponse {
 }
 
 #[component]
-pub fn LoginGate(
-    api_base: String,
-    on_authenticated: EventHandler<()>,
-) -> Element {
+pub fn LoginGate(api_base: String, on_authenticated: EventHandler<()>) -> Element {
     let mut token = use_signal(String::new);
     let mut error = use_signal(|| None::<String>);
     let mut busy = use_signal(|| false);
@@ -87,7 +84,5 @@ pub async fn probe_session(api_base: &str) -> Result<SessionResponse, String> {
     if !resp.status().is_success() {
         return Err(format!("session probe failed: {}", resp.status()));
     }
-    resp.json()
-        .await
-        .map_err(|e| e.to_string())
+    resp.json().await.map_err(|e| e.to_string())
 }

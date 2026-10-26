@@ -405,7 +405,10 @@ async fn receive_ignores_callback_query_from_a_foreign_chat() {
         .await;
     let mut cursor = String::new();
     let events = notifier_at(&server).receive(&mut cursor).await.unwrap();
-    assert!(events.is_empty(), "foreign chat callback must not become an action");
+    assert!(
+        events.is_empty(),
+        "foreign chat callback must not become an action"
+    );
     assert_eq!(cursor, "13");
 }
 

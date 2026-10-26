@@ -14,7 +14,10 @@ fn shared_client() -> Client {
 fn csrf_token_from_cookie() -> Option<String> {
     use wasm_bindgen::JsCast;
     let window = web_sys::window()?;
-    let doc = window.document()?.dyn_into::<web_sys::HtmlDocument>().ok()?;
+    let doc = window
+        .document()?
+        .dyn_into::<web_sys::HtmlDocument>()
+        .ok()?;
     let cookie = doc.cookie().ok()?;
     for part in cookie.split(';') {
         let part = part.trim();
@@ -48,7 +51,9 @@ pub async fn get(url: &str) -> Result<Response, reqwest::Error> {
 
 /// `GET` with query parameters.
 pub async fn get_query(url: &str, query: &[(&str, &str)]) -> Result<Response, reqwest::Error> {
-    prepare(shared_client().get(url).query(query), false).send().await
+    prepare(shared_client().get(url).query(query), false)
+        .send()
+        .await
 }
 
 /// `POST` with JSON body and CSRF when the browser holds a session.

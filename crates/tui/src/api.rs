@@ -69,8 +69,8 @@ pub async fn fetch_reactions(
             .get(format!("{server}/api/reactions"))
             .query(&[("limit", limit)]),
     )
-        .send()
-        .await?;
+    .send()
+    .await?;
     if resp.status() == StatusCode::SERVICE_UNAVAILABLE {
         return Ok(Vec::new());
     }
@@ -145,8 +145,8 @@ pub async fn select_model(
             .post(format!("{server}/api/models/select"))
             .json(&body),
     )
-        .send()
-        .await?;
+    .send()
+    .await?;
     resp.error_for_status_ref()?;
     resp.json().await
 }
@@ -220,9 +220,9 @@ pub async fn fork_conversation(
                 title: None,
             }),
     )
-        .send()
-        .await
-        .map_err(|e| e.to_string())?;
+    .send()
+    .await
+    .map_err(|e| e.to_string())?;
 
     if !resp.status().is_success() {
         // The server's own message is the useful one ("session has no message transcript to
@@ -278,8 +278,8 @@ pub async fn post_goal_message(
             .post(format!("{server}/api/goals/{id}/message"))
             .json(&serde_json::json!({ "text": text })),
     )
-        .send()
-        .await;
+    .send()
+    .await;
     match result {
         Ok(resp) => match resp.status() {
             StatusCode::ACCEPTED | StatusCode::OK => GoalMessageOutcome::Accepted,
@@ -408,9 +408,9 @@ pub async fn post_goal_action(
             .post(format!("{server}/api/goals/{id}/{action}"))
             .json(&serde_json::json!({})),
     )
-        .send()
-        .await
-        .map_err(|e| format!("could not reach daemon: {e}"))?;
+    .send()
+    .await
+    .map_err(|e| format!("could not reach daemon: {e}"))?;
     if !resp.status().is_success() {
         let status = resp.status();
         let text = resp.text().await.unwrap_or_default();
@@ -473,11 +473,7 @@ pub async fn post_chat_stream(
     session: Option<&str>,
 ) -> Result<reqwest::Response, reqwest::Error> {
     let body = serde_json::json!({ "message": message, "session": session });
-    with_bearer(
-        client
-            .post(format!("{server}/api/chat/stream"))
-            .json(&body),
-    )
+    with_bearer(client.post(format!("{server}/api/chat/stream")).json(&body))
         .send()
         .await
 }
