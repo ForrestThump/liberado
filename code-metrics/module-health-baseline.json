@@ -353,6 +353,12 @@
     "functions": 1,
     "cyclomatic": 5
   },
+  "crates/chat-client-contract/src/api_auth.rs": {
+    "ploc": 7,
+    "lloc": 0,
+    "functions": 3,
+    "cyclomatic": 4
+  },
   "crates/chat-client-contract/src/grants.rs": {
     "ploc": 109,
     "lloc": 15,
@@ -1505,11 +1511,29 @@
     "functions": 13,
     "cyclomatic": 17
   },
+  "crates/coder-sandbox/src/docker_paths.rs": {
+    "ploc": 26,
+    "lloc": 6,
+    "functions": 4,
+    "cyclomatic": 7
+  },
+  "crates/coder-sandbox/src/docker_run.rs": {
+    "ploc": 27,
+    "lloc": 13,
+    "functions": 3,
+    "cyclomatic": 8
+  },
+  "crates/coder-sandbox/src/docker_workspace.rs": {
+    "ploc": 120,
+    "lloc": 26,
+    "functions": 7,
+    "cyclomatic": 22
+  },
   "crates/coder-sandbox/src/lib.rs": {
-    "ploc": 716,
-    "lloc": 165,
-    "functions": 69,
-    "cyclomatic": 175
+    "ploc": 586,
+    "lloc": 127,
+    "functions": 59,
+    "cyclomatic": 147
   },
   "crates/coder-sandbox/src/lib_git_helper_tests.rs": {
     "ploc": 66,
@@ -1612,6 +1636,12 @@
     "lloc": 132,
     "functions": 29,
     "cyclomatic": 36
+  },
+  "crates/coder-sandbox/src/sandbox_env.rs": {
+    "ploc": 14,
+    "lloc": 8,
+    "functions": 1,
+    "cyclomatic": 6
   },
   "crates/coder-sandbox/src/warmup.rs": {
     "ploc": 143,
@@ -1972,6 +2002,18 @@
     "lloc": 0,
     "functions": 0,
     "cyclomatic": 1
+  },
+  "crates/config-loader/src/model/api.rs": {
+    "ploc": 95,
+    "lloc": 16,
+    "functions": 6,
+    "cyclomatic": 26
+  },
+  "crates/config-loader/src/model/api_tests.rs": {
+    "ploc": 94,
+    "lloc": 26,
+    "functions": 8,
+    "cyclomatic": 9
   },
   "crates/config-loader/src/model/builder.rs": {
     "ploc": 1116,
@@ -4325,6 +4367,24 @@
     "functions": 16,
     "cyclomatic": 18
   },
+  "crates/server/src/api/auth.rs": {
+    "ploc": 114,
+    "lloc": 17,
+    "functions": 10,
+    "cyclomatic": 15
+  },
+  "crates/server/src/api/auth_router_http_tests.rs": {
+    "ploc": 195,
+    "lloc": 45,
+    "functions": 12,
+    "cyclomatic": 17
+  },
+  "crates/server/src/api/auth_tests.rs": {
+    "ploc": 206,
+    "lloc": 45,
+    "functions": 15,
+    "cyclomatic": 16
+  },
   "crates/server/src/api/automations.rs": {
     "ploc": 70,
     "lloc": 6,
@@ -4535,6 +4595,12 @@
     "functions": 2,
     "cyclomatic": 3
   },
+  "crates/server/src/app_router.rs": {
+    "ploc": 187,
+    "lloc": 9,
+    "functions": 5,
+    "cyclomatic": 9
+  },
   "crates/server/src/approvals.rs": {
     "ploc": 101,
     "lloc": 11,
@@ -4551,6 +4617,60 @@
     "ploc": 122,
     "lloc": 37,
     "functions": 10,
+    "cyclomatic": 14
+  },
+  "crates/server/src/auth/bind.rs": {
+    "ploc": 87,
+    "lloc": 7,
+    "functions": 9,
+    "cyclomatic": 26
+  },
+  "crates/server/src/auth/bind_tests.rs": {
+    "ploc": 100,
+    "lloc": 38,
+    "functions": 12,
+    "cyclomatic": 13
+  },
+  "crates/server/src/auth/guard.rs": {
+    "ploc": 148,
+    "lloc": 29,
+    "functions": 18,
+    "cyclomatic": 39
+  },
+  "crates/server/src/auth/guard_tests.rs": {
+    "ploc": 328,
+    "lloc": 79,
+    "functions": 24,
+    "cyclomatic": 28
+  },
+  "crates/server/src/auth/mod.rs": {
+    "ploc": 7,
+    "lloc": 0,
+    "functions": 0,
+    "cyclomatic": 1
+  },
+  "crates/server/src/auth/sessions.rs": {
+    "ploc": 72,
+    "lloc": 16,
+    "functions": 13,
+    "cyclomatic": 19
+  },
+  "crates/server/src/auth/sessions_tests.rs": {
+    "ploc": 58,
+    "lloc": 24,
+    "functions": 8,
+    "cyclomatic": 9
+  },
+  "crates/server/src/auth/tokens.rs": {
+    "ploc": 138,
+    "lloc": 26,
+    "functions": 21,
+    "cyclomatic": 47
+  },
+  "crates/server/src/auth/tokens_tests.rs": {
+    "ploc": 152,
+    "lloc": 60,
+    "functions": 13,
     "cyclomatic": 14
   },
   "crates/server/src/bindings.rs": {
@@ -4593,6 +4713,12 @@
     "ploc": 43,
     "lloc": 10,
     "functions": 3,
+    "cyclomatic": 9
+  },
+  "crates/server/src/control_plane_boot.rs": {
+    "ploc": 32,
+    "lloc": 6,
+    "functions": 4,
     "cyclomatic": 9
   },
   "crates/server/src/cron_delivery.rs": {
@@ -4650,7 +4776,7 @@
     "cyclomatic": 5
   },
   "crates/server/src/lib.rs": {
-    "ploc": 795,
+    "ploc": 737,
     "lloc": 205,
     "functions": 34,
     "cyclomatic": 74
@@ -4660,6 +4786,12 @@
     "lloc": 64,
     "functions": 14,
     "cyclomatic": 18
+  },
+  "crates/server/src/lib_daemon_run_tests.rs": {
+    "ploc": 54,
+    "lloc": 15,
+    "functions": 3,
+    "cyclomatic": 9
   },
   "crates/server/src/lib_prompt_preview_tests.rs": {
     "ploc": 75,
@@ -5225,6 +5357,12 @@
     "functions": 63,
     "cyclomatic": 118
   },
+  "crates/tui/src/api_bearer.rs": {
+    "ploc": 7,
+    "lloc": 1,
+    "functions": 1,
+    "cyclomatic": 4
+  },
   "crates/tui/src/app.rs": {
     "ploc": 1526,
     "lloc": 517,
@@ -5484,7 +5622,7 @@
     "cyclomatic": 44
   },
   "crates/webui/src/components/automations.rs": {
-    "ploc": 563,
+    "ploc": 560,
     "lloc": 137,
     "functions": 49,
     "cyclomatic": 84
@@ -5568,7 +5706,7 @@
     "cyclomatic": 2
   },
   "crates/webui/src/components/incognito.rs": {
-    "ploc": 107,
+    "ploc": 104,
     "lloc": 28,
     "functions": 14,
     "cyclomatic": 20
@@ -5578,6 +5716,12 @@
     "lloc": 29,
     "functions": 10,
     "cyclomatic": 17
+  },
+  "crates/webui/src/components/login_gate.rs": {
+    "ploc": 80,
+    "lloc": 24,
+    "functions": 11,
+    "cyclomatic": 21
   },
   "crates/webui/src/components/markdown.rs": {
     "ploc": 53,
@@ -5604,7 +5748,7 @@
     "cyclomatic": 1
   },
   "crates/webui/src/components/model_browser.rs": {
-    "ploc": 105,
+    "ploc": 102,
     "lloc": 36,
     "functions": 10,
     "cyclomatic": 22
@@ -5622,13 +5766,13 @@
     "cyclomatic": 40
   },
   "crates/webui/src/components/plugins.rs": {
-    "ploc": 252,
+    "ploc": 249,
     "lloc": 66,
     "functions": 22,
     "cyclomatic": 39
   },
   "crates/webui/src/components/profile_browser.rs": {
-    "ploc": 240,
+    "ploc": 237,
     "lloc": 64,
     "functions": 28,
     "cyclomatic": 49
@@ -5646,7 +5790,7 @@
     "cyclomatic": 18
   },
   "crates/webui/src/components/project_data.rs": {
-    "ploc": 287,
+    "ploc": 284,
     "lloc": 69,
     "functions": 30,
     "cyclomatic": 48
@@ -5670,14 +5814,14 @@
     "cyclomatic": 67
   },
   "crates/webui/src/components/sidebar/mod.rs": {
-    "ploc": 762,
+    "ploc": 754,
     "lloc": 87,
     "functions": 35,
     "cyclomatic": 91
   },
   "crates/webui/src/components/sidebar/profile_api.rs": {
     "ploc": 152,
-    "lloc": 50,
+    "lloc": 46,
     "functions": 14,
     "cyclomatic": 24
   },
@@ -5730,8 +5874,8 @@
     "cyclomatic": 12
   },
   "crates/webui/src/components/stuck_sessions.rs": {
-    "ploc": 280,
-    "lloc": 60,
+    "ploc": 277,
+    "lloc": 59,
     "functions": 26,
     "cyclomatic": 44
   },
@@ -5740,6 +5884,12 @@
     "lloc": 4,
     "functions": 6,
     "cyclomatic": 10
+  },
+  "crates/webui/src/http.rs": {
+    "ploc": 100,
+    "lloc": 13,
+    "functions": 14,
+    "cyclomatic": 24
   },
   "crates/webui/src/icons.rs": {
     "ploc": 106,
