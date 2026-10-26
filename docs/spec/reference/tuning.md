@@ -45,6 +45,33 @@ ssh <box> 'docker exec -e LIBERADO_CONFIG_DIR=/config liberado liberado config c
 
 ## 2. The knobs you will actually reach for
 
+### HTTP control plane — `[api]` in `topology.toml`
+
+The daemon listens on `127.0.0.1:4201` by default. Override with `LIBERADO_BIND`, then
+`[api] bind`, then the legacy `LIBERADO_PORT` (loopback only). A non-loopback bind without
+any credential configured refuses to start.
+
+```toml
+[api]
+bind = "127.0.0.1:4201"
+human = { env = "LIBERADO_HUMAN_TOKEN" }   # owner: WebUI sign-in, approvals, profiles
+
+[[api.clients]]
+name = "cli"
+token = { env = "LIBERADO_API_TOKEN" }     # native clients (TUI, `liberado chat`, MCP)
+
+# Optional: exact origins for cross-origin dev (e.g. `dx serve` on :8080 → API on :4201)
+# allowed_origins = ["http://127.0.0.1:8080"]
+```
+
+Never put token values in TOML — only `env` or `file` references. `GET /api/health` stays
+unauthenticated for health checks; everything else needs the human session (browser cookie +
+`X-Liberado-CSRF` on writes) or `Authorization: Bearer` with a client token.
+
+**Upgrade (step 1):** add `[api]` before exposing the daemon beyond loopback. Set
+`LIBERADO_HUMAN_TOKEN` and at least one `[[api.clients]]` secret. Point Compose at
+`127.0.0.1:4201:4201` and change healthchecks to `/api/health`.
+
 ### Models and per-role tiering — `topology.toml`
 
 ```toml

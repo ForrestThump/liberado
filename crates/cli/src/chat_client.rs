@@ -118,7 +118,11 @@ async fn turn(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let body = serde_json::json!({ "message": message, "session": session });
 
-    let response = match client.post(endpoint).json(&body).send().await {
+    let mut request = client.post(endpoint).json(&body);
+    if let Some(token) = chat_client_contract::api_auth::bearer_token_from_env() {
+        request = request.header("Authorization", format!("Bearer {token}"));
+    }
+    let response = match request.send().await {
         Ok(response) => response,
         Err(_) => {
             println!(

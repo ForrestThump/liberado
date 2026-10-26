@@ -27,22 +27,22 @@ pub(super) fn mutation_error(action: &str, status: u16, body: &str) -> String {
 }
 
 async fn send_profile(
-    method: reqwest::Method,
+    patch: bool,
     api_base: &str,
     name: &str,
     body: Option<serde_json::Value>,
     action: &str,
 ) -> Result<(), String> {
     let url = format!("{api_base}/api/profiles/{name}");
-    let client = reqwest::Client::new();
-    let mut request = client.request(method, &url);
-    if let Some(body) = body {
-        request = request.json(&body);
-    }
-    let resp = request
-        .send()
-        .await
-        .map_err(|e| format!("Failed to reach daemon: {e}"))?;
+    let resp = if patch {
+        crate::http::patch_json(&url, &body.expect("patch needs a body"))
+            .await
+            .map_err(|e| format!("Failed to reach daemon: {e}"))?
+    } else {
+        crate::http::delete(&url)
+            .await
+            .map_err(|e| format!("Failed to reach daemon: {e}"))?
+    };
     let status = resp.status().as_u16();
     if (200..300).contains(&status) {
         Ok(())
@@ -54,7 +54,7 @@ async fn send_profile(
 
 async fn rename_profile(api_base: &str, name: &str, new_name: &str) -> Result<(), String> {
     send_profile(
-        reqwest::Method::PATCH,
+        true,
         api_base,
         name,
         Some(serde_json::json!({ "name": new_name })),
@@ -64,7 +64,7 @@ async fn rename_profile(api_base: &str, name: &str, new_name: &str) -> Result<()
 }
 
 async fn delete_profile(api_base: &str, name: &str) -> Result<(), String> {
-    send_profile(reqwest::Method::DELETE, api_base, name, None, "Delete").await
+    send_profile(false, api_base, name, None, "Delete").await
 }
 
 fn note_result(

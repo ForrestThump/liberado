@@ -50,10 +50,7 @@ fn discard_url(api_base: &str, id: &str) -> String {
 /// Failures are swallowed on purpose: nothing useful can be done about them here, a 404 already
 /// means the outcome we wanted, and a 409 means the guard above just saved us.
 pub async fn discard(api_base: String, id: String) {
-    let _ = reqwest::Client::new()
-        .delete(discard_url(&api_base, &id))
-        .send()
-        .await;
+    let _ = crate::http::delete(&discard_url(&api_base, &id)).await;
 }
 
 // The live incognito session, mirrored out of the Dioxus signal.

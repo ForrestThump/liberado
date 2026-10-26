@@ -514,6 +514,17 @@ impl MessagingChannel for TelegramNotifier {
             *cursor = (update_id + 1).to_string();
 
             if let Some(cq) = update.get("callback_query") {
+                let message = cq.get("message");
+                if !message
+                    .map(|msg| self.message_is_from_allowed_chat(msg))
+                    .unwrap_or(false)
+                {
+                    tracing::debug!(
+                        chat = ?message.and_then(|m| m.get("chat")).and_then(|c| c.get("id")),
+                        "Telegram callback from non-configured chat — ignored"
+                    );
+                    continue;
+                }
                 let event_id = cq["id"].as_str().unwrap_or("").to_string();
                 let data = cq["data"].as_str().unwrap_or("");
                 // The message the button lives on — its id lets us edit it (strip buttons + stamp a

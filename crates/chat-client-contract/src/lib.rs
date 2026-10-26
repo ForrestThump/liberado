@@ -30,6 +30,9 @@ pub mod surface_mode;
 pub mod wire;
 
 #[cfg(not(target_arch = "wasm32"))]
+pub mod api_auth;
+
+#[cfg(not(target_arch = "wasm32"))]
 pub mod native;
 
 // Re-export all wire types at the crate root for backward-compatible import paths.

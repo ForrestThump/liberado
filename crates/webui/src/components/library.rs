@@ -33,7 +33,7 @@ fn parse_library(body: &str) -> Result<Vec<LibraryItem>, String> {
 
 async fn fetch_library(api_base: &str) -> Result<Vec<LibraryItem>, String> {
     let url = format!("{api_base}/api/library?limit=50");
-    let resp = reqwest::get(&url)
+    let resp = crate::http::get(&url)
         .await
         .map_err(|e| format!("Failed to reach daemon: {e}"))?;
     if !resp.status().is_success() {

@@ -128,7 +128,7 @@ struct LoadedConversation {
 
 async fn fetch_conversation(api_base: &str, conv_id: &str) -> Result<LoadedConversation, String> {
     let url = format!("{api_base}/api/conversations/{conv_id}");
-    let resp = reqwest::get(&url)
+    let resp = crate::http::get(&url)
         .await
         .map_err(|e| format!("Failed to reach daemon: {e}"))?;
     let history: chat_client_contract::ConversationHistoryResponse = resp
@@ -261,9 +261,7 @@ pub fn Chat(
     let enter_cfg = use_resource(move || {
         let base = base_for_enter.clone();
         async move {
-            reqwest::Client::new()
-                .get(format!("{base}/api/status"))
-                .send()
+            crate::http::get(&format!("{base}/api/status"))
                 .await
                 .ok()?
                 .json::<chat_client_contract::DaemonStatus>()
@@ -446,7 +444,7 @@ pub fn Chat(
                 let stop_base = api_base.clone();
                 let url = format!("{stop_base}/api/conversations/{id}/cancel");
                 wasm_bindgen_futures::spawn_local(async move {
-                    let _ = reqwest::Client::new().post(&url).send().await;
+                    let _ = crate::http::post_empty(&url).await;
                 });
             }
             crate::components::chat::close_current_stream();
@@ -1197,8 +1195,7 @@ fn connect_stream(
                             &title,
                             project_for_title.as_deref(),
                         );
-                        let client = reqwest::Client::new();
-                        match client.patch(&url).json(&body).send().await {
+                        match crate::http::patch_json(&url, &body).await {
                             Ok(resp) => {
                                 if !resp.status().is_success() {
                                     web_sys::console::log_1(

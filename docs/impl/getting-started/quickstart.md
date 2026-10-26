@@ -65,9 +65,12 @@ target/release/liberado serve /path/to/your/vault
 LIBERADO_VAULT=/path/to/your/vault target/release/liberado
 ```
 
-The daemon binds `0.0.0.0:4201` by default (override with `LIBERADO_PORT`).
-Open `http://localhost:4201` for the WebUI dashboard. Watch-only mode needs
-nothing else.
+The daemon binds `127.0.0.1:4201` by default. Reach it from another host with
+`LIBERADO_BIND` (or `[api] bind` in `topology.toml`) and a credential in
+`[api]` — see [`docs/spec/reference/tuning.md`](../../spec/reference/tuning.md).
+Open `http://localhost:4201` for the WebUI dashboard. When `[api] human` is
+set, sign in once with that token (the UI stores an HttpOnly session cookie).
+Watch-only mode needs nothing else.
 
 For chat and any other LLM feature, the daemon also needs a provider API key
 in the environment — the name is `topology.toml`'s `[[providers]]` row's
@@ -87,7 +90,9 @@ target/release/liberado chat
 ```
 
 The client connects to `http://127.0.0.1:4201` by default. Override with
-`LIBERADO_SERVER=http://host:port` if the daemon is elsewhere.
+`LIBERADO_SERVER=http://host:port` if the daemon is elsewhere. When the daemon
+has `[api]` credentials configured, set `LIBERADO_API_TOKEN` to a
+`[[api.clients]]` token (or the human token for owner-only CLI use).
 
 Pass a session id to resume a previous conversation:
 

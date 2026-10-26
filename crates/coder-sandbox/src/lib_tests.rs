@@ -373,6 +373,62 @@ fn docker_workspace_builds_docker_run_args() {
 }
 
 #[test]
+fn docker_workspace_defaults_to_network_none() {
+    let dir = tempfile::tempdir().unwrap();
+    let ws = DockerWorkspace::new(
+        dir.path(),
+        DockerSandboxSpec {
+            image: "liberado-coder:latest".to_string(),
+            network: None,
+            env_allowlist: Vec::new(),
+            volumes: Vec::new(),
+            user: None,
+        },
+        CommandPolicy::default(),
+    )
+    .unwrap();
+    let args = ws
+        .docker_run_args(&CommandRequest::new("echo"))
+        .expect("args");
+    assert!(args.contains(&"--network".to_string()));
+    assert!(args.contains(&"none".to_string()));
+}
+
+#[test]
+fn docker_workspace_strips_api_tokens_from_the_environment() {
+    let dir = tempfile::tempdir().unwrap();
+    let ws = DockerWorkspace::new(
+        dir.path(),
+        DockerSandboxSpec {
+            image: "liberado-coder:latest".to_string(),
+            network: Some("none".to_string()),
+            env_allowlist: vec![
+                "OPENROUTER_API_KEY".to_string(),
+                "LIBERADO_API_TOKEN".to_string(),
+            ],
+            volumes: Vec::new(),
+            user: None,
+        },
+        CommandPolicy::default(),
+    )
+    .unwrap();
+    let mut request = CommandRequest::new("cargo");
+    request
+        .env
+        .insert("LIBERADO_API_TOKEN".to_string(), "leak".to_string());
+    request
+        .env
+        .insert("RUST_LOG".to_string(), "info".to_string());
+    let args = ws.docker_run_args(&request).unwrap();
+    assert!(args.contains(&"OPENROUTER_API_KEY".to_string()));
+    assert!(args.contains(&"RUST_LOG=info".to_string()));
+    assert!(
+        !args.iter().any(|a| a.contains("LIBERADO_API_TOKEN")),
+        "API tokens must not reach docker -e: {args:?}"
+    );
+}
+
+#[test]
 fn docker_workspace_resolve_path_delegates_to_host() {
     let dir = tempfile::tempdir().unwrap();
     let ws = DockerWorkspace::new(

@@ -5,6 +5,7 @@ use dioxus::prelude::*;
 
 mod back_nav;
 mod components;
+mod http;
 mod icons;
 #[cfg(test)]
 mod pwa;
@@ -90,6 +91,29 @@ mod tests {
 #[component]
 fn App() -> Element {
     let base = api_base();
+    let mut auth_ready = use_signal(|| false);
+    let mut need_login = use_signal(|| false);
+    let base_for_session = base.clone();
+    use_effect(move || {
+        let base = base_for_session.clone();
+        #[cfg(target_arch = "wasm32")]
+        wasm_bindgen_futures::spawn_local(async move {
+            match components::login_gate::probe_session(&base).await {
+                Ok(session) => {
+                    need_login.set(session.login_required && !session.authenticated);
+                    auth_ready.set(true);
+                }
+                Err(_) => {
+                    need_login.set(false);
+                    auth_ready.set(true);
+                }
+            }
+        });
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            auth_ready.set(true);
+        }
+    });
     // Default to Chat — the screenshot says Chat is the open surface. Imagine / Library /
     // Automations / Projects / Plugins are reachable via the sidebar.
     let mut route = use_signal(|| Route::Chat);
@@ -210,6 +234,14 @@ fn App() -> Element {
         style { {crate::theme::theme_css_vars(&crate::theme::theme_by_name(&theme_name()))} }
         style { {include_str!("./styles/main.css")} }
 
+        if !auth_ready() {
+            div { class: "login-gate", "Loading session…" }
+        } else if need_login() {
+            components::login_gate::LoginGate {
+                api_base: base.clone(),
+                on_authenticated: move |_| need_login.set(false),
+            }
+        } else {
         div {
             class: "app",
             if !is_narrow() {
@@ -438,6 +470,7 @@ fn App() -> Element {
                     }
                 }
             }
+        }
         }
     }
 }
