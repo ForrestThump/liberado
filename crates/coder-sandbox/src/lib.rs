@@ -5,12 +5,12 @@
 //! sandboxes will implement.
 
 mod cargo_targets;
-mod sandbox_env;
 mod checkpoint;
 mod merge;
 mod path_deps;
 mod preflight;
 mod preflight_baseline;
+mod sandbox_env;
 pub mod warmup;
 mod worktree_registry;
 mod worktree_setup;
