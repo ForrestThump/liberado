@@ -58,21 +58,31 @@ impl DaemonClient {
         self.exchange(reqwest::Method::POST, path, Some(body)).await
     }
 
-    async fn exchange(
+    fn build_request(
         &self,
         method: reqwest::Method,
         path: &str,
         body: Option<&Value>,
-    ) -> Result<Value, DogfoodError> {
+    ) -> reqwest::RequestBuilder {
         let url = format!("{}{path}", self.base);
-        let mut request = self.http.request(method.clone(), &url);
+        let mut request = self.http.request(method, &url);
         if let Some(token) = bearer_token() {
             request = request.header("Authorization", format!("Bearer {token}"));
         }
         if let Some(body) = body {
             request = request.json(body);
         }
-        let response = request
+        request
+    }
+
+    async fn exchange(
+        &self,
+        method: reqwest::Method,
+        path: &str,
+        body: Option<&Value>,
+    ) -> Result<Value, DogfoodError> {
+        let response = self
+            .build_request(method.clone(), path, body)
             .send()
             .await
             .map_err(|err| DogfoodError::Daemon(format!("{method} {path} failed: {err}")))?;

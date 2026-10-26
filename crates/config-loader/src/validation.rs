@@ -320,12 +320,16 @@ fn validate_risk_waivers(config: &Config) -> Result<(), ConfigLoadError> {
 /// Returns the first violation found. Each error message names the offending entry so the user
 /// can fix it without a debugger.
 pub fn validate_merged_config(config: &Config) -> Result<(), ConfigLoadError> {
-    validate_grants(config)?;
-    validate_mcp_zones(config)?;
-    validate_report_sink(config)?;
-    validate_policy_secrets(config)?;
-    validate_hook_secrets(config)?;
-    validate_api(config)?;
+    for validate in [
+        validate_grants,
+        validate_mcp_zones,
+        validate_report_sink,
+        validate_policy_secrets,
+        validate_hook_secrets,
+        validate_api,
+    ] {
+        validate(config)?;
+    }
     Ok(())
 }
 

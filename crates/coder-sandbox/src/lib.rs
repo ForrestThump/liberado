@@ -294,6 +294,26 @@ pub async fn run_git_best_effort(
     run_git(current_dir, args).await
 }
 
+fn apply_sandbox_env(command: &mut tokio::process::Command, env: &BTreeMap<String, String>) {
+    for (key, value) in env {
+        if !sandbox_env_is_denied(key) {
+            command.env(key, value);
+        }
+    }
+}
+
+async fn run_host_command(
+    mut command: tokio::process::Command,
+    timeout_secs: u64,
+) -> Result<(Option<i32>, Vec<u8>, Vec<u8>, bool), SandboxError> {
+    let output_result = timeout(Duration::from_secs(timeout_secs), command.output()).await;
+    match output_result {
+        Ok(Ok(output)) => Ok((output.status.code(), output.stdout, output.stderr, false)),
+        Ok(Err(e)) => Err(SandboxError::Spawn(e.to_string())),
+        Err(_) => Ok((None, Vec::new(), Vec::new(), true)),
+    }
+}
+
 #[async_trait]
 impl CommandRunner for HostWorkspace {
     async fn run_command(&self, request: CommandRequest) -> Result<CommandOutput, SandboxError> {
@@ -302,21 +322,13 @@ impl CommandRunner for HostWorkspace {
         let mut command = liberado_common::process::command(&request.program);
         command.args(&request.args).current_dir(&self.root);
         command.kill_on_drop(true);
-        for (key, value) in &request.env {
-            if !sandbox_env_is_denied(key) {
-                command.env(key, value);
-            }
-        }
+        apply_sandbox_env(&mut command, &request.env);
 
         let timeout_secs = request
             .timeout_secs
             .unwrap_or(self.command_policy.timeout_secs);
-        let output_result = timeout(Duration::from_secs(timeout_secs), command.output()).await;
-        let (exit_code, stdout, stderr, timed_out) = match output_result {
-            Ok(Ok(output)) => (output.status.code(), output.stdout, output.stderr, false),
-            Ok(Err(e)) => return Err(SandboxError::Spawn(e.to_string())),
-            Err(_) => (None, Vec::new(), Vec::new(), true),
-        };
+        let (exit_code, stdout, stderr, timed_out) =
+            run_host_command(command, timeout_secs).await?;
 
         let max = request
             .output_max_bytes
