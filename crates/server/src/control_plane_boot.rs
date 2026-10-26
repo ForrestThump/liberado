@@ -27,7 +27,7 @@ pub fn log_api_posture(guard: &auth::ApiGuard, plan: &auth::BindPlan) {
     );
 }
 
-/// Credentials, bind plan, and the non-loopback refusal — everything [`run`] needs before assembly.
+/// Credentials, bind plan, and the non-loopback refusal — everything [`crate::run`] needs before assembly.
 pub fn prepare_control_plane(
     api: &ApiConfig,
 ) -> Result<(Arc<auth::ApiGuard>, auth::BindPlan), Box<dyn std::error::Error>> {

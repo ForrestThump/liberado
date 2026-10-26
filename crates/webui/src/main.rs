@@ -96,19 +96,21 @@ fn App() -> Element {
     let base_for_session = base.clone();
     use_effect(move || {
         #[cfg(target_arch = "wasm32")]
-        wasm_bindgen_futures::spawn_local(async move {
+        {
             let base = base_for_session.clone();
-            match components::login_gate::probe_session(&base).await {
-                Ok(session) => {
-                    need_login.set(session.login_required && !session.authenticated);
-                    auth_ready.set(true);
+            wasm_bindgen_futures::spawn_local(async move {
+                match components::login_gate::probe_session(&base).await {
+                    Ok(session) => {
+                        need_login.set(session.login_required && !session.authenticated);
+                        auth_ready.set(true);
+                    }
+                    Err(_) => {
+                        need_login.set(false);
+                        auth_ready.set(true);
+                    }
                 }
-                Err(_) => {
-                    need_login.set(false);
-                    auth_ready.set(true);
-                }
-            }
-        });
+            });
+        }
         #[cfg(not(target_arch = "wasm32"))]
         {
             auth_ready.set(true);
