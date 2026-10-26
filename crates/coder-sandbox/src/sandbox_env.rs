@@ -22,7 +22,10 @@ pub fn sandbox_env_is_denied(name: &str) -> bool {
     upper == "AUTHORIZATION"
 }
 
-pub(crate) fn apply_sandbox_env(command: &mut tokio::process::Command, env: &BTreeMap<String, String>) {
+pub(crate) fn apply_sandbox_env(
+    command: &mut tokio::process::Command,
+    env: &BTreeMap<String, String>,
+) {
     for (key, value) in env {
         if !sandbox_env_is_denied(key) {
             command.env(key, value);
