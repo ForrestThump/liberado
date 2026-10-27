@@ -44,7 +44,7 @@ use async_trait::async_trait;
 use liberado_common::{
     ApprovalOrigin, ApprovedGuard, Capability, CapabilityCatalog, CapabilitySet, Consequence,
     McpDescriptor, Proposal, ProposalSigner, ProposedAction, RiskWaiverSet, SignedProposal,
-    WriteClass, WriteTarget, Zone, bare_tool_name, mcp_of, write_target,
+    WriteClass, Zone, bare_tool_name, mcp_of,
 };
 use liberado_notify::Notifier;
 use liberado_provider::{ToolDef, ToolInvocation};
@@ -58,6 +58,9 @@ mod skip;
 
 #[path = "risk_gated_vault.rs"]
 mod risk_gated_vault;
+
+#[path = "risk_gated_catalog.rs"]
+mod risk_gated_catalog;
 
 /// A runtime guard that wraps an inner [`ToolRuntime`] and applies capability, consequence,
 /// zone-write-class, and magnitude checks before delegating to the inner runtime.
@@ -251,54 +254,6 @@ impl RiskGatedToolRuntime {
         );
     }
 
-    fn consequence_of(&self, mcp_name: &str) -> Consequence {
-        if let Some(cat) = &self.live_catalog {
-            return cat.get(mcp_name).map(|d| d.consequence).unwrap_or_else(|| {
-                tracing::warn!(
-                    mcp = %mcp_name,
-                    "MCP is capability-granted but missing from live catalog — \
-                     defaulting to ReadOnly"
-                );
-                Consequence::ReadOnly
-            });
-        }
-        match self
-            .consequence_catalog
-            .iter()
-            .find(|(name, _)| name == mcp_name)
-        {
-            Some((_, c)) => *c,
-            None => {
-                tracing::warn!(
-                    mcp = %mcp_name,
-                    "MCP is capability-granted but missing from consequence_catalog — \
-                     defaulting to ReadOnly; check for a name mismatch between the two catalogs"
-                );
-                Consequence::ReadOnly
-            }
-        }
-    }
-
-    /// The declaration this call is judged against — the live catalog when one is attached, else
-    /// the boot-time snapshot. Shared by the zone-write guard and the magnitude guard so both read
-    /// the same declaration for one call.
-    fn descriptor_of(&self, mcp_name: &str) -> Option<McpDescriptor> {
-        if let Some(cat) = &self.live_catalog {
-            cat.get(mcp_name)
-        } else {
-            self.zone_catalog
-                .iter()
-                .find(|d| d.name == mcp_name)
-                .cloned()
-        }
-    }
-
-    fn write_target_of(&self, mcp_name: &str, call: &ToolInvocation) -> WriteTarget {
-        self.descriptor_of(mcp_name)
-            .map(|d| write_target(&d, bare_tool_name(&call.name), &call.arguments))
-            .unwrap_or(WriteTarget::NotAWrite)
-    }
-
     /// Share the flag this runtime raises when it defers a call to the human out-of-band, so the
     /// owning `Orchestrator` can read it back after the run (see `notified_deferral` and
     /// [`took_deferral_to_human`](Self::took_deferral_to_human)). Without this, the runtime still
@@ -328,97 +283,101 @@ impl ToolRuntime for RiskGatedToolRuntime {
             mcp = %mcp_of(&call.name),
         );
 
-        async {
-            let mcp_name = mcp_of(&call.name).to_string();
+        async { self.invoke_guards(call).await }
+            .instrument(span)
+            .await
+    }
+}
 
-            // Admin tools (`set_active_vault`) are hard-denied before the capability check.
-            // There is no chat card: the operator invokes them through daemon config or a shell.
-            if let Some(err) = risk_gated_vault::refuse_admin_tool(self, call, &mcp_name) {
-                return Err(err);
-            }
+impl RiskGatedToolRuntime {
+    async fn invoke_guards(&self, call: &ToolInvocation) -> Result<String, String> {
+        let mcp_name = mcp_of(&call.name).to_string();
 
-            // 1. Capability check: is **this tool** granted?
-            //
-            // `grants_tool`, not `grants_mcp`: a grant may name the whole server
-            // (`ExecuteMcp("turbovault")`) or one tool on it (`ExecuteTool("turbovault:read_note")`),
-            // and only the tool-level question distinguishes them. Asking `grants_mcp` here would
-            // pass every tool on a server the grant only meant to open a crack of — precisely what
-            // per-tool grants exist to prevent, and it would have done so silently.
-            if !self.capabilities.grants_tool(&call.name) {
-                self.authority_decision(
-                    "mcp_grant",
-                    "refused",
-                    call,
-                    None,
-                    &format!("ExecuteTool(\"{}\")", call.name),
-                );
-                return Err(format!(
-                    "not authorized: tool '{}' is not in the granted capability set",
-                    call.name
-                ));
-            }
+        // Admin tools (`set_active_vault`) are hard-denied before the capability check.
+        // There is no chat card: the operator invokes them through daemon config or a shell.
+        if let Some(err) = risk_gated_vault::refuse_admin_tool(self, call, &mcp_name) {
+            return Err(err);
+        }
 
-            // 2. Consequence check — live catalog when wired (hot-reload), else boot snapshot.
-            let consequence = self.consequence_of(&mcp_name);
+        // 1. Capability check: is **this tool** granted?
+        //
+        // `grants_tool`, not `grants_mcp`: a grant may name the whole server
+        // (`ExecuteMcp("turbovault")`) or one tool on it (`ExecuteTool("turbovault:read_note")`),
+        // and only the tool-level question distinguishes them. Asking `grants_mcp` here would
+        // pass every tool on a server the grant only meant to open a crack of — precisely what
+        // per-tool grants exist to prevent, and it would have done so silently.
+        if !self.capabilities.grants_tool(&call.name) {
+            self.authority_decision(
+                "mcp_grant",
+                "refused",
+                call,
+                None,
+                &format!("ExecuteTool(\"{}\")", call.name),
+            );
+            return Err(format!(
+                "not authorized: tool '{}' is not in the granted capability set",
+                call.name
+            ));
+        }
 
-            // 2b. **What does this call write, and may this grant write it? (F1)**
-            //
-            // `ExecuteMcp` says you may *call* this MCP. It does not say you may *write* with it —
-            // and until 2026-07-14 nothing else said so either: `Capability::Write(Zone)` was never
-            // consulted at this boundary, so a grant of `Read` + `ExecuteMcp("turbovault")` could
-            // write the entire vault. A live dispatch session with no `Write` capability wrote a
-            // note its profile explicitly withheld.
-            //
-            // The zone is resolved ONCE here and reused by the write-class check below. That
-            // matters: both guards were previously inert for the same reason (no MCP declared a
-            // zone, so nothing resolved), and resolving in one place means they cannot drift back
-            // apart. For a path-addressed MCP the zone depends on the call's *arguments*, so this
-            // is the only place it can be known.
-            //
-            // 2026-10-11 follow-up: the resolution itself was *fail-open*. A path-addressed MCP's
-            // `write_tools` is a deny-list, so a tool the operator forgot to add to it returned
-            // `NotAWrite` and the gate silently waved the call through (live session
-            // `01M3ZB89WK54HGNG6ATJ9FPJMX`, `edit_note` on `conformance/approval-test.md`). The new
-            // contract is fail-closed: undeclared tools on path-addressed MCPs return
-            // `Undeterminable` here, refused below, and the error names the three lists the
-            // operator must classify the tool under.
-            let write_target = self.write_target_of(&mcp_name, call);
-            // Zone checks, vault-wide marker, and permission cards live in `risk_gated_vault`
-            // so this function stays under the module-health ceilings.
-            let write_zones =
-                match risk_gated_vault::authorize_vault_write(self, call, &mcp_name, &write_target)
-                    .await?
-                {
-                    risk_gated_vault::VaultAuth::Message(message) => return Ok(message),
-                    risk_gated_vault::VaultAuth::Proceed(zones) => zones,
-                };
+        // 2. Consequence check — live catalog when wired (hot-reload), else boot snapshot.
+        let consequence = self.require_consequence(call, &mcp_name)?;
 
-            if let Some(message) = self
-                .proposal_if_risky(
-                    call,
-                    &mcp_name,
-                    consequence,
-                    // Multi-zone calls surface every zone to the magnitude heuristic so a tool
-                    // whose arguments mention a single zone but are configured for many is judged
-                    // against the broader reach.
-                    if write_zones.is_empty() {
-                        None
-                    } else {
-                        Some(write_zones[0].as_str())
-                    },
-                    &write_target,
-                )
+        // 2b. **What does this call write, and may this grant write it? (F1)**
+        //
+        // `ExecuteMcp` says you may *call* this MCP. It does not say you may *write* with it —
+        // and until 2026-07-14 nothing else said so either: `Capability::Write(Zone)` was never
+        // consulted at this boundary, so a grant of `Read` + `ExecuteMcp("turbovault")` could
+        // write the entire vault. A live dispatch session with no `Write` capability wrote a
+        // note its profile explicitly withheld.
+        //
+        // The zone is resolved ONCE here and reused by the write-class check below. That
+        // matters: both guards were previously inert for the same reason (no MCP declared a
+        // zone, so nothing resolved), and resolving in one place means they cannot drift back
+        // apart. For a path-addressed MCP the zone depends on the call's *arguments*, so this
+        // is the only place it can be known.
+        //
+        // 2026-10-11 follow-up: the resolution itself was *fail-open*. A path-addressed MCP's
+        // `write_tools` is a deny-list, so a tool the operator forgot to add to it returned
+        // `NotAWrite` and the gate silently waved the call through (live session
+        // `01M3ZB89WK54HGNG6ATJ9FPJMX`, `edit_note` on `conformance/approval-test.md`). The new
+        // contract is fail-closed: undeclared tools on path-addressed MCPs return
+        // `Undeterminable` here, refused below, and the error names the three lists the
+        // operator must classify the tool under.
+        let write_target = self.write_target_of(&mcp_name, call);
+        // Zone checks, vault-wide marker, and permission cards live in `risk_gated_vault`
+        // so this function stays under the module-health ceilings.
+        let write_zones =
+            match risk_gated_vault::authorize_vault_write(self, call, &mcp_name, &write_target)
                 .await?
             {
-                return Ok(message);
-            }
+                risk_gated_vault::VaultAuth::Message(message) => return Ok(message),
+                risk_gated_vault::VaultAuth::Proceed(zones) => zones,
+            };
 
-            // 5. All guards pass — delegate to inner runtime.
-            tracing::debug!(mcp = %mcp_name, "tool call passed risk gates");
-            self.inner.invoke(call).await
+        if let Some(message) = self
+            .proposal_if_risky(
+                call,
+                &mcp_name,
+                consequence,
+                // Multi-zone calls surface every zone to the magnitude heuristic so a tool
+                // whose arguments mention a single zone but are configured for many is judged
+                // against the broader reach.
+                if write_zones.is_empty() {
+                    None
+                } else {
+                    Some(write_zones[0].as_str())
+                },
+                &write_target,
+            )
+            .await?
+        {
+            return Ok(message);
         }
-        .instrument(span)
-        .await
+
+        // 5. All guards pass — delegate to inner runtime.
+        tracing::debug!(mcp = %mcp_name, "tool call passed risk gates");
+        self.inner.invoke(call).await
     }
 }
 
@@ -850,6 +809,10 @@ mod tests;
 #[cfg(test)]
 #[path = "risk_gated_vault_gate_tests.rs"]
 mod vault_gate_tests;
+
+#[cfg(test)]
+#[path = "risk_gated_fail_closed_tests.rs"]
+mod fail_closed_tests;
 
 #[cfg(test)]
 #[path = "risk_gated_survivor_tests.rs"]

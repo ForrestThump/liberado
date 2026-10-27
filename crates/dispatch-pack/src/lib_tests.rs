@@ -3,8 +3,8 @@
 use super::*;
 use liberado_common::WriteProvenance;
 use liberado_common::{
-    Capability, CapabilitySet, Delivery, DispatchAction, DispatchDecision, Outcome, ProposalSigner,
-    Report,
+    Capability, CapabilitySet, Consequence, Delivery, DispatchAction, DispatchDecision, Outcome,
+    ProposalSigner, Report,
 };
 use liberado_config_loader::DispatchTuning;
 use liberado_executor::{RuntimeFactory, RuntimeSetupError, SUBMIT_REPORT_TOOL, ToolRuntime};
@@ -448,7 +448,7 @@ async fn dispatch_parallel_runs_each_worker_in_its_own_worktree() {
         provider,
         factory,
         CapabilitySet::from_iter([Capability::ExecuteTool("write_marker".into())]),
-        Vec::new(),
+        vec![("write_marker".into(), Consequence::Reversible)],
         Vec::new(),
         Vec::new(),
         std::env::temp_dir(),

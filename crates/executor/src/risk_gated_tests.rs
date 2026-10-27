@@ -427,8 +427,7 @@ async fn zone_agent_writable_call_passes_through() {
 
 #[tokio::test]
 async fn call_to_an_mcp_not_in_the_zone_catalog_is_unaffected() {
-    // Backward-compat case: an empty zone_catalog (as every pre-existing test in this file
-    // uses) must never trip the zone-write-class check, regardless of zone_write_classes.
+    // Consequence-only declaration (zone-light MCPs): synthesised descriptor, call still runs.
     let dir = tempfile::TempDir::new().unwrap();
     let inner = Arc::new(InvocationRecordingRuntime::new(
         &["vault:write_review"],
@@ -947,7 +946,7 @@ mod magnitude_respects_risk_waivers {
             inner.clone(),
             turbovault_descriptor(),
             goal,
-            vec![],
+            vec![(String::from("turbovault"), Consequence::Reversible)],
             RiskWaiverSet::empty(),
         );
         let read_call = ToolInvocation::new(
@@ -970,7 +969,7 @@ mod magnitude_respects_risk_waivers {
             inner.clone(),
             turbovault_descriptor(),
             goal,
-            vec![],
+            vec![(String::from("turbovault"), Consequence::Reversible)],
             RiskWaiverSet {
                 waivers: [waiver(
                     "turbovault",
@@ -1004,7 +1003,7 @@ mod magnitude_respects_risk_waivers {
             inner.clone(),
             turbovault_descriptor(),
             goal,
-            vec![],
+            vec![(String::from("turbovault"), Consequence::Reversible)],
             RiskWaiverSet {
                 waivers: [waiver(
                     "turbovault",
@@ -1044,7 +1043,7 @@ mod magnitude_respects_risk_waivers {
             inner.clone(),
             turbovault_descriptor(),
             goal,
-            vec![],
+            vec![(String::from("turbovault"), Consequence::Reversible)],
             RiskWaiverSet {
                 waivers: [waiver(
                     "turbovault",
