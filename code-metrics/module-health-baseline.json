@@ -41,6 +41,12 @@
     "functions": 29,
     "cyclomatic": 60
   },
+  "crates/acp-bridge/src/face_client_auth_tests.rs": {
+    "ploc": 124,
+    "lloc": 40,
+    "functions": 14,
+    "cyclomatic": 22
+  },
   "crates/acp-bridge/src/face_client_stream_tests.rs": {
     "ploc": 81,
     "lloc": 40,
@@ -736,6 +742,12 @@
     "lloc": 53,
     "functions": 13,
     "cyclomatic": 14
+  },
+  "crates/cli/src/shepherd_cmd/daemon_http.rs": {
+    "ploc": 168,
+    "lloc": 51,
+    "functions": 24,
+    "cyclomatic": 34
   },
   "crates/cli/src/shepherd_cmd/invocation.rs": {
     "ploc": 109,
@@ -1530,10 +1542,10 @@
     "cyclomatic": 22
   },
   "crates/coder-sandbox/src/lib.rs": {
-    "ploc": 586,
-    "lloc": 127,
+    "ploc": 577,
+    "lloc": 124,
     "functions": 59,
-    "cyclomatic": 147
+    "cyclomatic": 143
   },
   "crates/coder-sandbox/src/lib_git_helper_tests.rs": {
     "ploc": 66,
@@ -2824,6 +2836,18 @@
     "lloc": 24,
     "functions": 4,
     "cyclomatic": 7
+  },
+  "crates/executor/src/risk_gated_catalog.rs": {
+    "ploc": 88,
+    "lloc": 5,
+    "functions": 19,
+    "cyclomatic": 24
+  },
+  "crates/executor/src/risk_gated_fail_closed_tests.rs": {
+    "ploc": 181,
+    "lloc": 34,
+    "functions": 5,
+    "cyclomatic": 6
   },
   "crates/executor/src/risk_gated_skip.rs": {
     "ploc": 110,
