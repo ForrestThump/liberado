@@ -8,6 +8,7 @@ pub mod grants_popover;
 pub mod imagine;
 pub mod incognito;
 pub mod library;
+pub mod login_gate;
 pub mod markdown;
 pub mod mcp_panel;
 mod message_row;

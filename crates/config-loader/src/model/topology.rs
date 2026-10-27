@@ -44,6 +44,11 @@ pub struct Topology {
     /// `[acp]` — the ACP bridge Paseo spawns. Absent = built-in defaults.
     #[serde(default)]
     pub acp: AcpConfig,
+    /// `[api]` — where the HTTP control plane listens, which credentials reach it, and which
+    /// browser origins may call it. Absent = loopback with no credential, which is the only
+    /// shape that needs none.
+    #[serde(default)]
+    pub api: crate::model::ApiConfig,
     /// Declared model profiles available to the system.
     pub models: Vec<ModelProfile>,
     /// Which model (by name) fills each role. Validated against the capability floors.

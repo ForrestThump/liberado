@@ -50,7 +50,7 @@ fn parse_schedules(body: &str) -> Result<Vec<ScheduleRow>, String> {
 
 async fn fetch_schedules(api_base: &str) -> Result<Vec<ScheduleRow>, String> {
     let url = format!("{api_base}/api/schedules");
-    let resp = reqwest::get(&url)
+    let resp = crate::http::get(&url)
         .await
         .map_err(|e| format!("Failed to reach daemon: {e}"))?;
     if !resp.status().is_success() {
@@ -118,10 +118,7 @@ fn chat_error(status: u16, body: &str) -> String {
 
 async fn post_automation_chat(api_base: &str, body: &serde_json::Value) -> Result<String, String> {
     let url = format!("{api_base}/api/conversations");
-    let resp = reqwest::Client::new()
-        .post(&url)
-        .json(body)
-        .send()
+    let resp = crate::http::post_json(&url, body)
         .await
         .map_err(|e| format!("Failed to reach daemon: {e}"))?;
     let status = resp.status().as_u16();

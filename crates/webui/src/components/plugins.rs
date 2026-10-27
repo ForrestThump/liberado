@@ -45,7 +45,7 @@ pub(crate) fn plugin_error(status: u16, body: &str) -> String {
 
 async fn fetch_catalog(api_base: String) -> Result<CatalogResponse, String> {
     let url = format!("{api_base}/api/catalog");
-    let resp = reqwest::get(&url)
+    let resp = crate::http::get(&url)
         .await
         .map_err(|e| format!("Failed to reach daemon: {e}"))?;
     if !resp.status().is_success() {
@@ -57,10 +57,7 @@ async fn fetch_catalog(api_base: String) -> Result<CatalogResponse, String> {
 
 async fn put_plugin_enabled(api_base: &str, name: &str, enabled: bool) -> Result<(), String> {
     let url = format!("{api_base}/api/plugins/{name}");
-    let resp = reqwest::Client::new()
-        .put(&url)
-        .json(&serde_json::json!({ "enabled": enabled }))
-        .send()
+    let resp = crate::http::put_json(&url, &serde_json::json!({ "enabled": enabled }))
         .await
         .map_err(|e| format!("Failed to reach daemon: {e}"))?;
     let status = resp.status().as_u16();

@@ -1,11 +1,13 @@
 //! The typed config model (Decision 14), split by section for maintainability.
 //!
+//! - [`api`]: `[api]` — bind address, API credentials, allowed browser origins
 //! - [`config`]: top-level [`Config`]
 //! - [`topology`]: vault, providers, pools, profiles, schedules, hooks, MCPs
 //! - [`policy`]: zones and grants
 //! - [`tuning`]: dispatch/context/concurrency and surface tunables
 //! - [`builder`]: [`ConfigBuilder`] for tests
 
+mod api;
 mod builder;
 mod config;
 mod config_builtin_editor;
@@ -20,6 +22,7 @@ mod topology_default;
 mod tuning;
 mod vault_reminders;
 
+pub use api::{ApiClientConfig, ApiConfig, CredentialRef, DEFAULT_BIND};
 pub use builder::ConfigBuilder;
 pub use config::{CodingAuthError, CodingWorkspaceAuth, Config, GrantParts, ResolvedProfile};
 pub use config_builtin_editor::BUILTIN_AUTOMATION_EDITOR_PROFILE;

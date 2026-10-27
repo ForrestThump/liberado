@@ -43,16 +43,17 @@ pub use schedule_write::{
 };
 
 pub use liberado_config_loader::{
-    AcpConfig, AgentWorkspaceTuning, BUILTIN_AUTOMATION_EDITOR_PROFILE,
+    AcpConfig, AgentWorkspaceTuning, ApiClientConfig, ApiConfig, BUILTIN_AUTOMATION_EDITOR_PROFILE,
     COMPACTION_TRIGGER_PCT_DEFAULT, COMPACTION_TRIGGER_TOKENS_FALLBACK, CURRENT_SCHEMA_VERSION,
     CaptureTuning, CodingAuthError, CodingWorkspaceAuth, CompactionSettings,
-    CompactionTriggerSource, ConcurrencyTuning, Config, ConfigBuilder, ContextTuning, CronSchedule,
-    DEFAULT_POOL, DispatchTuning, Grant, HookConfig, MainAgentConfig, MaintenanceTuning, McpConfig,
-    McpPoolingTuning, McpTransport, ModelCompactionSettings, Policy, PoolConfig, ProjectConfig,
-    ProviderFallback, ProviderProfile, ResolvedProfile, RoleOverride, ScheduleTiming,
-    SessionProfile, ShepherdAuthConfig, ShepherdConfig, ShepherdProjectConfig,
-    ShepherdReviewConfig, SubagentIsolation, TelegramApprovalsTuning, ToolImpact, Topology, Tuning,
-    VaultRemindersConfig, ZonePolicy, managed_binary_path, resolve_declared_zone,
+    CompactionTriggerSource, ConcurrencyTuning, Config, ConfigBuilder, ContextTuning,
+    CredentialRef, CronSchedule, DEFAULT_BIND, DEFAULT_POOL, DispatchTuning, Grant, HookConfig,
+    MainAgentConfig, MaintenanceTuning, McpConfig, McpPoolingTuning, McpTransport,
+    ModelCompactionSettings, Policy, PoolConfig, ProjectConfig, ProviderFallback, ProviderProfile,
+    ResolvedProfile, RoleOverride, ScheduleTiming, SessionProfile, ShepherdAuthConfig,
+    ShepherdConfig, ShepherdProjectConfig, ShepherdReviewConfig, SubagentIsolation,
+    TelegramApprovalsTuning, ToolImpact, Topology, Tuning, VaultRemindersConfig, ZonePolicy,
+    managed_binary_path, resolve_declared_zone,
 };
 
 /// Records which source file contributed each section of a loaded [`Config`],

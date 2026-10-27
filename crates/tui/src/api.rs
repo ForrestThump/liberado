@@ -11,6 +11,8 @@
 
 use reqwest::{Client, StatusCode};
 
+use crate::api_bearer::with_bearer;
+
 // Re-export the shared wire types so the rest of the crate can still import them
 // from `crate::api::*` without changing call sites.
 pub use chat_client_contract::{
@@ -40,7 +42,9 @@ pub async fn fetch_status(
     client: &Client,
     server: &str,
 ) -> Result<Option<DaemonStatus>, reqwest::Error> {
-    let resp = client.get(format!("{server}/api/status")).send().await?;
+    let resp = with_bearer(client.get(format!("{server}/api/status")))
+        .send()
+        .await?;
     if resp.status() == StatusCode::SERVICE_UNAVAILABLE {
         return Ok(None);
     }
@@ -54,11 +58,13 @@ pub async fn fetch_reactions(
     server: &str,
     limit: usize,
 ) -> Result<Vec<ReactionEvent>, reqwest::Error> {
-    let resp = client
-        .get(format!("{server}/api/reactions"))
-        .query(&[("limit", limit)])
-        .send()
-        .await?;
+    let resp = with_bearer(
+        client
+            .get(format!("{server}/api/reactions"))
+            .query(&[("limit", limit)]),
+    )
+    .send()
+    .await?;
     if resp.status() == StatusCode::SERVICE_UNAVAILABLE {
         return Ok(Vec::new());
     }
@@ -71,8 +77,7 @@ pub async fn fetch_conversations(
     client: &Client,
     server: &str,
 ) -> Result<Vec<ConvHeader>, reqwest::Error> {
-    let resp = client
-        .get(format!("{server}/api/conversations"))
+    let resp = with_bearer(client.get(format!("{server}/api/conversations")))
         .send()
         .await?;
     if resp.status() == StatusCode::SERVICE_UNAVAILABLE {
@@ -89,8 +94,7 @@ pub async fn fetch_conversation_history(
     server: &str,
     id: &str,
 ) -> Result<Option<ConversationHistoryResponse>, reqwest::Error> {
-    let resp = client
-        .get(format!("{server}/api/conversations/{id}"))
+    let resp = with_bearer(client.get(format!("{server}/api/conversations/{id}")))
         .send()
         .await?;
     if resp.status() == StatusCode::NOT_FOUND || resp.status() == StatusCode::SERVICE_UNAVAILABLE {
@@ -102,7 +106,9 @@ pub async fn fetch_conversation_history(
 
 /// Fetch `GET /api/models` — live provider catalog + current model.
 pub async fn fetch_models(client: &Client, server: &str) -> Result<ModelsResponse, reqwest::Error> {
-    let resp = client.get(format!("{server}/api/models")).send().await?;
+    let resp = with_bearer(client.get(format!("{server}/api/models")))
+        .send()
+        .await?;
     if resp.status() == StatusCode::SERVICE_UNAVAILABLE {
         return Ok(ModelsResponse {
             models: Vec::new(),
@@ -128,11 +134,13 @@ pub async fn select_model(
         Some(id) => serde_json::json!({ "model": model, "conversation": id }),
         None => serde_json::json!({ "model": model }),
     };
-    let resp = client
-        .post(format!("{server}/api/models/select"))
-        .json(&body)
-        .send()
-        .await?;
+    let resp = with_bearer(
+        client
+            .post(format!("{server}/api/models/select"))
+            .json(&body),
+    )
+    .send()
+    .await?;
     resp.error_for_status_ref()?;
     resp.json().await
 }
@@ -146,8 +154,7 @@ pub async fn cancel_conversation(
     server: &str,
     id: &str,
 ) -> Result<(), reqwest::Error> {
-    let resp = client
-        .post(format!("{server}/api/conversations/{id}/cancel"))
+    let resp = with_bearer(client.post(format!("{server}/api/conversations/{id}/cancel")))
         .send()
         .await?;
     resp.error_for_status_ref()?;
@@ -163,8 +170,7 @@ pub async fn attach_conversation_stream(
     server: &str,
     id: &str,
 ) -> Result<reqwest::Response, reqwest::Error> {
-    client
-        .get(format!("{server}/api/conversations/{id}/attach"))
+    with_bearer(client.get(format!("{server}/api/conversations/{id}/attach")))
         .send()
         .await
 }
@@ -179,7 +185,9 @@ pub async fn fetch_sessions(
     client: &Client,
     server: &str,
 ) -> Result<Vec<SessionSummary>, reqwest::Error> {
-    let resp = client.get(format!("{server}/api/sessions")).send().await?;
+    let resp = with_bearer(client.get(format!("{server}/api/sessions")))
+        .send()
+        .await?;
     if resp.status() == StatusCode::SERVICE_UNAVAILABLE {
         return Ok(Vec::new());
     }
@@ -198,15 +206,17 @@ pub async fn fork_conversation(
     id: &str,
     after_turn: Option<u32>,
 ) -> Result<ForkResponse, String> {
-    let resp = client
-        .post(format!("{server}/api/sessions/{id}/fork"))
-        .json(&ForkRequest {
-            after_turn,
-            title: None,
-        })
-        .send()
-        .await
-        .map_err(|e| e.to_string())?;
+    let resp = with_bearer(
+        client
+            .post(format!("{server}/api/sessions/{id}/fork"))
+            .json(&ForkRequest {
+                after_turn,
+                title: None,
+            }),
+    )
+    .send()
+    .await
+    .map_err(|e| e.to_string())?;
 
     if !resp.status().is_success() {
         // The server's own message is the useful one ("session has no message transcript to
@@ -257,11 +267,13 @@ pub async fn post_goal_message(
     id: &str,
     text: &str,
 ) -> GoalMessageOutcome {
-    let result = client
-        .post(format!("{server}/api/goals/{id}/message"))
-        .json(&serde_json::json!({ "text": text }))
-        .send()
-        .await;
+    let result = with_bearer(
+        client
+            .post(format!("{server}/api/goals/{id}/message"))
+            .json(&serde_json::json!({ "text": text })),
+    )
+    .send()
+    .await;
     match result {
         Ok(resp) => match resp.status() {
             StatusCode::ACCEPTED | StatusCode::OK => GoalMessageOutcome::Accepted,
@@ -307,8 +319,7 @@ pub struct ProjectRow {
 
 /// `GET /api/projects` — declared coding roots for `/goal in` pickers.
 pub async fn list_projects(client: &Client, server: &str) -> Result<Vec<ProjectRow>, String> {
-    let resp = client
-        .get(format!("{server}/api/projects"))
+    let resp = with_bearer(client.get(format!("{server}/api/projects")))
         .send()
         .await
         .map_err(|e| format!("could not reach daemon: {e}"))?;
@@ -362,9 +373,7 @@ pub async fn start_coding_goal(
     if let Some(conv) = origin_conversation {
         body["origin"] = serde_json::json!({ "conversation_id": conv });
     }
-    let resp = client
-        .post(format!("{server}/api/goals"))
-        .json(&body)
+    let resp = with_bearer(client.post(format!("{server}/api/goals")).json(&body))
         .send()
         .await
         .map_err(|e| format!("could not reach daemon: {e}"))?;
@@ -388,12 +397,14 @@ pub async fn post_goal_action(
     id: &str,
     action: &str,
 ) -> Result<(), String> {
-    let resp = client
-        .post(format!("{server}/api/goals/{id}/{action}"))
-        .json(&serde_json::json!({}))
-        .send()
-        .await
-        .map_err(|e| format!("could not reach daemon: {e}"))?;
+    let resp = with_bearer(
+        client
+            .post(format!("{server}/api/goals/{id}/{action}"))
+            .json(&serde_json::json!({})),
+    )
+    .send()
+    .await
+    .map_err(|e| format!("could not reach daemon: {e}"))?;
     if !resp.status().is_success() {
         let status = resp.status();
         let text = resp.text().await.unwrap_or_default();
@@ -418,9 +429,7 @@ pub async fn spawn_goal(
     if let Some(conv) = origin_conversation {
         body["origin"] = serde_json::json!({ "conversation_id": conv });
     }
-    let resp = client
-        .post(format!("{server}/api/goals"))
-        .json(&body)
+    let resp = with_bearer(client.post(format!("{server}/api/goals")).json(&body))
         .send()
         .await
         .map_err(|e| format!("could not reach daemon: {e}"))?;
@@ -444,8 +453,7 @@ pub async fn open_goal_stream(
     server: &str,
     id: &str,
 ) -> Result<reqwest::Response, reqwest::Error> {
-    client
-        .get(format!("{server}/api/goals/{id}/stream"))
+    with_bearer(client.get(format!("{server}/api/goals/{id}/stream")))
         .send()
         .await
 }
@@ -459,9 +467,7 @@ pub async fn post_chat_stream(
     session: Option<&str>,
 ) -> Result<reqwest::Response, reqwest::Error> {
     let body = serde_json::json!({ "message": message, "session": session });
-    client
-        .post(format!("{server}/api/chat/stream"))
-        .json(&body)
+    with_bearer(client.post(format!("{server}/api/chat/stream")).json(&body))
         .send()
         .await
 }

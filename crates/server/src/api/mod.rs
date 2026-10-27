@@ -1,6 +1,7 @@
 //! HTTP/SSE surface handlers, partitioned by route group (see `docs/spec/reference/api.md`).
 
 mod approvals;
+mod auth;
 mod automations;
 mod chat;
 mod chat_create;
@@ -15,6 +16,7 @@ mod sessions;
 mod status;
 
 pub use approvals::{list_approvals, list_pending_approvals, resolve_approval};
+pub use auth::{health, login as auth_login, logout as auth_logout, session as auth_session};
 pub use automations::{list_hooks, list_schedules};
 pub use chat::{
     attach_conversation, cancel_conversation_turn, chat, chat_stream_get, chat_stream_post,
@@ -33,3 +35,7 @@ pub use profiles::{delete_profile, rename_profile};
 pub use search::search_conversations;
 pub use sessions::{session_fork, sessions_list};
 pub use status::{catalog, models, reactions, reload_mcp_peers, select_model, status, vault};
+
+#[cfg(test)]
+#[path = "auth_router_http_tests.rs"]
+mod auth_router_http_tests;

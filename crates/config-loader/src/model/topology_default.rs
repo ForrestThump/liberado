@@ -21,6 +21,7 @@ impl Default for Topology {
             provider: "deepseek".to_string(),
             providers: default_providers(),
             acp: AcpConfig::default(),
+            api: super::ApiConfig::default(),
             models: Vec::new(),
             model_roles: HashMap::new(),
             mcps: Vec::new(),

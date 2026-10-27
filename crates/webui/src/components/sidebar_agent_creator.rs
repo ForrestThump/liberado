@@ -37,10 +37,7 @@ pub(super) async fn open_agent_creator_session(
     stamp: &str,
 ) -> Result<ConvHeader, String> {
     let url = format!("{api_base}/api/conversations");
-    let resp = reqwest::Client::new()
-        .post(url)
-        .json(&fresh_creator_body(stamp))
-        .send()
+    let resp = crate::http::post_json(&url, &fresh_creator_body(stamp))
         .await
         .map_err(|e| format!("Failed to reach daemon: {e}"))?;
     let status = resp.status().as_u16();

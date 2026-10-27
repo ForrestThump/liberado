@@ -39,7 +39,7 @@ pub(crate) fn parse_projects(body: &str) -> Result<Vec<ProjectRow>, String> {
 
 pub(crate) async fn fetch_projects(api_base: &str) -> Result<Vec<ProjectRow>, String> {
     let url = format!("{api_base}/api/projects");
-    let resp = reqwest::get(&url)
+    let resp = crate::http::get(&url)
         .await
         .map_err(|e| format!("Failed to reach daemon: {e}"))?;
     if !resp.status().is_success() {
@@ -114,10 +114,7 @@ pub(crate) async fn patch_project(
     project: Option<&str>,
 ) -> Result<(), String> {
     let url = format!("{api_base}/api/conversations/{id}");
-    let resp = reqwest::Client::new()
-        .patch(&url)
-        .json(&project_patch_body(project))
-        .send()
+    let resp = crate::http::patch_json(&url, &project_patch_body(project))
         .await
         .map_err(|e| format!("Failed to reach daemon: {e}"))?;
     if resp.status().is_success() {

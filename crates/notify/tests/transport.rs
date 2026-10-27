@@ -384,6 +384,57 @@ async fn register_commands_posts_commands_and_chat_scope() {
 // ── receive (getUpdates long-poll parser) ─────────────────────────────────────
 
 #[tokio::test]
+async fn receive_ignores_callback_query_without_a_message() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "result": [{
+                "update_id": 3,
+                "callback_query": {
+                    "id": "q0",
+                    "data": "approve:prop-0",
+                },
+            }]
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let mut cursor = String::new();
+    let events = notifier_at(&server).receive(&mut cursor).await.unwrap();
+    assert!(events.is_empty());
+    assert_eq!(cursor, "4");
+}
+
+#[tokio::test]
+async fn receive_ignores_callback_query_from_a_foreign_chat() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "result": [{
+                "update_id": 12,
+                "callback_query": {
+                    "id": "q9",
+                    "data": "approve:prop-9",
+                    "message": {
+                        "message_id": 99,
+                        "chat": {"id": 99999},
+                    },
+                },
+            }]
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let mut cursor = String::new();
+    let events = notifier_at(&server).receive(&mut cursor).await.unwrap();
+    assert!(
+        events.is_empty(),
+        "foreign chat callback must not become an action"
+    );
+    assert_eq!(cursor, "13");
+}
+
+#[tokio::test]
 async fn receive_parses_callback_query_into_action_and_advances_cursor() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
@@ -395,7 +446,7 @@ async fn receive_parses_callback_query_into_action_and_advances_cursor() {
                 "callback_query": {
                     "id": "q1",
                     "data": "approve:prop-1",
-                    "message": {"message_id": 55},
+                    "message": {"message_id": 55, "chat": {"id": 42}},
                 },
             }]
         })))

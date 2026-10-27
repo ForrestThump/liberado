@@ -56,7 +56,7 @@ pub(super) async fn fetch_approvals(
     session: &str,
 ) -> Result<Vec<ApprovalCard>, String> {
     let url = format!("{api_base}/api/conversations/{session}/approvals");
-    let body: ApprovalListResponse = reqwest::get(&url)
+    let body: ApprovalListResponse = crate::http::get(&url)
         .await
         .map_err(|error| error.to_string())?
         .json()
@@ -72,14 +72,14 @@ pub(super) async fn post_decision(
     decision: &str,
 ) -> Result<(String, String), String> {
     let url = format!("{api_base}/api/approvals/{id}/resolve");
-    let response = reqwest::Client::new()
-        .post(&url)
-        .json(&ApprovalResolveRequest {
+    let response = crate::http::post_json(
+        &url,
+        &ApprovalResolveRequest {
             decision: decision.to_string(),
-        })
-        .send()
-        .await
-        .map_err(|error| error.to_string())?;
+        },
+    )
+    .await
+    .map_err(|error| error.to_string())?;
     let status = response.status().as_u16();
     let body: ApprovalResolveResponse = response.json().await.map_err(|error| error.to_string())?;
     if status == 200 || status == 409 {

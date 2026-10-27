@@ -21,21 +21,24 @@ async fn webui_dist_env_overrides_the_builtin_directory() {
     assert_eq!(dist_dir(), DIST_DIR);
 }
 
+/// The legacy port variable still moves the port, and it now resolves to a full address so
+/// that the one thing it must not be able to do — widen the interface — is visible here.
+/// Address parsing and the non-loopback refusal have their own tests in `auth::bind`.
 #[tokio::test]
 async fn port_resolves_from_env_then_default() {
     let _g = ENV_LOCK.lock().await;
+    let api = liberado_config::ApiConfig::default();
     unsafe {
         std::env::set_var("LIBERADO_PORT", "5599");
     }
-    assert_eq!(resolve_port(), 5599);
-    unsafe {
-        std::env::set_var("LIBERADO_PORT", "not-a-port");
-    }
-    assert_eq!(resolve_port(), DEFAULT_PORT, "garbage parses as unset");
+    let from_env = auth::resolve_bind(None, std::env::var("LIBERADO_PORT").ok().as_deref(), &api)
+        .expect("port resolves");
+    assert_eq!(from_env.addr.to_string(), "127.0.0.1:5599");
     unsafe {
         std::env::remove_var("LIBERADO_PORT");
     }
-    assert_eq!(resolve_port(), DEFAULT_PORT);
+    let default = auth::resolve_bind(None, None, &api).expect("default resolves");
+    assert_eq!(default.addr.to_string(), "127.0.0.1:4201");
 }
 
 fn config_with_vault(path: &str) -> liberado_bootstrap::Config {

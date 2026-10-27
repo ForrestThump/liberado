@@ -109,6 +109,41 @@ async fn send_turn(
 /// One REPL turn: POST the message (with the current session, if any), stream the SSE response, and
 /// print it. Connection and HTTP-status problems are reported and swallowed so the loop survives;
 /// only an unexpected streaming error bubbles up.
+fn chat_post_request(
+    client: &reqwest::Client,
+    endpoint: &str,
+    session: &Option<String>,
+    message: &str,
+) -> reqwest::RequestBuilder {
+    let body = serde_json::json!({ "message": message, "session": session });
+    let mut request = client.post(endpoint).json(&body);
+    if let Some(token) = chat_client_contract::api_auth::bearer_token_from_env() {
+        request = request.header("Authorization", format!("Bearer {token}"));
+    }
+    request
+}
+
+async fn stream_turn_events(
+    response: reqwest::Response,
+    session: &mut Option<String>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut decoder = SseDecoder::default();
+    let mut stream = response.bytes_stream();
+    while let Some(chunk) = stream.next().await {
+        let chunk =
+            chunk.map_err(|e| liberado_common::redact_secrets(&e.without_url().to_string()))?;
+        let text = String::from_utf8_lossy(&chunk);
+        for event in decoder.push(&text) {
+            if dispatch(&event, session) {
+                return Ok(()); // turn complete (`done` or `failed`)
+            }
+        }
+    }
+    // Stream ended without an explicit terminator — still end the turn cleanly.
+    println!();
+    Ok(())
+}
+
 async fn turn(
     client: &reqwest::Client,
     endpoint: &str,
@@ -116,9 +151,10 @@ async fn turn(
     session: &mut Option<String>,
     message: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let body = serde_json::json!({ "message": message, "session": session });
-
-    let response = match client.post(endpoint).json(&body).send().await {
+    let response = match chat_post_request(client, endpoint, session, message)
+        .send()
+        .await
+    {
         Ok(response) => response,
         Err(_) => {
             println!(
@@ -135,21 +171,7 @@ async fn turn(
         return Ok(());
     }
 
-    let mut decoder = SseDecoder::default();
-    let mut stream = response.bytes_stream();
-    while let Some(chunk) = stream.next().await {
-        let chunk =
-            chunk.map_err(|e| liberado_common::redact_secrets(&e.without_url().to_string()))?;
-        let text = String::from_utf8_lossy(&chunk);
-        for event in decoder.push(&text) {
-            if dispatch(&event, session) {
-                return Ok(()); // turn complete (`done` or `failed`)
-            }
-        }
-    }
-    // Stream ended without an explicit terminator — still end the turn cleanly.
-    println!();
-    Ok(())
+    stream_turn_events(response, session).await
 }
 
 /// Render one SSE event to the terminal and fold any session id back into `session`. Returns `true`

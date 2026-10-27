@@ -1,4 +1,4 @@
-//! HTTP calls to the daemon. No `Authorization` header is set.
+//! HTTP calls to the daemon. Sends `Authorization: Bearer` when `LIBERADO_API_TOKEN` is set.
 //!
 //! Redirects are not followed. A 3xx is a failure, so a daemon response cannot
 //! send this client off the operator origin onto another scheme.
@@ -11,6 +11,13 @@ use crate::base_url::{connect_timeout, resolve_api_base, timeout_secs};
 use crate::error::DogfoodError;
 
 const USER_AGENT: &str = "liberado-operator-dogfood-mcp/0.1.0";
+
+fn bearer_token() -> Option<String> {
+    std::env::var("LIBERADO_API_TOKEN")
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+}
 
 /// One reqwest pool aimed at a single daemon origin.
 #[derive(Clone)]
@@ -51,18 +58,31 @@ impl DaemonClient {
         self.exchange(reqwest::Method::POST, path, Some(body)).await
     }
 
+    fn build_request(
+        &self,
+        method: reqwest::Method,
+        path: &str,
+        body: Option<&Value>,
+    ) -> reqwest::RequestBuilder {
+        let url = format!("{}{path}", self.base);
+        let mut request = self.http.request(method, &url);
+        if let Some(token) = bearer_token() {
+            request = request.header("Authorization", format!("Bearer {token}"));
+        }
+        if let Some(body) = body {
+            request = request.json(body);
+        }
+        request
+    }
+
     async fn exchange(
         &self,
         method: reqwest::Method,
         path: &str,
         body: Option<&Value>,
     ) -> Result<Value, DogfoodError> {
-        let url = format!("{}{path}", self.base);
-        let mut request = self.http.request(method.clone(), &url);
-        if let Some(body) = body {
-            request = request.json(body);
-        }
-        let response = request
+        let response = self
+            .build_request(method.clone(), path, body)
             .send()
             .await
             .map_err(|err| DogfoodError::Daemon(format!("{method} {path} failed: {err}")))?;

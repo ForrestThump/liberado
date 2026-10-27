@@ -7,7 +7,12 @@
 //! us doesn't fight over it).
 
 mod api;
+mod app_router;
 mod approvals;
+mod auth;
+mod control_plane_boot;
+
+pub(crate) use app_router::build_app_router;
 mod chat_agent_spawn;
 mod coding_pack;
 mod cron_delivery;
@@ -57,9 +62,6 @@ use liberado_mcp::McpRegistry;
 use liberado_provider::Provider;
 use liberado_session_store::SessionStore;
 use tokio::sync::Mutex;
-use tower_http::compression::CompressionLayer;
-use tower_http::cors::CorsLayer;
-use tower_http::services::ServeDir;
 use tracing::info;
 
 /// Where `dx build --release --package liberado-webui --web` places the built frontend, relative to
@@ -73,21 +75,17 @@ const DIST_DIR: &str = "target/dx/liberado-webui/release/web/public";
 /// that path. Homelab Compose may still override it to a `/webui` mount so `just deploy-webui-homelab`
 /// can update the UI without rebuilding the daemon image. `setup.sh` points back at the baked path
 /// when the pulled image contains `index.html`.
-fn dist_dir() -> String {
+pub(crate) fn dist_dir() -> String {
     std::env::var("LIBERADO_WEBUI_DIST").unwrap_or_else(|_| DIST_DIR.to_string())
 }
 
 use crate::state::AppState;
-
-const DEFAULT_PORT: u16 = 4201;
 
 /// Run the daemon over `vault_path`: build the shared provider/MCP, assemble the chat agent and the
 /// vault daemon (watch loop), then serve the HTTP/SSE API and static frontend until killed. This is
 /// the daemon's foreground entry point — `liberado serve` calls it. The caller is expected to have
 /// already initialised the tracing subscriber.
 pub async fn run(vault_path: String) -> Result<(), Box<dyn std::error::Error>> {
-    let port = resolve_port();
-
     // Load + validate the config up front (Decision 14 fail-fast). A bad config is a hard error
     // here rather than a half-booted daemon; the message names the file/setting to fix.
     let (config, _, coder_tuning) =
@@ -97,9 +95,14 @@ pub async fn run(vault_path: String) -> Result<(), Box<dyn std::error::Error>> {
     // an empty argument falls back to `topology.vault_path`. Both empty is a hard error.
     let vault_path = resolve_vault_path(vault_path, &config)?;
 
-    let (daemon_handle, app, state) = assemble_daemon(config, coder_tuning, vault_path).await?;
-    let addr = format!("0.0.0.0:{port}");
-    finish_serve(daemon_handle, app, state, &addr).await
+    // Credentials and the listen address, before a single component is assembled. Everything
+    // below this point assumes the control plane is either loopback-only or authenticated, and
+    // the whole value of that assumption is that it is checked where it can still refuse.
+    let (guard, plan) = control_plane_boot::prepare_control_plane(&config.topology.api)?;
+
+    let (daemon_handle, app, state) =
+        assemble_daemon(config, coder_tuning, vault_path, Arc::clone(&guard)).await?;
+    finish_serve(daemon_handle, app, state, &plan.addr.to_string()).await
 }
 
 /// Serve until drain, then stop the vault-watch task.
@@ -136,6 +139,7 @@ async fn assemble_daemon(
     config: liberado_bootstrap::Config,
     coder_tuning: liberado_coder_core::CoderTuning,
     vault_path: String,
+    guard: Arc<auth::ApiGuard>,
 ) -> Result<(tokio::task::JoinHandle<()>, Router, Arc<AppState>), Box<dyn std::error::Error>> {
     // One live catalog + shared MCP registry (boot apply + hot-reload). Every consumer (API,
     // daemon pools, chat, dispatch pack) uses the same cloneable registry handle.
@@ -294,7 +298,7 @@ async fn assemble_daemon(
         daemon.run(reaction_tx).await.ok();
     });
 
-    let app = build_app_router(&state);
+    let app = build_app_router(&state, &guard);
     Ok((daemon_handle, app, state))
 }
 
@@ -358,156 +362,6 @@ async fn open_session_store(
     (sessions_root, sessions)
 }
 
-/// The full HTTP/SSE API router plus the static frontend fallback. Work-starting routes are
-/// grouped behind the drain middleware (it refuses with `shutting_down` once drain begins);
-/// attach/cancel/park/list stay on the main router so clients can rejoin or stop work already in
-/// flight. `POST /api/goals` is gated for the same reason as chat — the gate is the capability,
-/// not the surface that happened to be wired first.
-fn build_app_router(state: &Arc<AppState>) -> Router {
-    let work_start_routes = Router::new()
-        .route("/api/chat", axum::routing::post(api::chat))
-        .route(
-            "/api/chat/stream",
-            axum::routing::get(api::chat_stream_get).post(api::chat_stream_post),
-        )
-        .route("/api/goals", axum::routing::post(api::goals_start))
-        .route_layer(axum::middleware::from_fn_with_state(
-            state.clone(),
-            shutdown::refuse_new_turns_if_draining,
-        ))
-        .with_state(state.clone());
-
-    Router::new()
-        .merge(work_start_routes)
-        .route("/api/status", axum::routing::get(api::status))
-        .route("/api/models", axum::routing::get(api::models))
-        .route("/api/models/select", axum::routing::post(api::select_model))
-        .route("/api/catalog", axum::routing::get(api::catalog))
-        .route(
-            "/api/mcp/reload",
-            axum::routing::post(api::reload_mcp_peers),
-        )
-        .route("/api/reactions", axum::routing::get(api::reactions))
-        .route("/api/vault", axum::routing::get(api::vault))
-        .route("/api/library", axum::routing::get(api::list_library))
-        .route(
-            "/api/conversations",
-            axum::routing::get(api::list_conversations).post(api::create_conversation),
-        )
-        .route(
-            "/api/conversations/search",
-            axum::routing::get(api::search_conversations),
-        )
-        .route(
-            "/api/conversations/{id}",
-            axum::routing::get(api::get_conversation)
-                .patch(api::patch_conversation_title)
-                .delete(api::delete_conversation),
-        )
-        // Surface-only authority change. Deliberately POST, and deliberately absent from every tool
-        // catalog — see the handler's docs for why both halves matter.
-        .route(
-            "/api/conversations/{id}/profile",
-            axum::routing::post(api::set_conversation_profile),
-        )
-        // Human-only. POST so a web-fetching MCP (GET only) cannot decide. Not registered
-        // as an agent tool or on the operator dogfood MCP.
-        .route(
-            "/api/approvals/{id}/resolve",
-            axum::routing::post(api::resolve_approval),
-        )
-        // Read-only. The operator dogfood MCP lists these rows. It does not decide them.
-        .route(
-            "/api/approvals/pending",
-            axum::routing::get(api::list_pending_approvals),
-        )
-        .route(
-            "/api/conversations/{id}/approvals",
-            axum::routing::get(api::list_approvals),
-        )
-        // Read-only. The grant is the current session header, not a fresh policy resolve.
-        .route(
-            "/api/conversations/{id}/grant",
-            axum::routing::get(api::get_header_grant),
-        )
-        // Read-only. The next turn's tool, MCP, and zone grants. No revoke on this route.
-        .route(
-            "/api/conversations/{id}/grants",
-            axum::routing::get(api::conversation_grants),
-        )
-        // Rejoin a turn after a reload, and stop one on purpose. Both exist because a turn no
-        // longer belongs to the connection that started it. Not gated by drain.
-        .route(
-            "/api/conversations/{id}/attach",
-            axum::routing::get(api::attach_conversation),
-        )
-        .route(
-            "/api/conversations/{id}/cancel",
-            axum::routing::post(api::cancel_conversation_turn),
-        )
-        .route("/api/profiles", axum::routing::get(api::list_profiles))
-        .route(
-            "/api/profiles/{name}",
-            axum::routing::patch(api::rename_profile).delete(api::delete_profile),
-        )
-        .route(
-            "/api/plugins/{id}",
-            axum::routing::put(api::set_plugin_enabled),
-        )
-        .route(
-            "/api/hooks/{name}",
-            axum::routing::post(hooks::trigger_hook),
-        )
-        .route("/api/hooks", axum::routing::get(api::list_hooks))
-        .route("/api/schedules", axum::routing::get(api::list_schedules))
-        // The one unified list (S5′): chats and goal sessions, same rows.
-        .route("/api/sessions", axum::routing::get(api::sessions_list))
-        // Branch a conversation, keeping the original (copy semantics — a snapshot, not a pointer).
-        .route(
-            "/api/sessions/{id}/fork",
-            axum::routing::post(api::session_fork),
-        )
-        .route("/api/goals/domains", axum::routing::get(api::goals_domains))
-        // Coding project picker (S3/G4) — read-only; start still drain-gated.
-        .route("/api/projects", axum::routing::get(api::list_projects))
-        // List only — start is on `work_start_routes` (drain-gated).
-        .route("/api/goals", axum::routing::get(api::goals_list))
-        .route("/api/goals/{id}", axum::routing::get(api::goals_get))
-        .route("/api/goals/{id}/diff", axum::routing::get(api::goals_diff))
-        .route(
-            "/api/goals/{id}/stream",
-            axum::routing::get(api::goals_stream),
-        )
-        .route(
-            "/api/goals/{id}/cancel",
-            axum::routing::post(api::goals_cancel),
-        )
-        .route(
-            "/api/goals/{id}/message",
-            axum::routing::post(api::goals_message),
-        )
-        .route("/api/goals/{id}/park", axum::routing::post(api::goals_park))
-        .route(
-            "/api/goals/{id}/rewind",
-            axum::routing::post(api::goals_rewind),
-        )
-        .layer(CorsLayer::permissive())
-        .with_state(state.clone())
-        // Compression is scoped to the static fallback, deliberately not applied to the router as
-        // a whole. The payload that needs it is the release .wasm (multi-MB, ~4x compressible, and
-        // the whole page blocks on it over the tailnet); the payload that must never be buffered
-        // is `/api/chat/stream`, where holding bytes back turns a live turn into a frozen UI.
-        // Scoping it here makes that impossible by construction rather than by trusting a
-        // predicate.
-        .fallback_service(
-            tower::ServiceBuilder::new()
-                .layer(CompressionLayer::new())
-                .service(ServeDir::new(dist_dir())),
-        )
-}
-
-/// Bind and serve the router with a graceful shutdown: on SIGTERM/Ctrl+C, drain refuses new turns
-/// for up to the grace period, then the HTTP accept stops.
 async fn serve_with_drain(
     app: Router,
     state: &Arc<AppState>,
@@ -538,14 +392,6 @@ async fn serve_with_drain(
         })
         .await?;
     Ok(())
-}
-
-/// The port the daemon serves on: `LIBERADO_PORT` if set and parseable, else [`DEFAULT_PORT`].
-fn resolve_port() -> u16 {
-    std::env::var("LIBERADO_PORT")
-        .ok()
-        .and_then(|p| p.parse().ok())
-        .unwrap_or(DEFAULT_PORT)
 }
 
 /// The vault path this daemon serves, CLI-over-config: the `run` argument wins (the CLI always
@@ -1197,3 +1043,7 @@ mod startup_reconciliation_tests;
 #[cfg(test)]
 #[path = "lib_boot_helper_tests.rs"]
 mod boot_helper_tests;
+
+#[cfg(test)]
+#[path = "lib_daemon_run_tests.rs"]
+mod daemon_run_tests;

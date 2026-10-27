@@ -132,7 +132,7 @@ impl CommandContext for WebCommandContext {
 
 async fn fetch_conversations(api_base: &str) -> Vec<ConvHeader> {
     let url = format!("{api_base}/api/conversations");
-    match reqwest::get(&url).await {
+    match crate::http::get(&url).await {
         Ok(resp) => resp.json::<Vec<ConvHeader>>().await.unwrap_or_default(),
         Err(_) => Vec::new(),
     }
@@ -140,7 +140,7 @@ async fn fetch_conversations(api_base: &str) -> Vec<ConvHeader> {
 
 async fn fetch_status(api_base: &str) -> Option<DaemonStatus> {
     let url = format!("{api_base}/api/status");
-    let resp = reqwest::get(&url).await.ok()?;
+    let resp = crate::http::get(&url).await.ok()?;
     resp.json::<DaemonStatus>().await.ok()
 }
 

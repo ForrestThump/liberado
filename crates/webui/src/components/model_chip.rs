@@ -259,7 +259,7 @@ fn history_view(history: &OwnedHistory) -> History<'_> {
 
 async fn load_daemon(api_base: &str) -> OwnedDaemon {
     let url = format!("{api_base}/api/models");
-    let Ok(resp) = reqwest::get(&url).await else {
+    let Ok(resp) = crate::http::get(&url).await else {
         return OwnedDaemon::Unknown;
     };
     if !resp.status().is_success() {
@@ -286,7 +286,7 @@ struct ProfilesWire {
 
 async fn load_profiles(api_base: &str) -> (bool, Vec<(String, Option<String>)>) {
     let url = format!("{api_base}/api/profiles");
-    let Ok(resp) = reqwest::get(&url).await else {
+    let Ok(resp) = crate::http::get(&url).await else {
         return (false, Vec::new());
     };
     if !resp.status().is_success() {
@@ -306,7 +306,7 @@ async fn load_profiles(api_base: &str) -> (bool, Vec<(String, Option<String>)>) 
 
 async fn load_history(api_base: &str, session: &str) -> (OwnedHistory, Option<String>) {
     let url = format!("{api_base}/api/conversations/{session}");
-    let Ok(resp) = reqwest::get(&url).await else {
+    let Ok(resp) = crate::http::get(&url).await else {
         return (OwnedHistory::Failed, None);
     };
     if !resp.status().is_success() {

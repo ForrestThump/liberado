@@ -135,7 +135,7 @@ fn loaded_page(loaded: Option<&Result<ConversationPage, String>>) -> Conversatio
 
 async fn fetch_conversations(api_base: String) -> Result<ConversationPage, String> {
     let url = format!("{api_base}/api/conversations");
-    let resp = reqwest::get(&url)
+    let resp = crate::http::get(&url)
         .await
         .map_err(|e| format!("Failed to reach daemon: {e}"))?;
     let body: serde_json::Value = resp
@@ -150,10 +150,7 @@ async fn fetch_search_results(
     query: String,
 ) -> Result<Vec<ConversationSearchResult>, String> {
     let url = format!("{api_base}/api/conversations/search");
-    let resp = reqwest::Client::new()
-        .get(&url)
-        .query(&[("q", query.as_str())])
-        .send()
+    let resp = crate::http::get_query(&url, &[("q", query.as_str())])
         .await
         .map_err(|e| format!("Search failed: {e}"))?;
     let body: ConversationSearchResponse = resp
@@ -184,9 +181,7 @@ pub(super) fn deleted_the_open_conversation(open_id: Option<&str>, deleted_id: &
 
 async fn delete_conversation(api_base: &str, id: &str) -> Result<(), String> {
     let url = format!("{api_base}/api/conversations/{id}");
-    let resp = reqwest::Client::new()
-        .delete(&url)
-        .send()
+    let resp = crate::http::delete(&url)
         .await
         .map_err(|e| format!("Failed to reach daemon: {e}"))?;
     if delete_accepted(resp.status().as_u16()) {
@@ -199,10 +194,7 @@ async fn delete_conversation(api_base: &str, id: &str) -> Result<(), String> {
 /// `PATCH /api/conversations/{id}` — update only the conversation's display title.
 async fn rename_conversation(api_base: &str, id: &str, title: &str) -> Result<(), String> {
     let url = format!("{api_base}/api/conversations/{id}");
-    let resp = reqwest::Client::new()
-        .patch(&url)
-        .json(&rename_body(title))
-        .send()
+    let resp = crate::http::patch_json(&url, &rename_body(title))
         .await
         .map_err(|e| format!("Failed to reach daemon: {e}"))?;
     if rename_accepted(resp.status().as_u16()) {

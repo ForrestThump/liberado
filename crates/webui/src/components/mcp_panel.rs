@@ -6,7 +6,7 @@ use crate::icons::{IconChevronDown, IconChevronRight};
 
 async fn fetch_catalog(api_base: String) -> Result<CatalogResponse, String> {
     let url = format!("{api_base}/api/catalog");
-    let resp = reqwest::get(&url)
+    let resp = crate::http::get(&url)
         .await
         .map_err(|e| format!("Failed to reach daemon: {e}"))?;
     let catalog: CatalogResponse = resp

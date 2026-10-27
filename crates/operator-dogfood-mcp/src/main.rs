@@ -12,7 +12,8 @@
 //! and its healthcheck calls the status route with no credential. ADR-0010's
 //! shared-secret header applies to hook webhooks, not to `/api`. Remote
 //! access is the network boundary (Tailscale), the same boundary the WebUI
-//! uses. This process sends no `Authorization` header and rejects a base URL
+//! uses. This process sends `Authorization: Bearer` when `LIBERADO_API_TOKEN` is set.
+//! It rejects a base URL
 //! that carries userinfo.
 //!
 //! Set `LIBERADO_SERVER` to the origin the operator already uses for the
