@@ -8,6 +8,19 @@
 use super::super::*;
 use super::test_fixtures::*;
 
+fn test_live_catalog() -> Arc<CapabilityCatalog> {
+    let catalog = Arc::new(CapabilityCatalog::new());
+    for name in ["email-mcp", "tasks-mcp"] {
+        catalog.register(McpDescriptor {
+            name: name.into(),
+            description: format!("test {name}"),
+            consequence: Consequence::ReadOnly,
+            ..McpDescriptor::default()
+        });
+    }
+    catalog
+}
+
 /// Process grant is `tasks-mcp` only. The named session grant is `email-mcp` only.
 /// The sets are disjoint, so a gate that still reads the process grant cannot both
 /// show `email-mcp:send` and allow the call.
@@ -35,7 +48,7 @@ async fn disjoint_grant_sessions(
         ProposalSigner::random(),
     );
     if live_catalog {
-        sessions = sessions.with_live_catalog(Arc::new(CapabilityCatalog::new()));
+        sessions = sessions.with_live_catalog(test_live_catalog());
     }
     let id = sessions
         .create_with_grant(

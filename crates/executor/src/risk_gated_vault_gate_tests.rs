@@ -717,3 +717,155 @@ async fn a_vault_wide_write_in_a_background_run_is_refused_without_a_proposal() 
         "no permission request must be created in a background run"
     );
 }
+
+#[cfg(test)]
+mod case_ambiguous_zone {
+    use super::*;
+
+    fn path_addressed_descriptor() -> McpDescriptor {
+        let minimal = McpDescriptor {
+            name: "turbovault".into(),
+            description: "path-addressed vault".into(),
+            consequence: Consequence::Reversible,
+            provenance: None,
+            default_zone: None,
+            tool_zones: Vec::new(),
+            zone_from_arg: Some("path".into()),
+            write_tools: Vec::new(),
+            read_tools: Vec::new(),
+            vault_wide_writes: Vec::new(),
+            write_path_args: std::collections::BTreeMap::new(),
+            admin_tools: Vec::new(),
+        };
+        liberado_common::apply_bundled_classifications(minimal)
+    }
+
+    fn gate_with_zones(
+        dir: &std::path::Path,
+        inner: Arc<InvocationRecordingRuntime>,
+        grant_zones: &[&str],
+        declared_zones: &[&str],
+    ) -> RiskGatedToolRuntime {
+        let mut caps = vec![Capability::ExecuteMcp("turbovault".into())];
+        for z in grant_zones {
+            caps.push(Capability::Write(Zone::vault(*z)));
+        }
+        let classes: Vec<(String, WriteClass)> = declared_zones
+            .iter()
+            .map(|z| (z.to_string(), WriteClass::AgentWritable))
+            .collect();
+        let mut rt = RiskGatedToolRuntime::new(
+            inner,
+            CapabilitySet::from_iter(caps),
+            vec![("turbovault".into(), Consequence::Reversible)],
+            vec![path_addressed_descriptor()],
+            classes,
+            dir.to_path_buf(),
+            "write a note".into(),
+            "test-case-ambiguous".into(),
+            ProposalSigner::random(),
+            "default",
+        );
+        rt = rt.with_approval(crate::ApprovalStamp {
+            session_id: "01CASEAMBIGUOUS0000000000000".into(),
+            origin: liberado_common::ApprovalOrigin::Web,
+            grant_component: None,
+        });
+        rt
+    }
+
+    #[tokio::test]
+    async fn a_case_ambiguous_path_is_hard_denied_not_a_permission_card() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let inner = Arc::new(InvocationRecordingRuntime::new(
+            &["turbovault:edit_note"],
+            Ok("edited".into()),
+        ));
+        let rt = gate_with_zones(dir.path(), inner.clone(), &["Legal"], &["Legal"]);
+        let call = ToolInvocation::new(
+            "c1",
+            "turbovault:edit_note",
+            serde_json::json!({"path": "legal/x.md"}),
+        );
+        let err = rt
+            .invoke(&call)
+            .await
+            .expect_err("a case-ambiguous zone must be a hard deny, not a permission request");
+        assert!(err.contains("not authorized"), "{err}");
+        assert!(
+            err.contains("legal") && err.contains("Legal"),
+            "the refusal must name both cases: {err}"
+        );
+        assert!(
+            err.contains("case"),
+            "the refusal should explain the case-sensitivity: {err}"
+        );
+        assert!(
+            inner.invoked.lock().unwrap().is_empty(),
+            "the inner tool must NEVER run on a hard-deny"
+        );
+        let prop_dir = dir.path().join("proposals");
+        assert!(
+            !prop_dir.exists() || std::fs::read_dir(&prop_dir).unwrap().next().is_none(),
+            "no permission request must be created for a case-ambiguous path"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_case_ambiguous_path_against_policy_only_is_hard_denied() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let inner = Arc::new(InvocationRecordingRuntime::new(
+            &["turbovault:edit_note"],
+            Ok("edited".into()),
+        ));
+        let rt = gate_with_zones(dir.path(), inner.clone(), &[], &["Legal"]);
+        let call = ToolInvocation::new(
+            "c1",
+            "turbovault:edit_note",
+            serde_json::json!({"path": "legal/x.md"}),
+        );
+        let err = rt
+            .invoke(&call)
+            .await
+            .expect_err("case-ambiguous against policy zones must be a hard deny");
+        assert!(err.contains("legal") && err.contains("Legal"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn an_exact_case_write_runs() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let inner = Arc::new(InvocationRecordingRuntime::new(
+            &["turbovault:edit_note"],
+            Ok("edited".into()),
+        ));
+        let rt = gate_with_zones(dir.path(), inner.clone(), &["Legal"], &["Legal"]);
+        let call = ToolInvocation::new(
+            "c1",
+            "turbovault:edit_note",
+            serde_json::json!({"path": "Legal/x.md"}),
+        );
+        let result = rt.invoke(&call).await;
+        assert_eq!(result, Ok("edited".into()));
+    }
+
+    #[tokio::test]
+    async fn a_truly_undeclared_zone_still_raises_a_permission_request() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let inner = Arc::new(InvocationRecordingRuntime::new(
+            &["turbovault:edit_note"],
+            Ok("edited".into()),
+        ));
+        let rt = gate_with_zones(dir.path(), inner.clone(), &["Legal"], &["Legal"]);
+        let call = ToolInvocation::new(
+            "c1",
+            "turbovault:edit_note",
+            serde_json::json!({"path": "finance/x.md"}),
+        );
+        let result = rt.invoke(&call).await;
+        let msg = result.expect("with an approval stamp, a missing zone is a permission request");
+        assert!(
+            msg.contains("PERMISSION REQUESTED"),
+            "a truly undeclared zone must still raise a permission request: {msg}"
+        );
+    }
+}

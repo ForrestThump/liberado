@@ -331,7 +331,7 @@ async fn a_profile_survives_reopening_the_store() {
 
 /// A lookup failure must not quietly become an authority change in either direction.
 #[tokio::test]
-async fn an_unknown_session_falls_back_to_the_process_grant() {
+async fn an_unknown_session_fails_closed_with_no_tools() {
     let dir = tempfile::tempdir().unwrap();
     let process_grant =
         CapabilitySet::from_iter([liberado_common::Capability::ExecuteMcp("tasks-mcp".into())]);
@@ -344,7 +344,13 @@ async fn an_unknown_session_falls_back_to_the_process_grant() {
 
     assert_eq!(
         sessions.session_capabilities(Ulid::new()).await,
-        process_grant
+        CapabilitySet::empty(),
+        "an unreadable header must NOT widen to the process-wide grant"
+    );
+    assert_ne!(
+        sessions.session_capabilities(Ulid::new()).await,
+        process_grant,
+        "explicit negative: the fail-closed path must differ from the legacy fall-back"
     );
 }
 

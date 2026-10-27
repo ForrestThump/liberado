@@ -1002,8 +1002,8 @@ impl ChatSessions {
     /// call nothing" stays sayable and distinct from "nothing was chosen". The name is what carries
     /// the intent; an empty `capabilities` alone cannot.
     ///
-    /// A session the store cannot produce a header for also falls back — a lookup failure must not
-    /// quietly become an authority change.
+    /// A session the store cannot produce a header for fails closed (no tools) — a lookup failure
+    /// must not quietly become an authority change.
     /// Test-only since the streaming path stopped re-reading the grant it had already resolved:
     /// production reads authority exactly once per turn, through [`TurnSettings`]. Kept because four
     /// resolution tests assert on it directly, and they are the tests that pin "no profile means the
@@ -1018,6 +1018,10 @@ impl ChatSessions {
     /// One lookup rather than three: capabilities, delegation and the prompt nudge all come from the
     /// same header read, and reading them separately would let a profile switch land *between* them —
     /// a turn running one profile's tools under another's delegation setting.
+    ///
+    /// A header read failure fails closed: an empty capability set, the turn still runs, the model
+    /// just has no tools. That is distinct from "no profile" (process grant) and from a named
+    /// profile that grants nothing.
     async fn turn_settings(&self, session: Ulid) -> TurnSettings {
         let header = match self.store.header(session).await {
             Ok(header) => header,
@@ -1025,9 +1029,17 @@ impl ChatSessions {
                 tracing::warn!(
                     error = %e,
                     session = %session,
-                    "could not read session grant; falling back to the process-wide defaults"
+                    "could not read session grant; failing closed (no tools this turn) so a \
+                     store blip does not silently widen authority to the process-wide grant"
                 );
-                return self.default_turn_settings();
+                return TurnSettings {
+                    capabilities: CapabilitySet::empty(),
+                    delegation: self.delegation_mode,
+                    prompt_append: None,
+                    profile: None,
+                    model: None,
+                    automation_editor: false,
+                };
             }
         };
         // A *named* profile is authoritative; the absence of one means the daemon's defaults. See
