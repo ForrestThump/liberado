@@ -3,6 +3,9 @@
 //! It compares failure identities with the base commit, uses GitHub labels as durable
 //! state, and starts daemon coding goals. Thus its automated repairs use the same coding
 //! pack and ship preflight as an interactive coding run.
+//!
+//! Daemon goal calls send `Authorization: Bearer` when the shared API token is set.
+//! GitHub calls use `gh` and do not receive that token.
 
 use chrono::Utc;
 use liberado_common::process::std_command;
@@ -17,6 +20,7 @@ use std::{
 };
 
 mod actions;
+mod daemon_http;
 mod invocation;
 mod prompts;
 mod record;
@@ -358,6 +362,7 @@ fn config_check(selected_project: Option<&str>) -> Result<(), Box<dyn std::error
     );
     Ok(())
 }
+/// Run `gh`. GitHub credentials come from `gh` itself. Do not attach the daemon API token.
 fn gh(cfg: &Config, args: &[&str], check: bool) -> Result<String, Box<dyn std::error::Error>> {
     let mut command = std_command("gh");
     command.args(args).current_dir(&cfg.root);
@@ -664,13 +669,16 @@ fn start_goal_with(
         target.extend(extra.clone());
     }
     let body = json!({"id":id,"description":description,"domain":"coding","max_turns":max_turns,"profile":cfg.profile,"payload":payload});
-    let v: Value = client()
-        .post(format!("{}/api/goals", cfg.daemon))
-        .json(&body)
-        .send()
-        .ok()?
-        .json()
-        .ok()?;
+    let v: Value = daemon_http::daemon_post(
+        &client(),
+        &format!("{}/api/goals", cfg.daemon),
+        chat_client_contract::api_auth::bearer_token_from_env,
+    )
+    .json(&body)
+    .send()
+    .ok()?
+    .json()
+    .ok()?;
     v["id"]
         .as_str()
         .or_else(|| v["session_id"].as_str())
@@ -680,10 +688,13 @@ fn start_goal(cfg: &Config, description: String, max_turns: u32) -> Option<Strin
     start_goal_with(cfg, description, max_turns, None, json!({}))
 }
 fn active_goals(cfg: &Config) -> usize {
-    let v: Value = match client()
-        .get(format!("{}/api/goals", cfg.daemon))
-        .send()
-        .and_then(|r| r.json())
+    let v: Value = match daemon_http::daemon_get(
+        &client(),
+        &format!("{}/api/goals", cfg.daemon),
+        chat_client_contract::api_auth::bearer_token_from_env,
+    )
+    .send()
+    .and_then(|r| r.json())
     {
         Ok(v) => v,
         Err(_) => return 0,
@@ -704,10 +715,13 @@ fn active_goals(cfg: &Config) -> usize {
         .count()
 }
 fn goal_status(cfg: &Config, id: &str) -> Option<String> {
-    let r = client()
-        .get(format!("{}/api/goals/{id}", cfg.daemon))
-        .send()
-        .ok()?;
+    let r = daemon_http::daemon_get(
+        &client(),
+        &format!("{}/api/goals/{id}", cfg.daemon),
+        chat_client_contract::api_auth::bearer_token_from_env,
+    )
+    .send()
+    .ok()?;
     if r.status().as_u16() == 404 {
         return Some("missing".into());
     }

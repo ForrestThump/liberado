@@ -16,6 +16,8 @@
 //!   (The old chat-only `ChatEvent` was folded into it; a prior `ChatClient` trait in `native`
 //!   promised a fuller shared client abstraction but was never implemented by either real client
 //!   and was removed — see `docs/future-work/archive/hygiene-audit-2026-07-05.md`.)
+//! - **`api_auth`** — optional `Authorization: Bearer` value from `LIBERADO_API_TOKEN`
+//!   (gated: `#[cfg(not(target_arch = "wasm32"))]`). Callers must not log the value.
 //! - **`native`** — `SseDecoder`/`SseEvent` (gated: `#[cfg(not(target_arch = "wasm32"))]`).
 //!   Pulls in `async-trait`, `tokio`, `futures`, `ulid` — not available on WASM. The incremental
 //!   SSE framing parser, shared by the TUI and the `liberado chat` CLI client (each used to carry

@@ -94,6 +94,12 @@ The client connects to `http://127.0.0.1:4201` by default. Override with
 has `[api]` credentials configured, set `LIBERADO_API_TOKEN` to a
 `[[api.clients]]` token (or the human token for owner-only CLI use).
 
+The same variable is required for the other native daemon clients when `[api]`
+credentials are configured: the TUI, acp-bridge face mode (Paseo, Zed, and any
+editor that spawns `liberado-acp`), and `liberado shepherd`. Shepherd's GitHub
+access does not use this token. Leave the variable unset when the daemon has
+no `[api]` table.
+
 Pass a session id to resume a previous conversation:
 
 ```bash
