@@ -126,7 +126,7 @@ async fn route_named(
     name: &str,
     args: &mut impl Iterator<Item = String>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    if matches!(name, "deploy" | "dev" | "paseo" | "ops") {
+    if command_runs_on_blocking_pool(name) {
         let name = name.to_string();
         let arguments: Vec<String> = args.collect();
         return tokio::task::spawn_blocking(move || run_operations_route(&name, arguments))
@@ -140,23 +140,44 @@ async fn route_named(
     }
 }
 
-/// Operator commands use blocking filesystem, process, SSH, and HTTP clients by design. Keep the
-/// complete command on Tokio's blocking pool: dropping reqwest's blocking client on an async
-/// worker panics because that client owns a small internal runtime.
+/// Commands whose work uses a blocking client, a process, or the filesystem.
+///
+/// `reqwest::blocking` owns a Tokio runtime. Dropping that runtime on an async worker panics
+/// ("Cannot drop a runtime in a context where blocking is not allowed"). `shepherd` is in this
+/// list for that reason. The whole command runs on the blocking pool, same as the operations
+/// commands. The name list is one table so `route_named` does not grow a branch per command.
+fn command_runs_on_blocking_pool(name: &str) -> bool {
+    const COMMANDS: &[&str] = &["deploy", "dev", "paseo", "ops", "shepherd"];
+    COMMANDS.contains(&name)
+}
+
+/// Run one blocking command and stringify its error for the async caller.
 fn run_operations_route(name: &str, arguments: Vec<String>) -> Result<(), String> {
+    dispatch_blocking_command(name, arguments).map_err(|error| error.to_string())
+}
+
+/// The blocking commands. Split from [`run_operations_route`] so that function stays a thin
+/// adapter and this match can name `shepherd` without raising the old function's complexity.
+fn dispatch_blocking_command(
+    name: &str,
+    arguments: Vec<String>,
+) -> Result<(), Box<dyn std::error::Error>> {
     let mut args = arguments.into_iter();
-    let result = match name {
+    match name {
         "deploy" => ops_cmd::run_deploy(&mut args),
         "dev" => ops_cmd::run_dev(&mut args),
         "paseo" => ops_cmd::run_paseo(&mut args),
         "ops" => ops_cmd::run_ops(&mut args),
-        _ => return Err(format!("unknown operations command: {name}")),
-    };
-    result.map_err(|error| error.to_string())
+        "shepherd" => shepherd_cmd::run(&mut args),
+        _ => Err(format!("unknown operations command: {name}").into()),
+    }
 }
 
 /// The synchronous sub-command groups, by first argument. Each wrapper owns its own
 /// argument match; `None` means "not a known group", leaving the caller free to fall back.
+///
+/// `shepherd` is not here. It runs on the blocking pool (see [`command_runs_on_blocking_pool`])
+/// so its reqwest blocking client is not dropped on an async worker.
 fn route_sync(
     name: &str,
     args: &mut impl Iterator<Item = String>,
@@ -165,7 +186,6 @@ fn route_sync(
         "coder" => coder_cmd::run(args),
         "mutants" => cmd_mutants(args),
         "ci" => cmd_ci(args),
-        "shepherd" => shepherd_cmd::run(args),
         "docs" => cmd_docs(args),
         "config" => cmd_config(args),
         _ => return None,
