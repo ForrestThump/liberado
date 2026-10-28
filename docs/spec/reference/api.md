@@ -207,7 +207,7 @@ Their profile is cleared, so the next turn uses the process default grant. Unkno
 | GET | `/api/models` | Live catalog from the provider's OpenAI-compatible `GET /models`, plus `current`. Soft-fails: always **200** with optional `error` so clients can still show `current`. Shape: `{"models":["…"],"current"?:"…","error"?:"…"}`. |
 | POST | `/api/models/select` | Body `{"model":"…"}` hot-swaps the daemon-wide model. Body `{"model":"…","conversation":"<ulid>"}` records an in-memory pick for that chat's next turn. The durable per-chat pick is `pending_model` on `PATCH /api/conversations/{id}`. The turn uses the in-memory pick when one is set, otherwise the stored `pending_model`, and stamps that exact string. Empty model → `400`; no provider on the daemon-wide form → `503`. |
 
-`GET /api/status` reports `model_name` from the live provider (so it tracks hot-swap, not only boot-time config). In-flight turns keep whatever model they already started with.
+`GET /api/status` reports `model_name` from the live provider (so it tracks hot-swap, not only boot-time config). In-flight turns keep whatever model they already started with. The same payload includes `mcp`: a list of `{name, state, attempts, tools}` plus optional `last_error` and `next_retry_ms`. `state` is `connected` or `degraded`. The list is empty until the chat supervisor has started. `GET /api/health` stays `{"ok": true}` with HTTP 200 while a peer is down; the Docker healthcheck only requires that 200.
 
 TUI: `/model` opens a full-screen searchable browser over `GET /api/models`; Enter calls
 `POST /api/models/select`.
