@@ -112,6 +112,7 @@ mod tests {
             chat_tools: 3,
             chat_tool_names: vec!["a".into(), "b".into(), "c".into()],
             enter_sends: true,
+            mcp: Vec::new(),
         }
     }
 

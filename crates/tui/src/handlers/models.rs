@@ -230,6 +230,7 @@ mod tests {
             chat_tools: 0,
             chat_tool_names: Vec::new(),
             enter_sends: true,
+            mcp: Vec::new(),
         });
         // No conversation open + the current model is selected → nothing to do.
         let effects = handle(&mut app, key(KeyCode::Enter));

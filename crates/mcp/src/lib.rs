@@ -17,7 +17,11 @@
 //! exclusively, rebound to the *current* execution's [`WriteProvenance`] on acquire, and returned
 //! on drop (subject to idle TTL / background reaper / health / per-name concurrency). Disable via
 //! `tuning.mcp_pooling.enabled = false`.
+//!
+//! The chat surface does not use that pool. It keeps one session per peer and reconnects with
+//! capped exponential backoff when the peer is down or the session dies.
 
+mod backoff;
 mod connector;
 mod factory;
 mod live_runtime;
@@ -26,7 +30,7 @@ mod pool;
 mod scoped;
 
 pub use connector::{HttpConnector, McpConnector, StdioConnector};
-pub use factory::{McpPoolSettings, McpRegistry};
+pub use factory::{McpLinkState, McpPeerReport, McpPoolSettings, McpRegistry, ReconnectPolicy};
 pub use live_runtime::LiveRegistryRuntime;
 pub use multi::MultiMcpRuntime;
 pub use pool::{PoolPolicy, RebindableRuntime};
@@ -141,13 +145,28 @@ impl<T: Transport + 'static> RebindableRuntime for TurbomcpRuntime<T> {
             .load(std::sync::atomic::Ordering::SeqCst)
     }
 
+    async fn probe(&self) -> Result<(), String> {
+        match self.client.list_tools().await {
+            Ok(_) => Ok(()),
+            Err(err) => {
+                self.transport_dead
+                    .store(true, std::sync::atomic::Ordering::SeqCst);
+                Err(err.to_string())
+            }
+        }
+    }
+
     async fn shutdown(&mut self) {
+        self.shutdown_shared().await;
+    }
+
+    async fn shutdown_shared(&self) {
         // Gracefully terminate the MCP session: aborts the SSE task and sends the
         // session-terminating DELETE so the server actually releases the connection. A bare
         // `Drop` cannot do this (teardown is async), which is what leaked HTTP connections
         // server-side until the pool's reaper exhausted the proxy's worker connections.
-        if let Err(e) = self.client.shutdown().await {
-            tracing::warn!(error = %e, "MCP client shutdown reported an error");
+        if let Err(err) = self.client.shutdown().await {
+            tracing::warn!(error = %err, "MCP client shutdown reported an error");
         }
     }
 }

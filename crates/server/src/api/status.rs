@@ -50,6 +50,7 @@ pub async fn status(State(state): State<Arc<AppState>>) -> impl IntoResponse {
         // that owns it rather than re-derived here, so `[webui] enter_key` cannot come to disagree
         // with what the browser does.
         enter_sends: state.config.topology.webui.enter_sends(),
+        mcp: crate::api::mcp_status::from_state(&state),
     })
 }
 

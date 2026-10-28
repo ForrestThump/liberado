@@ -161,6 +161,7 @@ mod tests {
             chat_tools: 0,
             chat_tool_names: Vec::new(),
             enter_sends: true,
+            mcp: Vec::new(),
         }
     }
 
