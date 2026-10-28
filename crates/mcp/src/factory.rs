@@ -7,8 +7,10 @@
 //! share one live registry across pools/chat and hot-apply a new desired peer set without restart.
 
 use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
+
+use tokio::sync::watch;
 
 use async_trait::async_trait;
 use liberado_common::{CapabilityCatalog, WriteProvenance};
@@ -18,9 +20,15 @@ use crate::MultiMcpRuntime;
 use crate::connector::McpConnector;
 use crate::pool::{AsToolRuntime, ConnectionPool, PermittedRuntime, PoolPolicy, PooledCheckout};
 
+#[path = "supervisor.rs"]
+mod supervisor;
+
 #[cfg(test)]
 #[path = "factory_survivor_tests.rs"]
 mod survivor_tests;
+
+pub(crate) use supervisor::PeerSupervisor;
+pub use supervisor::{McpLinkState, McpPeerReport, ReconnectPolicy};
 
 /// Pooling knobs passed into [`McpRegistry`] at construction (from `tuning.mcp_pooling`).
 #[derive(Debug, Clone)]
@@ -57,11 +65,15 @@ impl From<McpPoolSettings> for PoolPolicy {
     }
 }
 
-struct McpRegistryInner {
+pub(crate) struct McpRegistryInner {
     connectors: RwLock<HashMap<String, Arc<dyn McpConnector>>>,
     pool: Arc<ConnectionPool>,
     /// Optional shared catalog for M1b peer health (degraded after connect/transport failure).
     health: RwLock<Option<Arc<CapabilityCatalog>>>,
+    /// Bumped on every peer-set change. The supervisor waits on this watch.
+    peer_set: watch::Sender<u64>,
+    /// Chat reconnect loop. `None` until the live runtime starts it.
+    supervisor: Mutex<Option<Arc<supervisor::PeerSupervisor>>>,
 }
 
 /// A named set of MCP servers. Implements `RuntimeFactory`: each `runtime_for` acquires a runtime
@@ -90,13 +102,7 @@ impl McpRegistry {
     pub fn with_pool_settings(settings: McpPoolSettings) -> Self {
         let pool = Arc::new(ConnectionPool::new(settings.into()));
         pool.spawn_reaper();
-        Self {
-            inner: Arc::new(McpRegistryInner {
-                connectors: RwLock::new(HashMap::new()),
-                pool,
-                health: RwLock::new(None),
-            }),
-        }
+        Self::from_pool(pool)
     }
 
     /// Custom pool clock for idle-TTL tests (inject "now" without sleeping).
@@ -106,11 +112,18 @@ impl McpRegistry {
     ) -> Self {
         let pool = Arc::new(ConnectionPool::with_clock(settings.into(), clock));
         pool.spawn_reaper();
+        Self::from_pool(pool)
+    }
+
+    fn from_pool(pool: Arc<ConnectionPool>) -> Self {
+        let (peer_set, _rx) = watch::channel(0);
         Self {
             inner: Arc::new(McpRegistryInner {
                 connectors: RwLock::new(HashMap::new()),
                 pool,
                 health: RwLock::new(None),
+                peer_set,
+                supervisor: Mutex::new(None),
             }),
         }
     }
@@ -132,6 +145,7 @@ impl McpRegistry {
             .write()
             .unwrap_or_else(|e| e.into_inner())
             .insert(name.into(), Arc::new(connector));
+        self.bump_peers();
         self
     }
 
@@ -156,6 +170,8 @@ impl McpRegistry {
             self.inner.pool.invalidate(kept);
         }
         *guard = new_connectors;
+        drop(guard);
+        self.bump_peers();
     }
 
     fn health_catalog(&self) -> Option<Arc<CapabilityCatalog>> {

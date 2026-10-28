@@ -577,6 +577,7 @@ fn model_browser_select_without_conversation_is_daemon_wide() {
         chat_tools: 0,
         chat_tool_names: vec![],
         enter_sends: true,
+        mcp: Vec::new(),
     });
     let effects = crate::handlers::models::handle(&mut app, key(KeyCode::Enter));
     match effects.as_slice() {
@@ -1344,6 +1345,7 @@ fn slash_status_full() {
         chat_tools: 1,
         chat_tool_names: vec!["tasks:add".into()],
         enter_sends: true,
+        mcp: Vec::new(),
     });
     app.input = "/status".into();
     app.handle_key(key(KeyCode::Enter));
@@ -1798,6 +1800,7 @@ fn identical_status_update_does_not_dirty() {
         chat_tools: 0,
         chat_tool_names: vec![],
         enter_sends: true,
+        mcp: Vec::new(),
     };
     app.update(Action::StatusUpdate(status.clone()));
     app.clear_dirty();
@@ -2004,6 +2007,7 @@ fn status_summary_model_name_none() {
         chat_tools: 0,
         chat_tool_names: Vec::new(),
         enter_sends: true,
+        mcp: Vec::new(),
     });
     let summary = app.status_summary();
     assert!(summary.model_name.is_none());
@@ -2027,6 +2031,7 @@ fn slash_status_context_window_zero() {
         chat_tools: 0,
         chat_tool_names: Vec::new(),
         enter_sends: true,
+        mcp: Vec::new(),
     });
     app.input = "/status".into();
     app.handle_key(key(KeyCode::Enter));
@@ -3126,6 +3131,7 @@ fn status_with_model(model: Option<String>) -> DaemonStatus {
         chat_tools: 0,
         chat_tool_names: vec![],
         enter_sends: true,
+        mcp: Vec::new(),
     }
 }
 

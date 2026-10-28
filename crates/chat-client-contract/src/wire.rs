@@ -197,6 +197,22 @@ pub struct ChatResponse {
 // Daemon status
 // ──────────────────────────────────────────────────────────────
 
+/// One MCP peer on `GET /api/status`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct McpPeerStatus {
+    pub name: String,
+    /// `"connected"` or `"degraded"`.
+    pub state: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_error: Option<String>,
+    #[serde(default)]
+    pub attempts: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_retry_ms: Option<u64>,
+    #[serde(default)]
+    pub tools: u32,
+}
+
 /// Response shape from `GET /api/status`.
 /// All optional fields use `#[serde(default)]` so clients tolerate server versions
 /// that don't emit them yet.
@@ -237,6 +253,9 @@ pub struct DaemonStatus {
     /// Defaults to `true` so a daemon predating this field keeps the behaviour it already had.
     #[serde(default = "default_enter_sends")]
     pub enter_sends: bool,
+    /// Live MCP reconnect rows. Empty when the chat supervisor has not started.
+    #[serde(default)]
+    pub mcp: Vec<McpPeerStatus>,
 }
 
 fn default_enter_sends() -> bool {
@@ -826,6 +845,7 @@ mod tests {
             chat_tools: 1,
             chat_tool_names: vec!["tasks:add".into()],
             enter_sends: false,
+            mcp: Vec::new(),
         };
         let json = serde_json::to_value(&status).unwrap();
         let back: DaemonStatus = serde_json::from_value(json).unwrap();
@@ -1358,3 +1378,7 @@ mod completion_gate_wire_tests {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "wire_mcp_status_tests.rs"]
+mod wire_mcp_status_tests;

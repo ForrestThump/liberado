@@ -67,6 +67,17 @@ fn descriptor(name: &str) -> McpDescriptor {
     }
 }
 
+async fn wait_for_catalog(live: &LiveRegistryRuntime, want: usize) {
+    for _ in 0..400 {
+        if live.catalog().len() == want {
+            return;
+        }
+        tokio::task::yield_now().await;
+    }
+    let got = live.catalog().len();
+    panic!("catalog len {got}, want {want}");
+}
+
 fn provenance(who: &str) -> WriteProvenance {
     WriteProvenance {
         source: who.to_string(),
@@ -92,6 +103,7 @@ async fn an_unchanged_registry_does_not_reconnect_on_every_call() {
 
     let live = LiveRegistryRuntime::new(registry, provenance("t"));
 
+    wait_for_catalog(&live, 2).await;
     let first = live.catalog();
     assert_eq!(first.len(), 2, "both peers' tools are merged: {first:?}");
     assert_eq!(ca.load(Ordering::SeqCst), 1);
