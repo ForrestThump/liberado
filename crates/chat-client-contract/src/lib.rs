@@ -8,6 +8,8 @@
 //! - **`grants`** — read-only `GET /api/conversations/{id}/grants` view.
 //! - **`surface_mode`** — `SurfaceMode` (`chat` | `agent`) shelf stamp; kept as its own
 //!   module so `wire.rs` stays at its function baseline.
+//! - **`wire_mcp_status`** — `McpPeerStatus`, kept beside `wire` so `wire.rs` stays under
+//!   its physical-line review boundary. Re-exported from `wire`.
 //! - **`wire`** — All wire DTOs (`DaemonStatus`, `ReactionEvent`, `SessionEvent`, etc.).
 //!   Pure `serde` — no native deps, compiles to `wasm32-unknown-unknown`. The clients'
 //!   actual shared boundary lives here: [`wire::SessionEvent::from_sse_data`] turns one decoded
@@ -30,6 +32,7 @@ pub mod grants;
 pub mod session_kind;
 pub mod surface_mode;
 pub mod wire;
+mod wire_mcp_status;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub mod api_auth;

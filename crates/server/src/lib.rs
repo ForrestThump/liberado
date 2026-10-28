@@ -25,6 +25,7 @@ use coding_pack::{build_coding_pack, load_server_config};
 use main_agent_budget::main_agent_budget;
 mod bindings;
 mod channels;
+mod chat_surface_ready;
 mod hooks;
 mod latency;
 mod matrix_agent_chat;
@@ -676,8 +677,8 @@ async fn build_chat(
 
     // Face-agent tool surface: live registry (refresh on peer-set change). Specialist work goes
     // through `delegate` → hub → dispatch pack, not the face agent's own tool list.
-    let runtime =
-        crate::surfaces::mask_chat_runtime(connect_chat_runtime(mcp), surfaces.plugins.clone());
+    let live = connect_chat_runtime(mcp);
+    let runtime = crate::surfaces::mask_chat_runtime(live.clone(), surfaces.plugins.clone());
 
     let workspace = liberado_main_agent::WorkspaceSettings::resolve(
         config.tuning.agent_workspace.max_bytes,
@@ -685,6 +686,14 @@ async fn build_chat(
         &liberado_config::data_dir(),
     );
     let workspace_offered = workspace.root_is_usable();
+    chat_surface_ready::watch_after_first_wave(
+        &live,
+        Arc::clone(&runtime),
+        main_agent_cfg.delegation_mode,
+        main_agent_caps.clone(),
+        workspace_offered,
+    )
+    .await;
     let (tool_names, tool_count) = face_tool_surface(
         &runtime,
         main_agent_cfg.delegation_mode,
@@ -864,7 +873,7 @@ async fn dispatcher_guidance_source(
 
 /// Chat face tools: live registry handle that re-connects when the peer set changes (empty→add
 /// after `POST /api/mcp/reload` works without process restart).
-fn connect_chat_runtime(mcp: McpRegistry) -> Arc<dyn ToolRuntime> {
+fn connect_chat_runtime(mcp: McpRegistry) -> Arc<liberado_mcp::LiveRegistryRuntime> {
     info!(
         peers = mcp.len(),
         "chat: live MCP registry runtime (refreshes on peer-set change)"

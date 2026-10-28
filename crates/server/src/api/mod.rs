@@ -8,6 +8,7 @@ mod chat_create;
 mod goals;
 mod grants;
 mod library;
+mod mcp_status;
 mod plugins;
 mod profiles;
 pub(crate) mod schedule_description;
