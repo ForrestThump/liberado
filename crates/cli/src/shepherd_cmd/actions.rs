@@ -64,21 +64,21 @@ pub(super) fn handle_new_failures(
     run: &Option<Value>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let kicks = pr.count("shepherd:kickback-");
-    let action = failure_action(cfg, pr.has(RERUN), kicks)?;
-    apply_failure_action(cfg, pr, dry, new, old, run, action)
+    failure_action(cfg, pr.has(RERUN), kicks)
+        .and_then(|action| apply_failure_action(cfg, pr, dry, new, old, run, action))
 }
 
 fn failure_action(
     cfg: &Config,
     has_rerun: bool,
     kicks: usize,
-) -> Result<FailureAction, super::goal_client::DaemonGoalError> {
+) -> Result<FailureAction, Box<dyn std::error::Error>> {
     let mut failure = None;
     let action = next_failure_action(has_rerun, kicks, cfg.max_kickbacks, || {
         super::goal_client::slot_open(cfg, &mut failure)
     });
     match failure {
-        Some(error) => Err(error),
+        Some(error) => Err(error.into()),
         None => Ok(action),
     }
 }
@@ -219,7 +219,19 @@ pub(super) fn handle_clean(
     github_run_id: Option<u64>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let reviews = pr.count("shepherd:review-");
-    let action = clean_action(cfg, reviews)?;
+    clean_action(cfg, reviews)
+        .and_then(|action| dispatch_clean(cfg, pr, dry, old, github_run_id, reviews, action))
+}
+
+fn dispatch_clean(
+    cfg: &Config,
+    pr: &mut Pr,
+    dry: bool,
+    old: &BTreeSet<String>,
+    github_run_id: Option<u64>,
+    reviews: usize,
+    action: CleanAction,
+) -> Result<(), Box<dyn std::error::Error>> {
     match action {
         CleanAction::Ready => mark_ready(cfg, pr, dry, github_run_id, reviews),
         CleanAction::WaitForSlot => Ok(()),
@@ -227,16 +239,13 @@ pub(super) fn handle_clean(
     }
 }
 
-fn clean_action(
-    cfg: &Config,
-    reviews: usize,
-) -> Result<CleanAction, super::goal_client::DaemonGoalError> {
+fn clean_action(cfg: &Config, reviews: usize) -> Result<CleanAction, Box<dyn std::error::Error>> {
     let mut failure = None;
     let action = next_clean_action(reviews, cfg.cold_reviews, || {
         super::goal_client::slot_open(cfg, &mut failure)
     });
     match failure {
-        Some(error) => Err(error),
+        Some(error) => Err(error.into()),
         None => Ok(action),
     }
 }
