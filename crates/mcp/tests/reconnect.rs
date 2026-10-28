@@ -2,9 +2,11 @@
 
 use core::future::Future;
 use std::collections::HashMap;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
+
+use tokio::sync::Notify;
 
 use liberado_common::{CapabilityCatalog, Consequence, McpDescriptor, WriteProvenance};
 use liberado_mcp::{
@@ -320,4 +322,189 @@ async fn a_removed_peer_stops_retrying() {
     assert!(after_remove >= before);
     assert!(live.catalog().is_empty());
     assert!(registry.peer_reports().is_empty());
+}
+
+#[tokio::test(start_paused = true)]
+async fn first_wave_with_no_peers_returns_immediately() {
+    let live = LiveRegistryRuntime::new(McpRegistry::new(), WriteProvenance::agent("test", "c"));
+    let start = tokio::time::Instant::now();
+    live.wait_first_wave(Duration::from_secs(15)).await;
+    assert_eq!(start.elapsed(), Duration::ZERO);
+}
+
+#[tokio::test(start_paused = true)]
+async fn first_wave_returns_when_each_peer_finishes_its_first_attempt() {
+    let up = Arc::new(Gate::opened());
+    let down = Arc::new(Gate::closed());
+    let registry = McpRegistry::new()
+        .register(
+            "turbovault",
+            GateConnector {
+                gate: Arc::clone(&up),
+            },
+        )
+        .register(
+            "search",
+            GateConnector {
+                gate: Arc::clone(&down),
+            },
+        );
+    let live = LiveRegistryRuntime::with_policy(
+        registry.clone(),
+        WriteProvenance::agent("test", "c"),
+        policy(Duration::from_secs(3600)),
+    );
+    let start = tokio::time::Instant::now();
+    live.wait_first_wave(Duration::from_secs(15)).await;
+    assert!(start.elapsed() < Duration::from_secs(15));
+    assert!(has_add(&live));
+    assert!(
+        live.catalog()
+            .iter()
+            .all(|tool| !tool.name.starts_with("search:"))
+    );
+    assert_eq!(
+        state_named(&registry, "turbovault"),
+        Some(McpLinkState::Connected)
+    );
+    assert_eq!(
+        state_named(&registry, "search"),
+        Some(McpLinkState::Degraded)
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn first_wave_returns_at_the_bound_while_connect_is_still_pending() {
+    let started = Arc::new(Notify::new());
+    let release = Arc::new(Notify::new());
+    let registry = McpRegistry::new().register(
+        "turbovault",
+        HoldConnector {
+            started: Arc::clone(&started),
+            release: Arc::clone(&release),
+        },
+    );
+    let live = LiveRegistryRuntime::with_policy(
+        registry,
+        WriteProvenance::agent("test", "c"),
+        policy(Duration::from_secs(3600)),
+    );
+    let start = tokio::time::Instant::now();
+    let wait = tokio::spawn(async move {
+        live.wait_first_wave(Duration::from_secs(15)).await;
+        live
+    });
+    started.notified().await;
+    if !wait.is_finished() {
+        tokio::time::advance(Duration::from_secs(15)).await;
+    }
+    let live = wait.await.unwrap();
+    assert!(start.elapsed() >= Duration::from_secs(15));
+    assert!(!has_add(&live));
+    release.notify_one();
+    spin_until(|| has_add(&live)).await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn surface_hook_runs_when_the_catalog_changes() {
+    let gate = Arc::new(Gate::closed());
+    let (registry, live) = start(Arc::clone(&gate), Duration::from_secs(3600));
+    live.wait_first_wave(Duration::from_secs(15)).await;
+    assert_eq!(state_of(&registry), Some(McpLinkState::Degraded));
+
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let live = Arc::new(live);
+    let seen_hook = Arc::clone(&seen);
+    let live_hook = Arc::clone(&live);
+    live.arm_surface_hook(Arc::new(move || {
+        seen_hook
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .push(live_hook.catalog().len());
+    }));
+
+    gate.open.store(true, Ordering::SeqCst);
+    tokio::time::advance(Duration::from_secs(1)).await;
+    spin_until(|| {
+        seen.lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .contains(&1)
+    })
+    .await;
+
+    gate.down.store(true, Ordering::SeqCst);
+    let err = live
+        .invoke(&ToolInvocation::new(
+            "c",
+            "turbovault:add",
+            serde_json::json!({}),
+        ))
+        .await
+        .unwrap_err();
+    assert_eq!(err, "MCP turbovault unavailable, reconnecting");
+    spin_until(|| {
+        seen.lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .contains(&0)
+    })
+    .await;
+
+    gate.down.store(false, Ordering::SeqCst);
+    tokio::time::advance(Duration::from_secs(1)).await;
+    spin_until(|| has_add(&live)).await;
+    spin_until(|| {
+        seen.lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .last()
+            .copied()
+            == Some(1)
+    })
+    .await;
+}
+
+fn state_named(registry: &McpRegistry, name: &str) -> Option<McpLinkState> {
+    registry
+        .peer_reports()
+        .into_iter()
+        .find(|row| row.name == name)
+        .map(|row| row.state)
+}
+
+struct HoldConnector {
+    started: Arc<Notify>,
+    release: Arc<Notify>,
+}
+
+struct StaticTool;
+
+#[async_trait::async_trait]
+impl McpConnector for HoldConnector {
+    async fn connect(
+        &self,
+        _: WriteProvenance,
+    ) -> Result<Box<dyn RebindableRuntime>, RuntimeSetupError> {
+        self.started.notify_one();
+        self.release.notified().await;
+        Ok(Box::new(StaticTool))
+    }
+}
+
+#[async_trait::async_trait]
+impl ToolRuntime for StaticTool {
+    fn catalog(&self) -> Vec<liberado_provider::ToolDef> {
+        vec![liberado_provider::ToolDef {
+            name: "add".into(),
+            description: String::new(),
+            parameters: serde_json::json!({}),
+        }]
+    }
+
+    async fn invoke(&self, _: &ToolInvocation) -> Result<String, String> {
+        Ok("added".into())
+    }
+}
+
+#[async_trait::async_trait]
+impl RebindableRuntime for StaticTool {
+    fn rebind_provenance(&mut self, _: WriteProvenance) {}
 }

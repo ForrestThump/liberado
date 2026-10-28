@@ -24,6 +24,8 @@ use crate::factory::McpRegistryInner;
 
 #[path = "supervisor_peer.rs"]
 mod peer;
+#[path = "supervisor_wave.rs"]
+mod wave;
 
 /// How a peer looks to `/api/status`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -172,6 +174,8 @@ struct Pending {
 pub(crate) struct PeerSupervisor {
     data: Mutex<SupervisorData>,
     last_surface_count: Mutex<Option<usize>>,
+    wave: Notify,
+    surface_hook: Mutex<Option<wave::SurfaceHook>>,
     provenance: WriteProvenance,
     policy: ReconnectPolicy,
     registry: Weak<McpRegistryInner>,
@@ -216,6 +220,8 @@ impl PeerSupervisor {
                 status: HashMap::new(),
             }),
             last_surface_count: Mutex::new(None),
+            wave: Notify::new(),
+            surface_hook: Mutex::new(None),
             provenance,
             policy,
             registry,
@@ -298,6 +304,7 @@ impl PeerSupervisor {
         connectors: HashMap<String, Arc<dyn McpConnector>>,
     ) {
         let pending = self.plan(generation, &connectors);
+        self.wake_first_wave();
         self.log_surface_if_changed();
         for item in pending {
             peer::spawn_peer(self, generation, item);
@@ -323,6 +330,8 @@ impl PeerSupervisor {
         for name in names {
             retire_locked(&mut data, &name);
         }
+        drop(data);
+        self.wake_first_wave();
     }
 
     fn install(
@@ -332,32 +341,38 @@ impl PeerSupervisor {
         death: Arc<Latch>,
         tools: usize,
     ) -> bool {
-        let mut data = self.lock();
-        if !owns(&data, &ctx.name, ctx.generation, &ctx.cancel) {
-            return false;
-        }
-        data.surface
-            .insert(ctx.name.clone(), SurfaceSlot { runtime, death });
-        data.status.insert(ctx.name.clone(), connected_row(tools));
-        true
+        let ok = {
+            let mut data = self.lock();
+            if owns(&data, &ctx.name, ctx.generation, &ctx.cancel) {
+                data.surface
+                    .insert(ctx.name.clone(), SurfaceSlot { runtime, death });
+                data.status.insert(ctx.name.clone(), connected_row(tools));
+                true
+            } else {
+                false
+            }
+        };
+        self.wake_first_wave();
+        ok
     }
 
     fn mark_degraded(&self, ctx: &PeerCtx, attempts: u32, err: &str, delay: Duration) {
         let mut data = self.lock();
-        if !owns(&data, &ctx.name, ctx.generation, &ctx.cancel) {
-            return;
+        if owns(&data, &ctx.name, ctx.generation, &ctx.cancel) {
+            data.surface.remove(&ctx.name);
+            data.status.insert(
+                ctx.name.clone(),
+                StatusRow {
+                    state: McpLinkState::Degraded,
+                    last_error: Some(err.to_string()),
+                    attempts,
+                    next_at: Some(tokio::time::Instant::now() + delay),
+                    tools: 0,
+                },
+            );
         }
-        data.surface.remove(&ctx.name);
-        data.status.insert(
-            ctx.name.clone(),
-            StatusRow {
-                state: McpLinkState::Degraded,
-                last_error: Some(err.to_string()),
-                attempts,
-                next_at: Some(tokio::time::Instant::now() + delay),
-                tools: 0,
-            },
-        );
+        drop(data);
+        self.wake_first_wave();
     }
 
     fn uninstall(&self, ctx: &PeerCtx) {
@@ -372,24 +387,13 @@ impl PeerSupervisor {
         if owns(&data, &ctx.name, ctx.generation, &ctx.cancel) {
             retire_locked(&mut data, &ctx.name);
         }
+        drop(data);
+        self.wake_first_wave();
     }
 
     fn log_surface_if_changed(&self) {
         let count = self.tool_count();
-        let mut last = self
-            .last_surface_count
-            .lock()
-            .unwrap_or_else(|err| err.into_inner());
-        if *last == Some(count) {
-            return;
-        }
-        let previous = *last;
-        *last = Some(count);
-        drop(last);
-        if count == 0 && previous.is_none() {
-            return;
-        }
-        tracing::info!(count, "chat: tool surface ready");
+        wave::emit(self.surface_change(count));
     }
 
     fn tool_count(&self) -> usize {

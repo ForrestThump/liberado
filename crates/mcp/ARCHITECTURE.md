@@ -102,10 +102,18 @@ failure logs that line. A later failure logs
 `MCP failed to connect — continuing without it; still down` only when the unjittered step
 changes, including the first wait at the cap. Further waits at the cap are quiet.
 
-When the namespaced MCP tool count changes, the supervisor logs `chat: tool surface ready`
-with field `count`. The initial zero is not logged. A later drop to zero is logged. Boot
-still logs its own `chat: tool surface ready` line with `tools` and `delegation_mode`, and
-that line can be the workspace-only count: startup does not wait for the first connect.
+Chat boot waits for the first connect wave for at most 15 seconds. The wait ends when
+every registered peer has finished its first attempt, or when that bound elapses. A peer
+that is still inside `connect`, or that failed, keeps the background retry. Startup does
+not wait longer than 15 seconds.
+
+The boot line and every later change use one line, `chat: tool surface ready`, with field
+`count`. `count` is the face tool surface: the MCP tools the face lists, plus `delegate`
+and `create_agent` in delegation mode, plus the private workspace tools when the workspace
+is offered. The supervisor notifies the server when the MCP tool count changes. The server
+logs that face count. Boot logs once, after the wait, with `tools` and `delegation_mode`
+as well. A later drop or reconnect logs the same face count, so a number from before an
+outage and a number from after recovery are the same kind of count.
 
 `GET /api/status` includes `mcp[]` with `name`, `state` (`connected` or `degraded`),
 `attempts`, `tools`, and optional `last_error` and `next_retry_ms`. `GET /api/health` stays

@@ -5,6 +5,7 @@
 //! that peer fails immediately.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use async_trait::async_trait;
 use liberado_common::WriteProvenance;
@@ -49,6 +50,21 @@ impl LiveRegistryRuntime {
     fn supervisor(&self) -> Arc<PeerSupervisor> {
         self.registry
             .ensure_chat_supervisor(self.provenance.clone(), self.policy.clone())
+    }
+
+    /// Wait until every registered peer has finished its first connect attempt, or until `bound`.
+    ///
+    /// Peers that are still connecting, and peers that failed, keep the background retry.
+    pub async fn wait_first_wave(&self, bound: Duration) {
+        self.supervisor().wait_first_wave(bound).await;
+    }
+
+    /// After this returns, a change in the MCP tool count runs `hook` once.
+    ///
+    /// The count at arm time does not run the hook. Chat boot arms the hook and then logs
+    /// the face surface itself, so the first ready line is the post-wait count.
+    pub fn arm_surface_hook(&self, hook: Arc<dyn Fn() + Send + Sync>) {
+        self.supervisor().arm_surface_hook(hook);
     }
 }
 
