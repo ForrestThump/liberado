@@ -697,27 +697,84 @@ fn settle_with(
     mut labeler: impl FnMut(&mut Pr, String),
 ) -> Result<ReviewTransition, Box<dyn std::error::Error>> {
     let path = pending(cfg, pr.number);
-    let Ok(text) = fs::read_to_string(&path) else {
+    settle_loaded_review(cfg, pr, dry, &path, &mut status_lookup, &mut labeler)
+}
+
+fn settle_loaded_review(
+    cfg: &Config,
+    pr: &mut Pr,
+    dry: bool,
+    path: &Path,
+    status_lookup: &mut impl FnMut(&str) -> Result<Option<String>, Box<dyn std::error::Error>>,
+    labeler: &mut impl FnMut(&mut Pr, String),
+) -> Result<ReviewTransition, Box<dyn std::error::Error>> {
+    let Ok(text) = fs::read_to_string(path) else {
         return Ok(ReviewTransition::None);
     };
     let value: Value = serde_json::from_str(&text)?;
     let (Some(id), Some(round)) = (value["session_id"].as_str(), value["round"].as_u64()) else {
-        if !dry {
-            let _ = fs::remove_file(path);
-        }
-        return Ok(ReviewTransition::None);
+        return discard_pending(dry, path);
     };
-    match review_transition(status_lookup(id)?.as_deref()) {
-        ReviewTransition::Waiting => Ok(ReviewTransition::Waiting),
-        ReviewTransition::Labeled => apply_labeled_review(cfg, pr, dry, round, &path, &mut labeler),
-        ReviewTransition::Failed => {
-            if !dry {
-                let _ = fs::remove_file(path);
-            }
-            Ok(ReviewTransition::Failed)
-        }
-        ReviewTransition::None => unreachable!("status transition is never none"),
+    apply_review_status(cfg, pr, dry, round, path, status_lookup(id), labeler)
+}
+
+fn discard_pending(dry: bool, path: &Path) -> Result<ReviewTransition, Box<dyn std::error::Error>> {
+    if !dry {
+        let _ = fs::remove_file(path);
     }
+    Ok(ReviewTransition::None)
+}
+
+fn apply_review_status(
+    cfg: &Config,
+    pr: &mut Pr,
+    dry: bool,
+    round: u64,
+    path: &Path,
+    looked_up: Result<Option<String>, Box<dyn std::error::Error>>,
+    labeler: &mut impl FnMut(&mut Pr, String),
+) -> Result<ReviewTransition, Box<dyn std::error::Error>> {
+    let status = looked_up?;
+    dispatch_review(cfg, pr, dry, round, path, status.as_deref(), labeler)
+}
+
+fn dispatch_review(
+    cfg: &Config,
+    pr: &mut Pr,
+    dry: bool,
+    round: u64,
+    path: &Path,
+    status: Option<&str>,
+    labeler: &mut impl FnMut(&mut Pr, String),
+) -> Result<ReviewTransition, Box<dyn std::error::Error>> {
+    match review_transition(status) {
+        ReviewTransition::Labeled => apply_labeled_review(cfg, pr, dry, round, path, labeler),
+        other => finish_unlabeled_review(dry, path, other),
+    }
+}
+
+fn finish_unlabeled_review(
+    dry: bool,
+    path: &Path,
+    transition: ReviewTransition,
+) -> Result<ReviewTransition, Box<dyn std::error::Error>> {
+    match transition {
+        ReviewTransition::Failed => remove_failed_review(dry, path),
+        ReviewTransition::Waiting => Ok(ReviewTransition::Waiting),
+        ReviewTransition::Labeled | ReviewTransition::None => {
+            unreachable!("status transition is never none")
+        }
+    }
+}
+
+fn remove_failed_review(
+    dry: bool,
+    path: &Path,
+) -> Result<ReviewTransition, Box<dyn std::error::Error>> {
+    if !dry {
+        let _ = fs::remove_file(path);
+    }
+    Ok(ReviewTransition::Failed)
 }
 
 fn apply_labeled_review(
