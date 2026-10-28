@@ -1,10 +1,10 @@
 {
   "summary": {
-    "total_unwraps": 111,
+    "total_unwraps": 110,
     "proven_invariant": 65,
     "local_failure": 0,
-    "process_fatal": 46,
-    "files_scanned": 680,
+    "process_fatal": 45,
+    "files_scanned": 681,
     "files_with_unwraps": 49
   },
   "files": {
@@ -150,8 +150,8 @@
     "crates/cli/src/shepherd_cmd.rs": {
       "proven_invariant": 2,
       "local_failure": 0,
-      "process_fatal": 2,
-      "total": 4,
+      "process_fatal": 1,
+      "total": 3,
       "occurrences": [
         {
           "file": "crates/cli/src/shepherd_cmd.rs",
@@ -183,17 +183,6 @@
           "snippet": "key.split_once('|').unwrap()",
           "receiver": "key.split_once('|')",
           "context": "parse_failure_setBTreeSet<String>",
-          "classification": "process_fatal",
-          "reason": "production path unwrap requiring conversion to Result or waiver"
-        },
-        {
-          "file": "crates/cli/src/shepherd_cmd.rs",
-          "line": 655,
-          "column": 5,
-          "method": "expect",
-          "snippet": "reqwest::blocking::Client::builder()\n        .timeout(Duration::from_secs(30))\n        .build()\n        .expect(\"HTTP client\")",
-          "receiver": "reqwest::blocking::Client::builder()\n        .timeout(Duration::from_secs(30))\n        .build()",
-          "context": "clientreqwest::blocking::Client",
           "classification": "process_fatal",
           "reason": "production path unwrap requiring conversion to Result or waiver"
         }
