@@ -4,7 +4,7 @@ use core::future::Future;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use tokio::sync::Notify;
 
@@ -172,13 +172,24 @@ fn start(gate: Arc<Gate>, probe_every: Duration) -> (McpRegistry, LiveRegistryRu
 }
 
 async fn spin_until(mut ready: impl FnMut() -> bool) {
-    for _ in 0..400 {
+    // Real time, not `tokio::time::sleep`: a paused clock must stay put.
+    let start = Instant::now();
+    loop {
         if ready() {
             return;
         }
+        if start.elapsed() >= Duration::from_secs(10) {
+            panic!("condition was not met");
+        }
         tokio::task::yield_now().await;
     }
-    panic!("condition was not met");
+}
+
+async fn settle() {
+    let start = Instant::now();
+    while start.elapsed() < Duration::from_millis(50) {
+        tokio::task::yield_now().await;
+    }
 }
 
 fn has_add(live: &LiveRegistryRuntime) -> bool {
@@ -195,7 +206,7 @@ fn state_of(registry: &McpRegistry) -> Option<McpLinkState> {
         .map(|row| row.state)
 }
 
-#[tokio::test(start_paused = true)]
+#[tokio::test(start_paused = true, flavor = "current_thread")]
 async fn peer_down_at_start_joins_the_catalog_when_it_comes_up() {
     let health = Arc::new(CapabilityCatalog::new());
     health.register(McpDescriptor {
@@ -250,7 +261,7 @@ async fn peer_down_at_start_joins_the_catalog_when_it_comes_up() {
     assert_eq!(reply, "added");
 }
 
-#[tokio::test(start_paused = true)]
+#[tokio::test(start_paused = true, flavor = "current_thread")]
 async fn a_dead_session_drops_tools_and_comes_back() {
     let gate = Arc::new(Gate::opened());
     let (registry, live) = start(Arc::clone(&gate), Duration::from_secs(3600));
@@ -286,7 +297,7 @@ async fn a_dead_session_drops_tools_and_comes_back() {
     assert_eq!(state_of(&registry), Some(McpLinkState::Connected));
 }
 
-#[tokio::test(start_paused = true)]
+#[tokio::test(start_paused = true, flavor = "current_thread")]
 async fn a_probe_marks_a_quiet_peer_degraded_until_it_returns() {
     let gate = Arc::new(Gate::opened());
     let (registry, live) = start(Arc::clone(&gate), Duration::from_secs(1));
@@ -303,7 +314,7 @@ async fn a_probe_marks_a_quiet_peer_degraded_until_it_returns() {
     assert_eq!(state_of(&registry), Some(McpLinkState::Connected));
 }
 
-#[tokio::test(start_paused = true)]
+#[tokio::test(start_paused = true, flavor = "current_thread")]
 async fn a_removed_peer_stops_retrying() {
     let gate = Arc::new(Gate::closed());
     let (registry, live) = start(Arc::clone(&gate), Duration::from_secs(3600));
@@ -314,9 +325,7 @@ async fn a_removed_peer_stops_retrying() {
     spin_until(|| registry.peer_reports().is_empty()).await;
     let after_remove = gate.connects.load(Ordering::SeqCst);
     tokio::time::advance(Duration::from_secs(300)).await;
-    for _ in 0..20 {
-        tokio::task::yield_now().await;
-    }
+    settle().await;
 
     assert_eq!(gate.connects.load(Ordering::SeqCst), after_remove);
     assert!(after_remove >= before);
@@ -324,7 +333,7 @@ async fn a_removed_peer_stops_retrying() {
     assert!(registry.peer_reports().is_empty());
 }
 
-#[tokio::test(start_paused = true)]
+#[tokio::test(start_paused = true, flavor = "current_thread")]
 async fn first_wave_with_no_peers_returns_immediately() {
     let live = LiveRegistryRuntime::new(McpRegistry::new(), WriteProvenance::agent("test", "c"));
     let start = tokio::time::Instant::now();
@@ -332,7 +341,7 @@ async fn first_wave_with_no_peers_returns_immediately() {
     assert_eq!(start.elapsed(), Duration::ZERO);
 }
 
-#[tokio::test(start_paused = true)]
+#[tokio::test(start_paused = true, flavor = "current_thread")]
 async fn first_wave_returns_when_each_peer_finishes_its_first_attempt() {
     let up = Arc::new(Gate::opened());
     let down = Arc::new(Gate::closed());
@@ -373,7 +382,7 @@ async fn first_wave_returns_when_each_peer_finishes_its_first_attempt() {
     );
 }
 
-#[tokio::test(start_paused = true)]
+#[tokio::test(start_paused = true, flavor = "current_thread")]
 async fn first_wave_returns_at_the_bound_while_connect_is_still_pending() {
     let started = Arc::new(Notify::new());
     let release = Arc::new(Notify::new());
@@ -405,7 +414,7 @@ async fn first_wave_returns_at_the_bound_while_connect_is_still_pending() {
     spin_until(|| has_add(&live)).await;
 }
 
-#[tokio::test(start_paused = true)]
+#[tokio::test(start_paused = true, flavor = "current_thread")]
 async fn surface_hook_runs_when_the_catalog_changes() {
     let gate = Arc::new(Gate::closed());
     let (registry, live) = start(Arc::clone(&gate), Duration::from_secs(3600));

@@ -45,6 +45,7 @@ fn surface_hook(
 mod tests {
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Mutex};
+    use std::time::{Duration, Instant};
 
     use liberado_common::{Capability, CapabilitySet, WriteProvenance};
     use liberado_executor::{RuntimeSetupError, ToolRuntime};
@@ -141,13 +142,17 @@ mod tests {
     }
 
     async fn spin_until(label: &str, mut ready: impl FnMut() -> bool) {
-        for _ in 0..400 {
+        // Real time, not `tokio::time::sleep`: a paused clock must stay put.
+        let start = Instant::now();
+        loop {
             if ready() {
                 return;
             }
+            if start.elapsed() >= Duration::from_secs(10) {
+                panic!("{label}");
+            }
             tokio::task::yield_now().await;
         }
-        panic!("{label}");
     }
 
     struct GatedConnector {

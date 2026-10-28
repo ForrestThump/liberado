@@ -45,7 +45,7 @@ fn tool_count(tools: usize) -> u32 {
 mod tests {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, Ordering};
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
     use async_trait::async_trait;
     use axum::body::Body;
@@ -113,13 +113,17 @@ mod tests {
     }
 
     async fn spin_until(mut ready: impl FnMut() -> bool) {
-        for _ in 0..400 {
+        // Real time, not `tokio::time::sleep`: a paused clock must stay put.
+        let start = Instant::now();
+        loop {
             if ready() {
                 return;
             }
+            if start.elapsed() >= Duration::from_secs(10) {
+                panic!("timed out waiting for MCP status");
+            }
             tokio::task::yield_now().await;
         }
-        panic!("timed out waiting for MCP status");
     }
 
     async fn body_of(state: Arc<AppState>) -> chat_client_contract::DaemonStatus {
@@ -142,7 +146,7 @@ mod tests {
         serde_json::from_slice(&bytes).unwrap()
     }
 
-    #[tokio::test(start_paused = true)]
+    #[tokio::test(start_paused = true, flavor = "current_thread")]
     async fn status_reports_degraded_then_connected() {
         let down = Arc::new(AtomicBool::new(false));
         let registry = McpRegistry::new().register("turbovault", DownFlag(Arc::clone(&down)));

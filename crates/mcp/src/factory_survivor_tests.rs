@@ -11,6 +11,7 @@ use liberado_tool_runtime::{RuntimeSetupError, ToolRuntime};
 use serde_json::json;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::{Duration, Instant};
 
 /// A connector whose connects always succeed, counting attempts so cache
 /// behaviour (refresh-once vs refresh-always) is observable.
@@ -68,14 +69,18 @@ fn descriptor(name: &str) -> McpDescriptor {
 }
 
 async fn wait_for_catalog(live: &LiveRegistryRuntime, want: usize) {
-    for _ in 0..400 {
+    // The connect runs on another worker. Wait on real time, not a yield count.
+    let start = Instant::now();
+    loop {
         if live.catalog().len() == want {
             return;
         }
+        if start.elapsed() >= Duration::from_secs(10) {
+            let got = live.catalog().len();
+            panic!("catalog len {got}, want {want}");
+        }
         tokio::task::yield_now().await;
     }
-    let got = live.catalog().len();
-    panic!("catalog len {got}, want {want}");
 }
 
 fn provenance(who: &str) -> WriteProvenance {
