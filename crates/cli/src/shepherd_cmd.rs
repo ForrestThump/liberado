@@ -6,6 +6,10 @@
 //!
 //! Daemon goal calls send `Authorization: Bearer` when the shared API token is set.
 //! GitHub calls use `gh` and do not receive that token.
+//!
+//! A failed goal query is an error. Shepherd does not read that failure as zero
+//! active goals, and it does not start a goal while the count is unknown.
+//! `--once` and `--watch` return that error, so the process exits non-zero.
 
 use chrono::Utc;
 use liberado_common::process::std_command;
@@ -21,11 +25,13 @@ use std::{
 
 mod actions;
 mod daemon_http;
+mod goal_client;
 mod invocation;
 mod prompts;
 mod record;
 mod review_observer;
 mod tick_support;
+use goal_client::parse_goal_status;
 use invocation::{Invocation, ParsedInvocation, parse_invocation};
 use record::ShepherdFact;
 use tick_support::tick_live;
@@ -300,13 +306,7 @@ fn drive(
 fn tick_all(cfg: &Config, dry: bool) -> Result<(usize, usize), Box<dyn std::error::Error>> {
     let open_prs = prs(cfg)?;
     for mut pr in open_prs.clone() {
-        if let Err(e) = tick(cfg, &mut pr, dry) {
-            log(
-                cfg,
-                "tick_error",
-                json!({"pr":pr.number,"detail":e.to_string()}),
-            );
-        }
+        goal_client::finish_pr_tick(cfg, &mut pr, dry)?;
     }
     let working = prs(cfg)?.into_iter().filter(|p| !p.terminal()).count();
     Ok((open_prs.len(), working))
@@ -651,89 +651,7 @@ fn check_status(check_names: &[String], rows: &[Value]) -> &'static str {
         "success"
     }
 }
-fn client() -> reqwest::blocking::Client {
-    reqwest::blocking::Client::builder()
-        .timeout(Duration::from_secs(30))
-        .build()
-        .expect("HTTP client")
-}
-fn start_goal_with(
-    cfg: &Config,
-    description: String,
-    max_turns: u32,
-    id: Option<&str>,
-    extra_payload: Value,
-) -> Option<String> {
-    let mut payload = json!({"project":cfg.project,"interactive":false});
-    if let (Some(target), Some(extra)) = (payload.as_object_mut(), extra_payload.as_object()) {
-        target.extend(extra.clone());
-    }
-    let body = json!({"id":id,"description":description,"domain":"coding","max_turns":max_turns,"profile":cfg.profile,"payload":payload});
-    let v: Value = daemon_http::daemon_post(
-        &client(),
-        &format!("{}/api/goals", cfg.daemon),
-        chat_client_contract::api_auth::bearer_token_from_env,
-    )
-    .json(&body)
-    .send()
-    .ok()?
-    .json()
-    .ok()?;
-    v["id"]
-        .as_str()
-        .or_else(|| v["session_id"].as_str())
-        .map(str::to_owned)
-}
-fn start_goal(cfg: &Config, description: String, max_turns: u32) -> Option<String> {
-    start_goal_with(cfg, description, max_turns, None, json!({}))
-}
-fn active_goals(cfg: &Config) -> usize {
-    let v: Value = match daemon_http::daemon_get(
-        &client(),
-        &format!("{}/api/goals", cfg.daemon),
-        chat_client_contract::api_auth::bearer_token_from_env,
-    )
-    .send()
-    .and_then(|r| r.json())
-    {
-        Ok(v) => v,
-        Err(_) => return 0,
-    };
-    v.as_array()
-        .into_iter()
-        .flatten()
-        .filter(|r| {
-            matches!(
-                r["status"]
-                    .as_str()
-                    .unwrap_or("")
-                    .to_ascii_lowercase()
-                    .as_str(),
-                "running" | "pending" | "starting" | "active"
-            )
-        })
-        .count()
-}
-fn goal_status(cfg: &Config, id: &str) -> Option<String> {
-    let r = daemon_http::daemon_get(
-        &client(),
-        &format!("{}/api/goals/{id}", cfg.daemon),
-        chat_client_contract::api_auth::bearer_token_from_env,
-    )
-    .send()
-    .ok()?;
-    if r.status().as_u16() == 404 {
-        return Some("missing".into());
-    }
-    let v: Value = r.json().ok()?;
-    parse_goal_status(&v)
-}
 
-fn parse_goal_status(value: &Value) -> Option<String> {
-    value.get("session").unwrap_or(value)["status"]
-        .as_str()
-        .map(|s| s.to_ascii_lowercase())
-}
 fn pending(cfg: &Config, number: u64) -> PathBuf {
     cfg.state()
         .join("pending_reviews")
@@ -766,7 +684,7 @@ fn settle(
         cfg,
         pr,
         dry,
-        |id| goal_status(cfg, id),
+        |id| goal_client::goal_status(cfg, id),
         |pr, label_name| label(cfg, pr, label_name),
     )
 }
@@ -775,7 +693,7 @@ fn settle_with(
     cfg: &Config,
     pr: &mut Pr,
     dry: bool,
-    mut status_lookup: impl FnMut(&str) -> Option<String>,
+    mut status_lookup: impl FnMut(&str) -> Result<Option<String>, Box<dyn std::error::Error>>,
     mut labeler: impl FnMut(&mut Pr, String),
 ) -> Result<ReviewTransition, Box<dyn std::error::Error>> {
     let path = pending(cfg, pr.number);
@@ -789,7 +707,7 @@ fn settle_with(
         }
         return Ok(ReviewTransition::None);
     };
-    match review_transition(status_lookup(id).as_deref()) {
+    match review_transition(status_lookup(id)?.as_deref()) {
         ReviewTransition::Waiting => Ok(ReviewTransition::Waiting),
         ReviewTransition::Labeled => apply_labeled_review(cfg, pr, dry, round, &path, &mut labeler),
         ReviewTransition::Failed => {
@@ -877,12 +795,7 @@ fn seed(cfg: &Config, path: &Path, dry: bool) -> Result<(), Box<dyn std::error::
         .map(str::trim)
         .filter(|s| !s.is_empty() && !s.starts_with('#'))
     {
-        while !dry && active_goals(cfg) >= cfg.max_concurrent {
-            thread::sleep(Duration::from_secs(cfg.poll))
-        }
-        if !dry {
-            let _ = start_goal(cfg, task.into(), 0);
-        }
+        goal_client::launch_seed_task(cfg, dry, task)?;
     }
     Ok(())
 }
@@ -924,6 +837,9 @@ fn self_test() -> Result<(), Box<dyn std::error::Error>> {
 #[cfg(test)]
 #[path = "shepherd_cmd/review_config_tests.rs"]
 mod review_config_tests;
+#[cfg(test)]
+#[path = "shepherd_cmd/settle_lookup_tests.rs"]
+mod settle_lookup_tests;
 #[cfg(test)]
 #[path = "shepherd_cmd_tests.rs"]
 mod shepherd_cmd_tests;
