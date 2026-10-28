@@ -401,6 +401,12 @@
     "functions": 47,
     "cyclomatic": 70
   },
+  "crates/chat-client-contract/src/wire_mcp_status.rs": {
+    "ploc": 92,
+    "lloc": 20,
+    "functions": 5,
+    "cyclomatic": 8
+  },
   "crates/chat-search-mcp/src/main.rs": {
     "ploc": 400,
     "lloc": 97,
@@ -3833,6 +3839,12 @@
     "functions": 9,
     "cyclomatic": 18
   },
+  "crates/mcp/src/backoff.rs": {
+    "ploc": 150,
+    "lloc": 70,
+    "functions": 12,
+    "cyclomatic": 28
+  },
   "crates/mcp/src/connector.rs": {
     "ploc": 69,
     "lloc": 4,
@@ -3858,10 +3870,10 @@
     "cyclomatic": 33
   },
   "crates/mcp/src/live_runtime.rs": {
-    "ploc": 73,
-    "lloc": 17,
+    "ploc": 50,
+    "lloc": 4,
     "functions": 7,
-    "cyclomatic": 15
+    "cyclomatic": 11
   },
   "crates/mcp/src/multi.rs": {
     "ploc": 156,
@@ -3886,6 +3898,24 @@
     "lloc": 49,
     "functions": 19,
     "cyclomatic": 28
+  },
+  "crates/mcp/src/supervisor.rs": {
+    "ploc": 480,
+    "lloc": 105,
+    "functions": 55,
+    "cyclomatic": 89
+  },
+  "crates/mcp/src/supervisor_peer.rs": {
+    "ploc": 193,
+    "lloc": 65,
+    "functions": 20,
+    "cyclomatic": 41
+  },
+  "crates/mcp/src/supervisor_wave.rs": {
+    "ploc": 76,
+    "lloc": 27,
+    "functions": 15,
+    "cyclomatic": 23
   },
   "crates/memory-mcp/src/main.rs": {
     "ploc": 173,
@@ -4559,6 +4589,12 @@
     "functions": 21,
     "cyclomatic": 25
   },
+  "crates/server/src/api/mcp_status.rs": {
+    "ploc": 174,
+    "lloc": 51,
+    "functions": 18,
+    "cyclomatic": 32
+  },
   "crates/server/src/api/mod.rs": {
     "ploc": 17,
     "lloc": 0,
@@ -4750,6 +4786,12 @@
     "lloc": 6,
     "functions": 2,
     "cyclomatic": 5
+  },
+  "crates/server/src/chat_surface_ready.rs": {
+    "ploc": 228,
+    "lloc": 62,
+    "functions": 31,
+    "cyclomatic": 53
   },
   "crates/server/src/coding_pack.rs": {
     "ploc": 43,

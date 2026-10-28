@@ -76,6 +76,53 @@ out-of-band acquire. Dispatch / chat / daemon build `DispatchRequest.catalog` fr
 `POST /api/mcp/reload`) re-apply the desired peer set without process restart — the same
 transition boot uses.
 
+## Chat reconnect
+
+The chat tool surface does not take a pool permit. `LiveRegistryRuntime` starts one supervisor
+task per registered peer (`McpRegistry::ensure_chat_supervisor`). That task calls
+`McpConnector::connect` directly, so a peer can have two sessions: this chat session, and a
+dispatch checkout from the pool. The pool path is still one-shot `connect_all_best_effort`.
+
+Each peer task is a small state machine:
+
+1. Connect. The first in-flight attempt is not reported as degraded.
+2. On success, publish that peer's tools into the live catalog as `<name>:<tool>`, log
+   `MCP reconnected` (`mcp`, `tools`, `attempts`), and mark the health catalog healthy.
+3. Wait until the peer is removed, an invoke sees `connection_is_dead`, or the periodic
+   `list_tools` probe fails (every 15s). A tool `isError` is not death.
+4. On death, drop the tools immediately. A later call fails fast with
+   `MCP {name} unavailable, reconnecting`. An unknown name still reports
+   `no MCP named '{server}' is in scope for tool '{tool}'`.
+5. Wait on capped exponential backoff, then go back to step 1. The unjittered steps are 1s,
+   2s, 4s, 8s, 16s, 32s, then 60s. Equal jitter lands in `[step/2, step]`. A zero wait is
+   floored to 1ms. Success resets the schedule.
+
+Failures keep the grep string `MCP failed to connect — continuing without it`. The first
+failure logs that line. A later failure logs
+`MCP failed to connect — continuing without it; still down` only when the unjittered step
+changes, including the first wait at the cap. Further waits at the cap are quiet.
+
+Chat boot waits for the first connect wave for at most 15 seconds. The wait ends when
+every registered peer has finished its first attempt, or when that bound elapses. A peer
+that is still inside `connect`, or that failed, keeps the background retry. Startup does
+not wait longer than 15 seconds.
+
+The boot line and every later change use one line, `chat: tool surface ready`, with field
+`count`. `count` is the face tool surface: the MCP tools the face lists, plus `delegate`
+and `create_agent` in delegation mode, plus the private workspace tools when the workspace
+is offered. The supervisor notifies the server when the MCP tool count changes. The server
+logs that face count. Boot logs once, after the wait, with `tools` and `delegation_mode`
+as well. A later drop or reconnect logs the same face count, so a number from before an
+outage and a number from after recovery are the same kind of count.
+
+`GET /api/status` includes `mcp[]` with `name`, `state` (`connected` or `degraded`),
+`attempts`, `tools`, and optional `last_error` and `next_retry_ms`. `GET /api/health` stays
+`{"ok": true}` and HTTP 200 while a peer is down.
+
+`register` and `replace_connectors` (including `POST /api/mcp/reload`) bump a generation.
+A removed peer's task is cancelled, including a backoff sleep. A kept name is restarted so a
+URL or command change applies. Adding a peer starts a new task.
+
 ## Dependencies
 
 - Depends on: `liberado-executor` (`ToolRuntime`, and `RuntimeFactory`/`RuntimeSetupError` — moved here
