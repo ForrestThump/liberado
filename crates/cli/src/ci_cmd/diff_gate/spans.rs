@@ -1,8 +1,9 @@
 //! Function line spans and their intersection with a diff.
 //!
 //! cargo-crap reports the line where a function starts. The end line is the matching closing
-//! brace of the body, or the semicolon when the item has no body. Strings, comments, character
-//! literals, and lifetimes are not braces.
+//! brace of the body, or the semicolon when the item has no body. Strings (including raw
+//! strings), comments (including nested block comments), character literals, lifetimes, and
+//! raw identifiers are not braces.
 
 use std::collections::BTreeSet;
 
@@ -28,6 +29,7 @@ pub fn function_end_line(source: &str, start_line: u32) -> u32 {
             continue;
         }
         if let Some(next) = skip_trivia(bytes, index) {
+            line = line_after(bytes, index, next, line);
             index = next;
             continue;
         }
@@ -46,6 +48,18 @@ pub fn function_end_line(source: &str, start_line: u32) -> u32 {
             _ => {}
         }
         index += 1;
+    }
+    line
+}
+
+fn line_after(bytes: &[u8], from: usize, to: usize, mut line: u32) -> u32 {
+    let end = to.min(bytes.len());
+    let mut cursor = from;
+    while cursor < end {
+        if bytes[cursor] == b'\n' {
+            line = line.saturating_add(1);
+        }
+        cursor += 1;
     }
     line
 }
@@ -74,10 +88,10 @@ fn skip_trivia(bytes: &[u8], index: usize) -> Option<usize> {
     if byte == b'\'' {
         return Some(skip_char_or_lifetime(bytes, index));
     }
-    if let Some(next) = skip_prefixed_string(bytes, index) {
-        return Some(next);
+    if let Some(end) = skip_prefixed_string(bytes, index) {
+        return Some(end);
     }
-    None
+    skip_raw_ident(bytes, index)
 }
 
 fn skip_prefixed_string(bytes: &[u8], index: usize) -> Option<usize> {
@@ -102,34 +116,118 @@ fn skip_line_comment(bytes: &[u8], index: usize) -> usize {
         .map_or(bytes.len(), |offset| index + offset)
 }
 
-fn skip_block_comment(bytes: &[u8], index: usize) -> usize {
+pub(crate) fn skip_block_comment(bytes: &[u8], index: usize) -> usize {
     let mut cursor = index + 2;
+    let mut depth = 1i32;
     while cursor + 1 < bytes.len() {
-        if bytes[cursor] == b'*' && bytes[cursor + 1] == b'/' {
-            return cursor + 2;
+        if depth == 0 {
+            return cursor;
         }
-        cursor += 1;
+        cursor = step_block(bytes, cursor, &mut depth);
     }
-    bytes.len()
+    if depth == 0 { cursor } else { bytes.len() }
+}
+
+fn step_block(bytes: &[u8], cursor: usize, depth: &mut i32) -> usize {
+    match block_mark(bytes, cursor) {
+        BlockMark::Open => {
+            *depth += 1;
+            cursor + 2
+        }
+        BlockMark::Close => {
+            *depth -= 1;
+            cursor + 2
+        }
+        BlockMark::Other => cursor + 1,
+    }
+}
+
+enum BlockMark {
+    Open,
+    Close,
+    Other,
+}
+
+fn block_mark(bytes: &[u8], cursor: usize) -> BlockMark {
+    let pair = [bytes[cursor], bytes.get(cursor + 1).copied().unwrap_or(0)];
+    match pair {
+        [b'/', b'*'] => BlockMark::Open,
+        [b'*', b'/'] => BlockMark::Close,
+        _ => BlockMark::Other,
+    }
 }
 
 fn skip_char_or_lifetime(bytes: &[u8], index: usize) -> usize {
+    match classify_tick(bytes, index) {
+        Tick::End => bytes.len(),
+        Tick::Lifetime => skip_ident(bytes, index + 1),
+        Tick::Char => skip_char_body(bytes, index + 1),
+    }
+}
+
+enum Tick {
+    End,
+    Lifetime,
+    Char,
+}
+
+fn classify_tick(bytes: &[u8], index: usize) -> Tick {
     let Some(next) = bytes.get(index + 1).copied() else {
-        return bytes.len();
+        return Tick::End;
     };
-    if next.is_ascii_alphabetic() || next == b'_' {
-        return skip_ident(bytes, index + 1);
-    }
-    let mut cursor = index + 1;
-    if next == b'\\' {
-        cursor += 2;
+    if is_lifetime(bytes, index, next) {
+        Tick::Lifetime
     } else {
-        cursor += 1;
+        Tick::Char
     }
+}
+
+fn is_lifetime(bytes: &[u8], index: usize, next: u8) -> bool {
+    next != b'\\' && ident_start(next) && bytes.get(index + 2) != Some(&b'\'')
+}
+
+fn ident_start(byte: u8) -> bool {
+    byte.is_ascii_alphabetic() || byte == b'_'
+}
+
+fn skip_char_body(bytes: &[u8], index: usize) -> usize {
+    let cursor = if bytes.get(index) == Some(&b'\\') {
+        skip_escape(bytes, index + 1)
+    } else {
+        index + 1
+    };
+    close_quote(bytes, cursor)
+}
+
+fn close_quote(bytes: &[u8], cursor: usize) -> usize {
     if bytes.get(cursor) == Some(&b'\'') {
+        cursor + 1
+    } else {
+        cursor
+    }
+}
+
+fn skip_escape(bytes: &[u8], index: usize) -> usize {
+    if bytes.get(index) == Some(&b'u') {
+        return skip_unicode(bytes, index + 1);
+    }
+    index + 1
+}
+
+fn skip_unicode(bytes: &[u8], index: usize) -> usize {
+    let mut cursor = index;
+    if bytes.get(cursor) != Some(&b'{') {
+        return cursor;
+    }
+    cursor += 1;
+    while cursor < bytes.len() && bytes[cursor] != b'}' {
         cursor += 1;
     }
-    cursor
+    if cursor < bytes.len() {
+        cursor + 1
+    } else {
+        cursor
+    }
 }
 
 fn skip_ident(bytes: &[u8], index: usize) -> usize {
@@ -141,10 +239,28 @@ fn skip_ident(bytes: &[u8], index: usize) -> usize {
 }
 
 fn is_raw_string(bytes: &[u8], index: usize) -> bool {
-    let rest = &bytes[index..];
+    raw_string_body(strip_string_prefix(&bytes[index..]))
+}
+
+fn strip_string_prefix(rest: &[u8]) -> &[u8] {
     let rest = rest.strip_prefix(b"b").unwrap_or(rest);
-    let rest = rest.strip_prefix(b"c").unwrap_or(rest);
-    rest.starts_with(b"r\"") || rest.starts_with(b"r#")
+    rest.strip_prefix(b"c").unwrap_or(rest)
+}
+
+fn raw_string_body(rest: &[u8]) -> bool {
+    let Some(after_r) = rest.strip_prefix(b"r") else {
+        return false;
+    };
+    let hashes = after_r.iter().take_while(|byte| **byte == b'#').count();
+    after_r.get(hashes) == Some(&b'"')
+}
+
+fn skip_raw_ident(bytes: &[u8], index: usize) -> Option<usize> {
+    if !bytes.get(index..).unwrap_or(&[]).starts_with(b"r#") {
+        return None;
+    }
+    let start = bytes.get(index + 2).copied()?;
+    ident_start(start).then_some(skip_ident(bytes, index + 2))
 }
 
 fn skip_raw_string(bytes: &[u8], index: usize) -> usize {
@@ -211,5 +327,44 @@ mod tests {
     fn a_signature_without_a_body_ends_at_the_semicolon() {
         let source = "trait T {\n    fn only(&self);\n}\n";
         assert_eq!(function_end_line(source, 2), 2);
+    }
+
+    #[test]
+    fn raw_strings_lifetimes_raw_idents_and_nested_comments_are_not_braces() {
+        let source = r###"
+fn demo() {
+    let a = r" { ";
+    let b = r#" { "#;
+    let c = br##" { "##;
+    let e = 'a';
+    let f = '\'';
+    let g = '\u{1F600}';
+    let h = Item::<'a, 'static>(r#type);
+    /* { */
+    /* nested /* { */ still { */
+    1
+}
+"###;
+        let start = line_no(source, "fn demo() {");
+        let end = line_no(source, "}");
+        assert_eq!(function_end_line(source, start), end);
+    }
+
+    #[test]
+    fn an_unterminated_raw_string_and_block_comment_run_to_the_end() {
+        let raw = "fn demo() {\n    let _ = r\"unterminated {\n}\nfn next() {}\n";
+        assert_eq!(function_end_line(raw, 1), 5);
+        let comment = b"/* nested /* { */ still {";
+        assert_eq!(super::skip_block_comment(comment, 0), comment.len());
+        let hashes = b"let _ = r#\"no end";
+        let at = hashes.windows(2).position(|pair| pair == b"r#").unwrap();
+        assert_eq!(super::skip_raw_string(hashes, at), hashes.len());
+        assert_eq!(super::skip_char_or_lifetime(b"'", 0), 1);
+        assert!(super::skip_raw_ident(b"r#type {", 0).is_some());
+        assert!(super::skip_raw_ident(b"r#\"x\"#", 0).is_none());
+    }
+
+    fn line_no(source: &str, text: &str) -> u32 {
+        source.lines().position(|line| line.trim() == text).unwrap() as u32 + 1
     }
 }

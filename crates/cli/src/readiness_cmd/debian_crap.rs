@@ -56,23 +56,20 @@ struct WindowsRunContext {
     base: String,
 }
 
+#[path = "windows_pin.rs"]
+mod windows_pin;
+
 fn windows_run_context(root: &Path) -> Result<WindowsRunContext, Box<dyn std::error::Error>> {
-    let distro =
-        std::env::var("LIBERADO_DEBIAN_WSL_DISTRO").unwrap_or_else(|_| DEFAULT_DISTRO.into());
+    let distro = windows_pin::distro_name(std::env::var("LIBERADO_DEBIAN_WSL_DISTRO").ok());
     let account = wsl_account(&distro)?;
-    let head = super::git_text(root, &["rev-parse", "HEAD"])?;
-    let base = crate::ci_cmd::diff_gate::merge_base_sha(root, None)?;
-    let bundle = create_bundle(root)?;
-    let linux_bundle = wsl_path(&bundle, &distro)?;
-    let cache_key = cache_key(root)?;
-    let layout = cache_layout(&account.home, &cache_key);
+    let pinned = windows_pin::pin_checkout(root, &distro, &account.home)?;
     Ok(WindowsRunContext {
         distro,
         account,
-        head,
-        linux_bundle,
-        layout,
-        base,
+        head: pinned.head,
+        linux_bundle: pinned.linux_bundle,
+        layout: pinned.layout,
+        base: pinned.base,
     })
 }
 

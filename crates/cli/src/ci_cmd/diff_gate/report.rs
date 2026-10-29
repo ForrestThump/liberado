@@ -3,6 +3,8 @@
 //! Failures name the file, line, class, current score, base score, and limit. The fix is
 //! tests or a refactor. The text never tells the reader to edit a baseline or add a waiver.
 
+use std::io::Write;
+
 use serde::Serialize;
 
 use super::model::{BaseCrapTrigger, Class, Judgement, MetricJudgement};
@@ -203,15 +205,23 @@ fn origin(class: &Class) -> Option<ReportOrigin> {
 }
 
 pub fn emit_github_annotations(text: &str) {
-    if std::env::var_os("GITHUB_ACTIONS").is_none() {
-        return;
+    if actions_log_enabled() {
+        emit_annotations(text, &mut std::io::stderr());
     }
-    for line in text.lines().take(40) {
-        if line.is_empty() || line == "diff gate failed:" {
-            continue;
-        }
-        eprintln!("::error::{line}");
+}
+
+fn actions_log_enabled() -> bool {
+    std::env::var_os("GITHUB_ACTIONS").is_some()
+}
+
+pub fn emit_annotations(text: &str, out: &mut impl Write) {
+    for line in text.lines().take(40).filter(|line| annotation_line(line)) {
+        let _ = writeln!(out, "::error::{line}");
     }
+}
+
+fn annotation_line(line: &str) -> bool {
+    !line.is_empty() && line != "diff gate failed:"
 }
 
 #[cfg(test)]
@@ -292,5 +302,23 @@ mod tests {
         assert!(json.contains("\"function\": \"legacy_work\""));
         assert!(json.contains("\"line\": 40"));
         assert!(json.contains("\"crap\": 42.5"));
+    }
+
+    #[test]
+    fn annotations_skip_the_heading_and_stop_after_forty_lines() {
+        let mut lines = vec!["diff gate failed:".to_string(), String::new()];
+        for index in 1..=42 {
+            lines.push(format!("crates/a.rs:{index} work (new)"));
+        }
+        let mut buf = Vec::new();
+        super::emit_annotations(&lines.join("\n"), &mut buf);
+        let text = String::from_utf8(buf).unwrap();
+        assert!(text.contains("::error::crates/a.rs:1 work (new)"));
+        assert!(text.contains("::error::crates/a.rs:38 work (new)"));
+        assert!(!text.contains("diff gate failed"));
+        assert!(!text.contains("crates/a.rs:41"));
+        assert!(!super::annotation_line(""));
+        assert!(!super::annotation_line("diff gate failed:"));
+        assert!(super::annotation_line("crates/a.rs:1 work (new)"));
     }
 }

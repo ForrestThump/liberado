@@ -10,7 +10,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::Stdio;
+use std::process::{Command, ExitStatus, Stdio};
 
 use liberado_common::process::std_command;
 use serde::Deserialize;
@@ -89,10 +89,19 @@ pub fn base_cyclomatic(
 }
 
 pub fn base_crap_json(log: &CiLog, sha: &str) -> Result<String, Box<dyn std::error::Error>> {
+    require_llvm_cov(&log.root)?;
+    measure_in_worktree(log, sha, &mut LiveCargo { log })
+}
+
+fn measure_in_worktree(
+    log: &CiLog,
+    sha: &str,
+    run: &mut dyn CargoRunner,
+) -> Result<String, Box<dyn std::error::Error>> {
     let outputs = prepare_base_coverage_outputs(&log.root)?;
     let cov_target = prepare_base_cov_target(&log.root)?;
     let tree = Worktree::add(&log.root, sha)?;
-    measure_base_coverage(log, tree.path(), &outputs, &cov_target)
+    measure_base_coverage(log, tree.path(), &outputs, &cov_target, run)
 }
 
 fn prepare_base_coverage_outputs(
@@ -110,23 +119,39 @@ fn prepare_base_coverage_outputs(
 
 fn prepare_base_cov_target(root: &Path) -> Result<PathBuf, Box<dyn std::error::Error>> {
     let dest = root.join(BASE_COV_TARGET);
-    let head = super::head_llvm_cov_target(root);
-    if head.is_dir() {
-        match super::seed_registry_artifacts(&head, &dest, root) {
-            Ok(count) => eprintln!(
-                "[diff gate] seeded {count} registry artifact(s) from {}",
-                head.display()
-            ),
-            Err(error) => eprintln!("[diff gate] registry seed skipped: {error}"),
-        }
-    } else {
-        eprintln!(
-            "[diff gate] no HEAD llvm-cov target at {}; base coverage target stays cold",
-            head.display()
-        );
-    }
+    note_seed(root, &dest);
     super::scrub_profiles(&dest)?;
     Ok(dest)
+}
+
+fn note_seed(root: &Path, dest: &Path) {
+    let head = super::head_llvm_cov_target(root);
+    let seeded = seed_head(&head, dest, root);
+    eprintln!(
+        "{}",
+        seed_message(head.is_dir(), &seeded, &head.display().to_string())
+    );
+}
+
+fn seed_head(head: &Path, dest: &Path, root: &Path) -> Result<u32, String> {
+    if !head.is_dir() {
+        return Err(String::new());
+    }
+    super::seed_registry_artifacts(head, dest, root).map_err(|error| error.to_string())
+}
+
+fn seed_message(present: bool, seeded: &Result<u32, String>, head: &str) -> String {
+    if !present {
+        return format!(
+            "[diff gate] no HEAD llvm-cov target at {head}; base coverage target stays cold"
+        );
+    }
+    match seeded {
+        Ok(count) => {
+            format!("[diff gate] seeded {count} registry artifact(s) from {head}")
+        }
+        Err(error) => format!("[diff gate] registry seed skipped: {error}"),
+    }
 }
 
 fn measure_base_coverage(
@@ -134,21 +159,60 @@ fn measure_base_coverage(
     worktree: &Path,
     outputs: &BaseCoverageOutputs,
     cov_target: &Path,
+    run: &mut dyn CargoRunner,
 ) -> Result<String, Box<dyn std::error::Error>> {
-    require_llvm_cov(&log.root)?;
-    let lcov_args = base_llvm_cov_args(&outputs.lcov)?;
-    let lcov_refs: Vec<&str> = lcov_args.iter().map(String::as_str).collect();
-    run_coverage(log, worktree, &lcov_refs, cov_target)?;
+    run_lcov_job(log, worktree, outputs, cov_target, run)?;
+    read_crap_job(log, worktree, outputs, run)
+}
+
+fn run_lcov_job(
+    log: &CiLog,
+    worktree: &Path,
+    outputs: &BaseCoverageOutputs,
+    cov_target: &Path,
+    run: &mut dyn CargoRunner,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let args = base_llvm_cov_args(&outputs.lcov)?;
+    run_strings(log, worktree, &args, Some(cov_target), true, run)
+}
+
+fn read_crap_job(
+    log: &CiLog,
+    worktree: &Path,
+    outputs: &BaseCoverageOutputs,
+    run: &mut dyn CargoRunner,
+) -> Result<String, Box<dyn std::error::Error>> {
     super::relativize_lcov(worktree, &outputs.lcov)?;
-    let report_args = base_crap_report_args(&outputs.lcov, &outputs.json)?;
-    let report_refs: Vec<&str> = report_args.iter().map(String::as_str).collect();
-    run_cargo(log, worktree, &report_refs, None)?;
-    let json_path = outputs
-        .json
-        .to_str()
-        .ok_or("base CRAP json path is not utf-8")?;
-    super::relativize_json_file(worktree, json_path)?;
-    Ok(std::fs::read_to_string(&outputs.json)?)
+    let args = base_crap_report_args(&outputs.lcov, &outputs.json)?;
+    run_strings(log, worktree, &args, None, false, run)?;
+    read_relativized(worktree, &outputs.json)
+}
+
+fn run_strings(
+    log: &CiLog,
+    worktree: &Path,
+    args: &[String],
+    target: Option<&Path>,
+    coverage: bool,
+    run: &mut dyn CargoRunner,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+    run_job(
+        log,
+        &CargoJob {
+            args: &refs,
+            cwd: worktree,
+            target,
+            coverage,
+        },
+        run,
+    )
+}
+
+fn read_relativized(worktree: &Path, json: &Path) -> Result<String, Box<dyn std::error::Error>> {
+    let path = json.to_str().ok_or("base CRAP json path is not utf-8")?;
+    super::relativize_json_file(worktree, path)?;
+    Ok(std::fs::read_to_string(json)?)
 }
 
 fn base_llvm_cov_args(lcov: &Path) -> Result<Vec<String>, Box<dyn std::error::Error>> {
@@ -222,8 +286,29 @@ fn scores_at(
     target: Option<&Path>,
 ) -> Result<Vec<ScoredFn>, Box<dyn std::error::Error>> {
     super::require_crap(&log.root)?;
+    score_prepared(log, cwd, output, keep_crap, target, &mut LiveCargo { log })
+}
+
+fn score_prepared(
+    log: &CiLog,
+    cwd: &Path,
+    output: &str,
+    keep_crap: bool,
+    target: Option<&Path>,
+    run: &mut dyn CargoRunner,
+) -> Result<Vec<ScoredFn>, Box<dyn std::error::Error>> {
     std::fs::create_dir_all(cwd.join(".liberado"))?;
-    run_cargo(log, cwd, &complexity_args(output), target)?;
+    let args = complexity_args(output);
+    run_job(
+        log,
+        &CargoJob {
+            args: &args,
+            cwd,
+            target,
+            coverage: false,
+        },
+        run,
+    )?;
     super::relativize_json_file(cwd, output)?;
     read_scores(cwd, output, keep_crap)
 }
@@ -251,8 +336,16 @@ fn read_scores(
     keep_crap: bool,
 ) -> Result<Vec<ScoredFn>, Box<dyn std::error::Error>> {
     let json = std::fs::read_to_string(root.join(relative))?;
+    scores_from_json(root, &json, keep_crap)
+}
+
+fn scores_from_json(
+    root: &Path,
+    json: &str,
+    keep_crap: bool,
+) -> Result<Vec<ScoredFn>, Box<dyn std::error::Error>> {
     let mut scores = Vec::new();
-    for entry in parse_entries(&json)? {
+    for entry in parse_entries(json)? {
         scores.push(score_one(root, entry, keep_crap)?);
     }
     Ok(scores)
@@ -322,153 +415,106 @@ fn require_llvm_cov(root: &Path) -> Result<(), Box<dyn std::error::Error>> {
     )
 }
 
-fn run_cargo(
-    log: &CiLog,
-    cwd: &Path,
-    args: &[&str],
-    target: Option<&Path>,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let shown = format!("cargo {}", args.join(" "));
-    log.writeln(&format!("=== {shown} ==="))?;
-    eprint!("[liberado ci] {shown} ... ");
-    let _ = std::io::stderr().flush();
-    let status = spawn_cargo(log, cwd, args, target, false)?;
-    if status.success() {
-        eprintln!("ok");
-        Ok(())
-    } else {
-        eprintln!("FAILED");
-        Err(format!(
-            "{shown} failed with {status}. Full log: {}",
-            super::CI_LOG_FILE
-        )
-        .into())
+struct CargoJob<'a> {
+    args: &'a [&'a str],
+    cwd: &'a Path,
+    target: Option<&'a Path>,
+    coverage: bool,
+}
+
+trait CargoRunner {
+    fn run(&mut self, job: &CargoJob<'_>) -> Result<ExitStatus, Box<dyn std::error::Error>>;
+}
+
+struct LiveCargo<'a> {
+    log: &'a CiLog,
+}
+
+impl CargoRunner for LiveCargo<'_> {
+    fn run(&mut self, job: &CargoJob<'_>) -> Result<ExitStatus, Box<dyn std::error::Error>> {
+        spawn_job(self.log, job)
     }
 }
 
-fn run_coverage(
+fn run_job(
     log: &CiLog,
-    cwd: &Path,
-    args: &[&str],
-    target: &Path,
+    job: &CargoJob<'_>,
+    run: &mut dyn CargoRunner,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let shown = format!("cargo {}", args.join(" "));
+    let shown = format!("cargo {}", job.args.join(" "));
     log.writeln(&format!("=== {shown} ==="))?;
     eprint!("[liberado ci] {shown} ... ");
     let _ = std::io::stderr().flush();
-    let status = spawn_cargo(log, cwd, args, Some(target), true)?;
-    if status.success() {
-        eprintln!("ok");
-        Ok(())
-    } else {
-        eprintln!("FAILED");
-        Err(format!(
-            "{shown} failed with {status}. Full log: {}",
-            super::CI_LOG_FILE
-        )
-        .into())
-    }
+    let status = run.run(job)?;
+    status_result(&shown, status)
 }
 
-fn spawn_cargo(
+fn status_result(shown: &str, status: ExitStatus) -> Result<(), Box<dyn std::error::Error>> {
+    if status.success() {
+        eprintln!("ok");
+        return Ok(());
+    }
+    eprintln!("FAILED");
+    Err(format!(
+        "{shown} failed with {status}. Full log: {}",
+        super::CI_LOG_FILE
+    )
+    .into())
+}
+
+fn spawn_job(log: &CiLog, job: &CargoJob<'_>) -> Result<ExitStatus, Box<dyn std::error::Error>> {
+    let mut command = prepared_command(log, job)?;
+    Ok(command.status()?)
+}
+
+fn prepared_command(
     log: &CiLog,
-    cwd: &Path,
-    args: &[&str],
-    target: Option<&Path>,
-    coverage_target: bool,
-) -> Result<std::process::ExitStatus, Box<dyn std::error::Error>> {
+    job: &CargoJob<'_>,
+) -> Result<Command, Box<dyn std::error::Error>> {
+    let mut command = cargo_command(log, job)?;
+    apply_target(&mut command, job)?;
+    finish_command(&mut command, job)?;
+    Ok(command)
+}
+
+fn cargo_command(log: &CiLog, job: &CargoJob<'_>) -> Result<Command, Box<dyn std::error::Error>> {
     let stdout = std::fs::OpenOptions::new().append(true).open(&log.path)?;
     let stderr = std::fs::OpenOptions::new().append(true).open(&log.path)?;
     let mut command = std_command("cargo");
     command
-        .args(args)
-        .current_dir(cwd)
+        .args(job.args)
+        .current_dir(job.cwd)
         .stdin(Stdio::null())
         .stdout(stdout)
         .stderr(stderr)
         .env("CARGO_TERM_COLOR", "never");
-    if let Some(dir) = target {
-        std::fs::create_dir_all(dir)?;
-        command.env("CARGO_TARGET_DIR", dir);
-        if coverage_target {
-            command.env("CARGO_LLVM_COV_TARGET_DIR", dir);
-        }
+    Ok(command)
+}
+
+fn apply_target(
+    command: &mut Command,
+    job: &CargoJob<'_>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let Some(dir) = job.target else {
+        return Ok(());
+    };
+    std::fs::create_dir_all(dir)?;
+    command.env("CARGO_TARGET_DIR", dir);
+    if job.coverage {
+        command.env("CARGO_LLVM_COV_TARGET_DIR", dir);
     }
-    super::coverage_tools::configure(&mut command, cwd, args)?;
-    super::job_budget::apply_compile_job_limit(&mut command, std::ffi::OsStr::new("cargo"), args);
-    Ok(command.status()?)
+    Ok(())
+}
+
+fn finish_command(
+    command: &mut Command,
+    job: &CargoJob<'_>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    super::coverage_tools::configure(command, job.cwd, job.args)?;
+    super::job_budget::apply_compile_job_limit(command, std::ffi::OsStr::new("cargo"), job.args);
+    Ok(())
 }
 
 #[cfg(test)]
-mod tests {
-    use super::{
-        base_crap_report_args, base_llvm_cov_args, fill_crap, parse_entries,
-        prepare_base_coverage_outputs, score_one,
-    };
-    use std::path::Path;
-
-    const JSON: &str = r#"{"entries":[{"file":"src\\work.rs","function":"edit","line":1,"cyclomatic":4.0,"crap":40.0}]}"#;
-
-    #[test]
-    fn a_complexity_score_drops_the_pessimistic_crap_field() {
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::create_dir_all(dir.path().join("src")).unwrap();
-        std::fs::write(
-            dir.path().join("src/work.rs"),
-            "fn edit() {\n    let _ = 1;\n}\n",
-        )
-        .unwrap();
-        let entry = parse_entries(JSON).unwrap().pop().unwrap();
-        assert_eq!(entry.file, "src/work.rs");
-        let score = score_one(dir.path(), entry, false).unwrap();
-        assert!(score.crap.is_none());
-        assert_eq!(score.line, 1);
-        assert!(score.end_line >= 1);
-        assert!(score.body.contains("fn edit"));
-    }
-
-    #[test]
-    fn fill_crap_copies_coverage_onto_the_matching_function() {
-        let mut scores = vec![
-            score_one(
-                std::path::Path::new("."),
-                parse_entries(JSON).unwrap().pop().unwrap(),
-                false,
-            )
-            .unwrap(),
-        ];
-        scores[0].crap = None;
-        fill_crap(&mut scores, JSON).unwrap();
-        assert_eq!(scores[0].crap, Some(40.0));
-        let mut other = scores.clone();
-        other[0].line = 9;
-        other[0].crap = None;
-        fill_crap(&mut other, JSON).unwrap();
-        assert!(other[0].crap.is_none());
-    }
-
-    #[test]
-    fn the_base_lcov_path_is_absolute_and_its_parent_is_created() {
-        let dir = tempfile::tempdir().unwrap();
-        assert!(!dir.path().join(".liberado").exists());
-        let outputs = prepare_base_coverage_outputs(dir.path()).unwrap();
-        assert!(outputs.lcov.is_absolute());
-        assert!(outputs.json.is_absolute());
-        assert!(outputs.lcov.parent().unwrap().is_dir());
-        let args = base_llvm_cov_args(&outputs.lcov).unwrap();
-        let position = args.iter().position(|arg| arg == "--output-path").unwrap();
-        assert_eq!(args[position + 1], outputs.lcov.to_string_lossy());
-        assert!(Path::new(&args[position + 1]).is_absolute());
-        assert!(!args.iter().any(|arg| arg == ".liberado/crap.lcov"));
-        let report = base_crap_report_args(&outputs.lcov, &outputs.json).unwrap();
-        let lcov_at = report.iter().position(|arg| arg == "--lcov").unwrap();
-        assert_eq!(report[lcov_at + 1], outputs.lcov.to_string_lossy());
-        assert_eq!(report.last().map(String::as_str), outputs.json.to_str());
-    }
-
-    #[test]
-    fn a_relative_lcov_path_is_rejected_before_llvm_cov() {
-        let error = base_llvm_cov_args(Path::new(".liberado/crap.lcov")).unwrap_err();
-        assert!(error.to_string().contains("absolute"), "{error}");
-    }
-}
+#[path = "measure_tests.rs"]
+mod tests;

@@ -45,7 +45,7 @@ fn strip_comments(body: &str) -> String {
             continue;
         }
         if bytes[index] == b'/' && bytes.get(index + 1) == Some(&b'*') {
-            index = skip_block(bytes, index);
+            index = super::spans::skip_block_comment(bytes, index);
             out.push(' ');
             continue;
         }
@@ -63,17 +63,6 @@ fn skip_until_newline(bytes: &[u8], index: usize) -> usize {
         .map_or(bytes.len(), |offset| index + offset)
 }
 
-fn skip_block(bytes: &[u8], index: usize) -> usize {
-    let mut cursor = index + 2;
-    while cursor + 1 < bytes.len() {
-        if bytes[cursor] == b'*' && bytes[cursor + 1] == b'/' {
-            return cursor + 2;
-        }
-        cursor += 1;
-    }
-    bytes.len()
-}
-
 #[cfg(test)]
 mod tests {
     use super::jaccard;
@@ -84,6 +73,15 @@ mod tests {
         let renamed = "fn new_name() {\n    let value = 1;\n    value + 2\n}\n";
         let score = jaccard(old, "old_name", renamed, "new_name");
         assert!(score >= 0.8, "similarity {score} should survive a rename");
+    }
+
+    #[test]
+    fn nested_block_comments_do_not_change_the_tokens() {
+        let plain = "fn n() {\n    let value = 1;\n}\n";
+        let nested =
+            "fn n() {\n    /* one two /* three */ four five six */\n    let value = 1;\n}\n";
+        let score = jaccard(nested, "n", plain, "n");
+        assert_eq!(score, 1.0, "similarity {score}");
     }
 
     #[test]

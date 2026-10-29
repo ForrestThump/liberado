@@ -278,6 +278,36 @@ fn fresh() {
     }
 
     #[test]
+    fn default_base_is_head_parent_when_origin_main_is_head() {
+        let dir = init_repo();
+        commit_file(dir.path(), "src/work.rs", BASE_SRC, "one");
+        commit_file(dir.path(), "src/work.rs", HEAD_SRC, "two");
+        git(
+            dir.path(),
+            &["update-ref", "refs/remotes/origin/main", "HEAD"],
+        );
+        let resolved = resolve_base(dir.path(), None).unwrap();
+        assert_eq!(resolved.base_rev, "HEAD^1");
+        assert_eq!(
+            resolved.merge_base,
+            git_out(dir.path(), &["rev-parse", "HEAD^"])
+        );
+    }
+
+    #[test]
+    fn default_base_is_origin_main_after_a_later_commit() {
+        let dir = init_repo();
+        commit_file(dir.path(), "src/work.rs", BASE_SRC, "one");
+        git(
+            dir.path(),
+            &["update-ref", "refs/remotes/origin/main", "HEAD"],
+        );
+        commit_file(dir.path(), "src/work.rs", HEAD_SRC, "two");
+        let resolved = resolve_base(dir.path(), None).unwrap();
+        assert_eq!(resolved.base_rev, "origin/main");
+    }
+
+    #[test]
     fn the_worktree_is_removed_when_it_drops() {
         let dir = init_repo();
         commit_file(dir.path(), "src/work.rs", BASE_SRC, "base");
