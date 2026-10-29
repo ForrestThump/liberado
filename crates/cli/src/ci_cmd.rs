@@ -149,6 +149,7 @@ New functions must land below 30.";
 mod coverage_tools;
 mod crap_baseline_ratchet;
 mod log;
+mod preflight;
 #[cfg(test)]
 pub(crate) use log::extract_ci_failures;
 pub(crate) use log::{CiLog, run_cmd};
@@ -197,73 +198,9 @@ fn exe_lives_in_cargo_target(exe: &Path) -> bool {
 }
 
 /// Run the repository's local ship preflight (no CRAP llvm-cov).
-///
-/// The command list is deliberately kept here, rather than in a shell script, so the same
-/// preflight works through the native `liberado` binary on every host OS.
 fn check(log: &CiLog) -> Result<(), Box<dyn std::error::Error>> {
     vacate_cargo_target_image()?;
-    run_cmd(log, "cargo", &["fmt", "--check"])?;
-    crate::dependency_security_cmd::run(log)?;
-    run_cmd(
-        log,
-        "cargo",
-        &[
-            "clippy",
-            "--workspace",
-            "--exclude",
-            "liberado-webui",
-            "--all-targets",
-            "--",
-            "-D",
-            "warnings",
-            "-D",
-            "clippy::cognitive_complexity",
-        ],
-    )?;
-    run_cmd(log, "cargo", &["test", "--workspace", "--no-fail-fast"])?;
-    run_cmd(
-        log,
-        "cargo",
-        &[
-            "clippy",
-            "--locked",
-            "-p",
-            "liberado-cli",
-            "-p",
-            "liberado-server",
-            "-p",
-            "liberado-bootstrap",
-            "-p",
-            "liberado-dispatch-pack",
-            "--all-targets",
-            "--features",
-            "coding",
-            "--",
-            "-D",
-            "warnings",
-            "-D",
-            "clippy::cognitive_complexity",
-        ],
-    )?;
-    run_cmd(
-        log,
-        "cargo",
-        &[
-            "test",
-            "--locked",
-            "-p",
-            "liberado-cli",
-            "-p",
-            "liberado-server",
-            "-p",
-            "liberado-bootstrap",
-            "-p",
-            "liberado-dispatch-pack",
-            "--features",
-            "coding",
-            "--no-fail-fast",
-        ],
-    )?;
+    preflight::run(log)?;
     crate::branch_cleaner_ci::run(log)
 }
 

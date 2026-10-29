@@ -2,6 +2,10 @@
 
 use super::*;
 #[cfg(feature = "coding")]
+use liberado_coder_core::CommandPolicy;
+#[cfg(feature = "coding")]
+use liberado_coder_sandbox::{Workspace, WorktreeWorkspace};
+#[cfg(feature = "coding")]
 use liberado_common::Consequence;
 use liberado_common::WriteProvenance;
 use liberado_common::{
