@@ -135,10 +135,22 @@ mod tests {
         let parent = include_str!("../shepherd_cmd.rs");
         assert_eq!(
             parent.matches("bearer_token_from_env").count(),
+            0,
+            "daemon goal calls live in goal_client"
+        );
+        assert!(!parent.contains("LIBERADO_API_TOKEN"));
+        let goals = include_str!("goal_client.rs");
+        assert_eq!(
+            goals.matches("bearer_token_from_env").count(),
             3,
             "the token lookup stays on the three daemon goal calls"
         );
-        assert!(!parent.contains("LIBERADO_API_TOKEN"));
+        assert!(
+            !goals.contains("LIBERADO_API_TOKEN"),
+            "name the variable through API_TOKEN_ENV"
+        );
+        assert!(!goals.contains("std_command"));
+        assert!(!goals.contains("\"gh\""));
         assert_daemon_token_absent(include_str!("actions.rs"));
         assert_daemon_token_absent(include_str!("review_observer.rs"));
         assert_daemon_token_absent(include_str!("tick_support.rs"));

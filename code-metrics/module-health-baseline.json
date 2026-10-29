@@ -732,10 +732,10 @@
     "cyclomatic": 90
   },
   "crates/cli/src/shepherd_cmd.rs": {
-    "ploc": 853,
-    "lloc": 209,
-    "functions": 94,
-    "cyclomatic": 231
+    "ploc": 826,
+    "lloc": 198,
+    "functions": 90,
+    "cyclomatic": 219
   },
   "crates/cli/src/shepherd_cmd/actions.rs": {
     "ploc": 296,
@@ -754,6 +754,18 @@
     "lloc": 51,
     "functions": 24,
     "cyclomatic": 34
+  },
+  "crates/cli/src/shepherd_cmd/goal_client.rs": {
+    "ploc": 391,
+    "lloc": 69,
+    "functions": 51,
+    "cyclomatic": 111
+  },
+  "crates/cli/src/shepherd_cmd/goal_client_tests.rs": {
+    "ploc": 441,
+    "lloc": 176,
+    "functions": 51,
+    "cyclomatic": 66
   },
   "crates/cli/src/shepherd_cmd/invocation.rs": {
     "ploc": 109,
@@ -790,6 +802,12 @@
     "lloc": 55,
     "functions": 24,
     "cyclomatic": 63
+  },
+  "crates/cli/src/shepherd_cmd/settle_lookup_tests.rs": {
+    "ploc": 162,
+    "lloc": 51,
+    "functions": 23,
+    "cyclomatic": 25
   },
   "crates/cli/src/shepherd_cmd/tick_support.rs": {
     "ploc": 12,

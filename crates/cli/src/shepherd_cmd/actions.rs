@@ -64,14 +64,23 @@ pub(super) fn handle_new_failures(
     run: &Option<Value>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let kicks = pr.count("shepherd:kickback-");
-    let action = next_failure_action(pr.has(RERUN), kicks, cfg.max_kickbacks, || {
-        slot_is_free(cfg)
-    });
-    apply_failure_action(cfg, pr, dry, new, old, run, action)
+    failure_action(cfg, pr.has(RERUN), kicks)
+        .and_then(|action| apply_failure_action(cfg, pr, dry, new, old, run, action))
 }
 
-fn slot_is_free(cfg: &Config) -> bool {
-    active_goals(cfg) < cfg.max_concurrent
+fn failure_action(
+    cfg: &Config,
+    has_rerun: bool,
+    kicks: usize,
+) -> Result<FailureAction, Box<dyn std::error::Error>> {
+    let mut failure = None;
+    let action = next_failure_action(has_rerun, kicks, cfg.max_kickbacks, || {
+        super::goal_client::slot_open(cfg, &mut failure)
+    });
+    match failure {
+        Some(error) => Err(error.into()),
+        None => Ok(action),
+    }
 }
 
 fn apply_failure_action(
@@ -160,7 +169,7 @@ fn kickback(
         }],
     )?;
     let prompt = kickback_prompt(pr, new, old);
-    let id = start_goal_with(
+    let id = super::goal_client::require_goal_id(super::goal_client::start_goal_with(
         cfg,
         prompt,
         0,
@@ -173,8 +182,7 @@ fn kickback(
                 "revision": pr.head_sha,
             }
         }),
-    )
-    .ok_or("repair task service did not accept the command")?;
+    ))?;
     label(cfg, pr, format!("shepherd:kickback-{kick}"));
     remove_label(cfg, pr, RERUN);
     log(
@@ -211,13 +219,34 @@ pub(super) fn handle_clean(
     github_run_id: Option<u64>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let reviews = pr.count("shepherd:review-");
-    let action = next_clean_action(reviews, cfg.cold_reviews, || {
-        active_goals(cfg) < cfg.max_concurrent
-    });
+    clean_action(cfg, reviews)
+        .and_then(|action| dispatch_clean(cfg, pr, dry, old, github_run_id, reviews, action))
+}
+
+fn dispatch_clean(
+    cfg: &Config,
+    pr: &mut Pr,
+    dry: bool,
+    old: &BTreeSet<String>,
+    github_run_id: Option<u64>,
+    reviews: usize,
+    action: CleanAction,
+) -> Result<(), Box<dyn std::error::Error>> {
     match action {
         CleanAction::Ready => mark_ready(cfg, pr, dry, github_run_id, reviews),
         CleanAction::WaitForSlot => Ok(()),
         CleanAction::Review { round } => start_cold_review(cfg, pr, dry, old, round),
+    }
+}
+
+fn clean_action(cfg: &Config, reviews: usize) -> Result<CleanAction, Box<dyn std::error::Error>> {
+    let mut failure = None;
+    let action = next_clean_action(reviews, cfg.cold_reviews, || {
+        super::goal_client::slot_open(cfg, &mut failure)
+    });
+    match failure {
+        Some(error) => Err(error.into()),
+        None => Ok(action),
     }
 }
 
@@ -274,10 +303,24 @@ fn start_and_persist_review(
     round: usize,
 ) -> Result<Option<String>, Box<dyn std::error::Error>> {
     let prompt = cold_review_prompt(cfg, pr, round, old);
-    let Some(id) = start_goal(cfg, prompt, cfg.cold_turns) else {
+    persist_started_review(
+        cfg,
+        pr.number,
+        round,
+        super::goal_client::start_goal(cfg, prompt, cfg.cold_turns),
+    )
+}
+
+pub(super) fn persist_started_review(
+    cfg: &Config,
+    number: u64,
+    round: usize,
+    started: Result<Option<String>, super::goal_client::DaemonGoalError>,
+) -> Result<Option<String>, Box<dyn std::error::Error>> {
+    let Some(id) = started? else {
         return Ok(None);
     };
-    persist_pending_review(cfg, pr.number, &id, round)?;
+    persist_pending_review(cfg, number, &id, round)?;
     Ok(Some(id))
 }
 
