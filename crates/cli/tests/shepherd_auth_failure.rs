@@ -1,3 +1,4 @@
+#![cfg(feature = "coding")]
 //! `liberado shepherd --once` must fail when the daemon rejects `/api/goals`.
 //!
 //! This file is its own process. `liberado_cli::run` installs a process-global

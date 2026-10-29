@@ -147,20 +147,25 @@ fn for_config_builds_a_factory_when_the_selected_key_is_present() {
 
     let factory =
         ProfileProviderFactory::for_config(&config).expect("a configured key must yield a factory");
-    use liberado_coder_agent::CoderProviderFactory;
+    #[cfg(feature = "coding")]
+    {
+        use liberado_coder_agent::CoderProviderFactory;
 
-    let role = liberado_coder_core::CoderRoleConfig {
-        model: "role-model".to_string(),
-        ..Default::default()
-    };
-    let provider = factory
-        .provider_for("coder", &role)
-        .expect("the same key serves provider_for");
-    assert_eq!(
-        provider.model(),
-        "role-model",
-        "provider_for must apply the coding role's model over the profile default"
-    );
+        let role = liberado_coder_core::CoderRoleConfig {
+            model: "role-model".to_string(),
+            ..Default::default()
+        };
+        let provider = factory
+            .provider_for("coder", &role)
+            .expect("the same key serves provider_for");
+        assert_eq!(
+            provider.model(),
+            "role-model",
+            "provider_for must apply the coding role's model over the profile default"
+        );
+    }
+    #[cfg(not(feature = "coding"))]
+    let _ = factory;
 }
 
 #[test]

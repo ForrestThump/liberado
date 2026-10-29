@@ -59,7 +59,7 @@ const DELTA_REPORT: &str = ".liberado/crap-delta.json";
 const USAGE: &str = "usage: liberado ci [check|crap|crap-linux|ratchet|modules|modules-ratchet|complexity|complexity-ratchet|unwraps|unwraps-ratchet|ready|verify-ready]";
 const VACATED_BIN: &str = "liberado-ci";
 const CI_LOG_FILE: &str = ".liberado/ci.log";
-const EXTRACT_MAX_LINES: usize = liberado_coder_core::FAILURE_EXTRACT_MAX_LINES;
+const EXTRACT_MAX_LINES: usize = liberado_common::failure_excerpt::EXTRACT_MAX_LINES;
 
 /// New-function ceiling. Must match `.cargo-crap.toml` `threshold`.
 /// Existing baseline entries may sit above this score; only functions that
@@ -100,6 +100,8 @@ const LLVM_COV_ARGS: &[&str] = &[
     "--workspace",
     "--exclude",
     "liberado-webui",
+    "--features",
+    "coding",
     "--lcov",
     "--output-path",
     LCOV_FILE,
@@ -219,6 +221,49 @@ fn check(log: &CiLog) -> Result<(), Box<dyn std::error::Error>> {
         ],
     )?;
     run_cmd(log, "cargo", &["test", "--workspace", "--no-fail-fast"])?;
+    run_cmd(
+        log,
+        "cargo",
+        &[
+            "clippy",
+            "--locked",
+            "-p",
+            "liberado-cli",
+            "-p",
+            "liberado-server",
+            "-p",
+            "liberado-bootstrap",
+            "-p",
+            "liberado-dispatch-pack",
+            "--all-targets",
+            "--features",
+            "coding",
+            "--",
+            "-D",
+            "warnings",
+            "-D",
+            "clippy::cognitive_complexity",
+        ],
+    )?;
+    run_cmd(
+        log,
+        "cargo",
+        &[
+            "test",
+            "--locked",
+            "-p",
+            "liberado-cli",
+            "-p",
+            "liberado-server",
+            "-p",
+            "liberado-bootstrap",
+            "-p",
+            "liberado-dispatch-pack",
+            "--features",
+            "coding",
+            "--no-fail-fast",
+        ],
+    )?;
     crate::branch_cleaner_ci::run(log)
 }
 

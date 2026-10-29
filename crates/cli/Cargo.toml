@@ -17,7 +17,13 @@ default = []
 # Tree-sitter unwrap classifier for `liberado ci unwraps` / just unwrap-classification.
 ci-unwraps = ["dep:tree-sitter", "dep:tree-sitter-rust"]
 # Optional heavy surfaces (off the default product graph).
-coder-full = ["liberado-server/coder-full"]
+# `coding` is the single switch for the in-process pack. It propagates through the server.
+coding = [
+    "liberado-server/coding",
+    "dep:liberado-coder-core",
+    "dep:liberado-harness-eval",
+]
+coder-full = ["coding", "liberado-server/coder-full"]
 vector-local = ["liberado-server/vector-local"]
 
 [dependencies]
@@ -26,8 +32,8 @@ liberado-common = { workspace = true }
 liberado-config = { workspace = true }
 liberado-config-loader = { workspace = true }
 liberado-server = { workspace = true }
-liberado-coder-core = { workspace = true }
-liberado-harness-eval = { workspace = true }
+liberado-coder-core = { workspace = true, optional = true }
+liberado-harness-eval = { workspace = true, optional = true }
 liberado-ops = { workspace = true }
 chat-client-contract = { workspace = true }
 tokio = { workspace = true }

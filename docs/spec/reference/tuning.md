@@ -367,6 +367,14 @@ Changing these values does not require a rebuild. The next coding run reads them
 `tuning.toml`. ACP and session-pack entry points do not yet generate a repo map; this toggle is for
 the headless runner used by the current harness comparison.
 
+A daemon built **with** the `coding` feature still fail-fasts on an invalid `[coder]` table:
+startup stops, and the error names the bad setting. A daemon built **without** the feature does
+not parse `[coder]`. Boot succeeds. If any of these are set, it logs one warning that names
+`coding`: a non-empty `[coder]` table, a session profile with `domain = "coding"`, an enabled
+`[[projects]]` row, or `shepherd.review.enabled`. An empty `[coder]` header (comments only, as in
+the example file) does not warn. `liberado coder` and `liberado shepherd` on that binary exit
+non-zero and print `built without the `coding` feature`.
+
 ### Per-dispatch coding write scope
 
 `write_scope` is task data, not a persistent tuning default. A human or dispatcher can put it in a

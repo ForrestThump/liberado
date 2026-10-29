@@ -105,7 +105,7 @@ jobs:
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
 
       - name: PR shepherd self-test
-        run: cargo run --locked -p liberado-cli -- shepherd --self-test
+        run: cargo run --locked -p liberado-cli --features coding -- shepherd --self-test
 
       - name: Format check
         if: matrix.os == 'ubuntu-latest'
@@ -116,6 +116,14 @@ jobs:
 
       - name: Tests (includes architecture and workflow-security rules)
         run: cargo test --locked --workspace --no-fail-fast
+
+      - name: Clippy with the coding feature
+        if: matrix.os == 'ubuntu-latest'
+        run: cargo clippy --locked -p liberado-cli -p liberado-server -p liberado-bootstrap -p liberado-dispatch-pack --all-targets --features coding -- -D warnings -D clippy::cognitive_complexity
+
+      - name: Tests with the coding feature
+        if: matrix.os == 'ubuntu-latest'
+        run: cargo test --locked -p liberado-cli -p liberado-server -p liberado-bootstrap -p liberado-dispatch-pack --features coding --no-fail-fast
 
       - name: Standalone branch cleaner tests
         run: python -m unittest scripts/test_cleanup_merged_branches.py
