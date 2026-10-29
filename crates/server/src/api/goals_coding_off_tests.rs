@@ -39,11 +39,15 @@ impl DomainPackRunner for FinishImmediately {
 }
 
 fn app() -> (Router, Arc<GoalSessionHub>) {
+    app_with(liberado_bootstrap::Config::default())
+}
+
+fn app_with(config: liberado_bootstrap::Config) -> (Router, Arc<GoalSessionHub>) {
     let mut hub = GoalSessionHub::new(GoalSessionStore::new());
     hub.register_pack(Arc::new(LifeOpsDemoRunner));
     hub.register_pack(Arc::new(FinishImmediately));
     let goals = Arc::new(hub);
-    let config = Arc::new(liberado_bootstrap::Config::default());
+    let config = Arc::new(config);
     let (hook_tx, _hook_rx) = tokio::sync::mpsc::unbounded_channel();
     let state = Arc::new(AppState {
         start_time: Instant::now(),
@@ -77,6 +81,7 @@ fn app() -> (Router, Arc<GoalSessionHub>) {
         .route("/api/goals", axum::routing::post(goals_start))
         .route("/api/goals/domains", axum::routing::get(goals_domains))
         .route("/api/goals/{id}/rewind", axum::routing::post(goals_rewind))
+        .route("/api/projects", axum::routing::get(list_projects))
         .with_state(state);
     (app, goals)
 }
@@ -197,4 +202,42 @@ async fn domains_list_omits_coding_when_the_pack_is_not_registered() {
     let body = body_text(response).await;
     assert!(body.contains("life"), "{body}");
     assert!(!body.contains("coding"), "{body}");
+}
+
+#[tokio::test]
+async fn list_projects_returns_enabled_entries_without_the_coding_feature() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let root = std::fs::canonicalize(dir.path()).expect("canonical project root");
+    let mut config = liberado_bootstrap::Config::default();
+    config
+        .topology
+        .projects
+        .push(liberado_config::ProjectConfig {
+            name: "liberado".into(),
+            root: root.clone(),
+            write_class: liberado_common::WriteClass::AgentWritable,
+            enabled: true,
+            preflight: Default::default(),
+        });
+    let (app, _) = app_with(config);
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/api/projects")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = body_text(response).await;
+    let value: serde_json::Value = serde_json::from_str(&body).expect("projects json");
+    let projects = value["projects"].as_array().expect("projects array");
+    assert_eq!(projects.len(), 1, "{body}");
+    assert_eq!(projects[0]["name"], "liberado");
+    assert_eq!(
+        projects[0]["root"].as_str().unwrap(),
+        root.to_string_lossy()
+    );
 }
