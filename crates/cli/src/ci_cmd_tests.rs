@@ -144,7 +144,7 @@ fn relativize_lcov_strips_the_workspace_root() {
         format!("SF:{}\nend_of_record\n", abs.display()),
     )
     .unwrap();
-    relativize_lcov(root).unwrap();
+    relativize_lcov(root, &root.join(LCOV_FILE)).unwrap();
     let text = fs::read_to_string(root.join(LCOV_FILE)).unwrap();
     assert_eq!(text.lines().next(), Some("SF:crates/foo.rs"));
 }

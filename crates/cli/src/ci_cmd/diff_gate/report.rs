@@ -5,7 +5,7 @@
 
 use serde::Serialize;
 
-use super::model::{Class, Judgement, MetricJudgement};
+use super::model::{BaseCrapTrigger, Class, Judgement, MetricJudgement};
 
 pub const REPORT_FILE: &str = ".liberado/diff-gate-report.json";
 
@@ -22,8 +22,17 @@ struct ReportFile {
     body_match_min: f64,
     limits: ReportLimits,
     base_crap: String,
+    base_crap_triggers: Vec<ReportTrigger>,
     functions: Vec<ReportFn>,
     failures: Vec<String>,
+}
+
+#[derive(Serialize)]
+struct ReportTrigger {
+    file: String,
+    function: String,
+    line: u32,
+    crap: f64,
 }
 
 #[derive(Serialize)]
@@ -75,6 +84,7 @@ pub fn render_report(
     limits_crap: f64,
     limits_cyclomatic: f64,
     base_crap: &str,
+    triggers: &[BaseCrapTrigger],
     judgements: &[Judgement],
 ) -> Result<String, Box<dyn std::error::Error>> {
     let report = ReportFile {
@@ -88,6 +98,7 @@ pub fn render_report(
             cyclomatic: limits_cyclomatic,
         },
         base_crap: base_crap.to_string(),
+        base_crap_triggers: triggers.iter().map(report_trigger).collect(),
         functions: judgements.iter().map(report_fn).collect(),
         failures: judgements
             .iter()
@@ -98,6 +109,15 @@ pub fn render_report(
     let mut json = serde_json::to_string_pretty(&report)?;
     json.push('\n');
     Ok(json)
+}
+
+fn report_trigger(trigger: &BaseCrapTrigger) -> ReportTrigger {
+    ReportTrigger {
+        file: trigger.file.clone(),
+        function: trigger.function.clone(),
+        line: trigger.line,
+        crap: trigger.crap,
+    }
 }
 
 fn report_fn(judgement: &Judgement) -> ReportFn {
@@ -197,7 +217,9 @@ pub fn emit_github_annotations(text: &str) {
 #[cfg(test)]
 mod tests {
     use super::{failure_text, render_report};
-    use crate::ci_cmd::diff_gate::model::{Class, Judgement, MetricJudgement, MetricKind};
+    use crate::ci_cmd::diff_gate::model::{
+        BaseCrapTrigger, Class, Judgement, MetricJudgement, MetricKind,
+    };
 
     fn judgement() -> Judgement {
         Judgement {
@@ -236,6 +258,7 @@ mod tests {
             29.9,
             20.0,
             "not_needed",
+            &[],
             &[judgement()],
         )
         .expect("report json");
@@ -243,5 +266,31 @@ mod tests {
         assert!(json.contains("\"class\": \"renamed_from\""));
         assert!(json.contains("\"status\": \"fail\""));
         assert!(json.contains("old_work"));
+        assert!(json.contains("\"base_crap_triggers\": []"));
+    }
+
+    #[test]
+    fn the_machine_report_names_the_base_crap_triggers() {
+        let trigger = BaseCrapTrigger {
+            file: "crates/a.rs".into(),
+            line: 40,
+            function: "legacy_work".into(),
+            crap: 42.5,
+        };
+        let json = render_report(
+            "abc",
+            "origin/main",
+            29.9,
+            20.0,
+            "measuring",
+            &[trigger],
+            &[],
+        )
+        .expect("report json");
+        assert!(json.contains("\"base_crap\": \"measuring\""));
+        assert!(json.contains("\"file\": \"crates/a.rs\""));
+        assert!(json.contains("\"function\": \"legacy_work\""));
+        assert!(json.contains("\"line\": 40"));
+        assert!(json.contains("\"crap\": 42.5"));
     }
 }

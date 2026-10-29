@@ -9,11 +9,11 @@ use std::path::Path;
 use super::CiLog;
 use super::cache::{cache_path, read_or_measure};
 use super::classify::classify;
-use super::decide::{MetricSet, decide, failures};
+use super::decide::{MetricSet, base_crap_triggers, decide, failures};
 use super::git_io::{ResolvedBase, load_diff, resolve_base};
 use super::limits;
 use super::measure::{self, fill_crap};
-use super::model::{Judgement, Limits};
+use super::model::{BaseCrapTrigger, Judgement, Limits};
 use super::report::{self, failure_text, render_report};
 
 pub fn check_complexity(root: &Path, base: Option<&str>) -> Result<(), Box<dyn std::error::Error>> {
@@ -41,42 +41,89 @@ fn execute(
     let diff = load_diff(&log.root, &resolved.merge_base)?;
     let limits = limits::load(&log.root)?;
     if !diff.touches_rust() {
-        return finish(log, &resolved, limits, "not_needed", &[]);
+        return finish(log, &resolved, limits, "not_needed", &[], &[]);
     }
     let head = measure::head_scores(log, metrics)?;
     let paths = diff.measured_base_paths();
     let mut base_scores = measure::base_cyclomatic(log, &resolved.merge_base, &paths)?;
     let classified = classify(&head, &base_scores, &diff);
-    let (judgements, state) = with_base_crap(
+    let passed = with_base_crap(
         log,
-        &resolved.merge_base,
+        &resolved,
         &head,
         &mut base_scores,
         &classified,
         limits,
         metrics,
     )?;
-    finish(log, &resolved, limits, &state, &judgements)
+    finish(
+        log,
+        &resolved,
+        limits,
+        &passed.state,
+        &passed.triggers,
+        &passed.judgements,
+    )
+}
+
+struct BaseCrapPass {
+    judgements: Vec<Judgement>,
+    state: String,
+    triggers: Vec<BaseCrapTrigger>,
 }
 
 fn with_base_crap(
     log: &CiLog,
-    sha: &str,
+    resolved: &ResolvedBase,
     head: &[super::model::ScoredFn],
     base_scores: &mut [super::model::ScoredFn],
     classified: &[super::classify::Classified],
     limits: Limits,
     metrics: MetricSet,
-) -> Result<(Vec<Judgement>, String), Box<dyn std::error::Error>> {
+) -> Result<BaseCrapPass, Box<dyn std::error::Error>> {
     let first = decide(head, base_scores, classified, limits, metrics);
     if !first.needs_base_crap {
-        return Ok((first.judgements, "not_needed".into()));
+        return Ok(BaseCrapPass {
+            judgements: first.judgements,
+            state: "not_needed".into(),
+            triggers: Vec::new(),
+        });
     }
-    let path = cache_path(&log.root, sha);
-    let loaded = read_or_measure(&path, true, || measure::base_crap_json(log, sha))?;
+    let triggers = base_crap_triggers(&first.judgements);
+    let path = cache_path(&log.root, &resolved.merge_base);
+    let loaded = read_or_measure(&path, true, || {
+        log_triggers(log, &triggers);
+        write_report(
+            log,
+            resolved,
+            limits,
+            "measuring",
+            &triggers,
+            &first.judgements,
+        )?;
+        measure::base_crap_json(log, &resolved.merge_base)
+    })?;
     fill_crap(base_scores, loaded.json().unwrap_or(""))?;
     let second = decide(head, base_scores, classified, limits, metrics);
-    Ok((second.judgements, loaded.label().into()))
+    Ok(BaseCrapPass {
+        judgements: second.judgements,
+        state: loaded.label().into(),
+        triggers,
+    })
+}
+
+fn log_triggers(log: &CiLog, triggers: &[BaseCrapTrigger]) {
+    let header = "[diff gate] base CRAP measurement is required for touched legacy functions over the limit:";
+    eprintln!("{header}");
+    let _ = log.writeln(header);
+    for trigger in triggers {
+        let line = format!(
+            "[diff gate] {}:{} {} CRAP {:.3}",
+            trigger.file, trigger.line, trigger.function, trigger.crap
+        );
+        eprintln!("{line}");
+        let _ = log.writeln(&line);
+    }
 }
 
 fn finish(
@@ -84,21 +131,10 @@ fn finish(
     resolved: &ResolvedBase,
     limits: Limits,
     base_crap: &str,
+    triggers: &[BaseCrapTrigger],
     judgements: &[Judgement],
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let json = render_report(
-        &resolved.merge_base,
-        &resolved.base_rev,
-        limits.crap,
-        limits.cyclomatic,
-        base_crap,
-        judgements,
-    )?;
-    let path = log.root.join(report::REPORT_FILE);
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    std::fs::write(path, json)?;
+    write_report(log, resolved, limits, base_crap, triggers, judgements)?;
     if failures(judgements).is_empty() {
         eprintln!("[diff gate] ok: {} changed function(s)", judgements.len());
         return Ok(());
@@ -107,4 +143,29 @@ fn finish(
     report::emit_github_annotations(&text);
     eprintln!("{text}");
     Err(text.into())
+}
+
+fn write_report(
+    log: &CiLog,
+    resolved: &ResolvedBase,
+    limits: Limits,
+    base_crap: &str,
+    triggers: &[BaseCrapTrigger],
+    judgements: &[Judgement],
+) -> Result<(), Box<dyn std::error::Error>> {
+    let json = render_report(
+        &resolved.merge_base,
+        &resolved.base_rev,
+        limits.crap,
+        limits.cyclomatic,
+        base_crap,
+        triggers,
+        judgements,
+    )?;
+    let path = log.root.join(report::REPORT_FILE);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(path, json)?;
+    Ok(())
 }

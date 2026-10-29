@@ -81,6 +81,18 @@ pub struct MetricJudgement {
     pub failed: bool,
 }
 
+/// A touched legacy function whose CRAP is over the limit and has no base score yet.
+///
+/// These rows are why a merge-base coverage run starts. The console and the machine
+/// report list them before that run.
+#[derive(Clone, Debug, PartialEq)]
+pub struct BaseCrapTrigger {
+    pub file: String,
+    pub line: u32,
+    pub function: String,
+    pub crap: f64,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Judgement {
     pub file: String,

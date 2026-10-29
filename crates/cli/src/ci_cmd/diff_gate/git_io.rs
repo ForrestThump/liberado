@@ -2,8 +2,9 @@
 //!
 //! `git diff -M -U0 <merge-base>` compares the working tree with the merge-base, so a local
 //! run includes uncommitted edits. Untracked `.rs` files are marked touched on every line.
-//! The worktree lives at `.liberado/diff-gate-worktree` and is removed on drop. It is a real
-//! git worktree, not a directory junction.
+//! The worktree lives at `.liberado/diff-gate-worktree` and is removed on drop, including when
+//! the caller returns an error. Removal is `git worktree remove --force` and
+//! `git worktree prune`. It is a real git worktree, not a directory junction.
 
 use std::path::{Path, PathBuf};
 
@@ -77,12 +78,16 @@ impl Worktree {
         let path = repo.join(".liberado").join("diff-gate-worktree");
         remove_worktree(repo, &path);
         std::fs::create_dir_all(repo.join(".liberado"))?;
-        let shown = path.to_string_lossy().into_owned();
-        super::git(repo, &["worktree", "add", "--detach", &shown, sha])?;
-        Ok(Self {
+        let tree = Self {
             repo: repo.to_path_buf(),
             path,
-        })
+        };
+        let shown = tree.path.to_string_lossy().into_owned();
+        if let Err(error) = super::git(&tree.repo, &["worktree", "add", "--detach", &shown, sha]) {
+            drop(tree);
+            return Err(error);
+        }
+        Ok(tree)
     }
 
     pub fn path(&self) -> &Path {
@@ -98,9 +103,26 @@ impl Drop for Worktree {
 
 fn remove_worktree(repo: &Path, path: &Path) {
     let shown = path.to_string_lossy().into_owned();
-    let _ = super::git(repo, &["worktree", "remove", "--force", &shown]);
-    let _ = std::fs::remove_dir_all(path);
-    let _ = super::git(repo, &["worktree", "prune"]);
+    let remove_error = git_failure(super::git(repo, &["worktree", "remove", "--force", &shown]));
+    if path.exists() {
+        let _ = super::git(repo, &["worktree", "unlock", &shown]);
+        let _ = super::git(repo, &["worktree", "remove", "--force", "--force", &shown]);
+        let _ = std::fs::remove_dir_all(path);
+    }
+    let _ = super::git(repo, &["worktree", "unlock", &shown]);
+    let prune_error = git_failure(super::git(repo, &["worktree", "prune"]));
+    if path.exists() {
+        eprintln!(
+            "[diff gate] worktree remains at {}: remove={} prune={}",
+            path.display(),
+            remove_error.as_deref().unwrap_or("ok"),
+            prune_error.as_deref().unwrap_or("ok")
+        );
+    }
+}
+
+fn git_failure(result: Result<String, Box<dyn std::error::Error>>) -> Option<String> {
+    result.err().map(|error| error.to_string())
 }
 
 #[cfg(test)]
@@ -265,5 +287,52 @@ fn fresh() {
             assert!(tree.path().join("src/work.rs").is_file());
         }
         assert!(!dir.path().join(".liberado/diff-gate-worktree").exists());
+        assert!(!worktree_registered(dir.path()));
+    }
+
+    #[test]
+    fn the_worktree_is_removed_when_the_caller_returns_an_error() {
+        let dir = init_repo();
+        commit_file(dir.path(), "src/work.rs", BASE_SRC, "base");
+        let sha = git_out(dir.path(), &["rev-parse", "HEAD"]);
+        let path = dir.path().join(".liberado/diff-gate-worktree");
+        let measured = (|| -> Result<(), Box<dyn std::error::Error>> {
+            let tree = Worktree::add(dir.path(), &sha)?;
+            assert!(tree.path().join("src/work.rs").is_file());
+            Err("llvm-cov failed".into())
+        })();
+        assert!(measured.is_err());
+        assert!(!path.exists(), "worktree directory remains after error");
+        assert!(!worktree_registered(dir.path()));
+    }
+
+    #[test]
+    fn a_locked_worktree_is_removed_on_drop() {
+        let dir = init_repo();
+        commit_file(dir.path(), "src/work.rs", BASE_SRC, "base");
+        let sha = git_out(dir.path(), &["rev-parse", "HEAD"]);
+        let path = dir.path().join(".liberado/diff-gate-worktree");
+        {
+            let tree = Worktree::add(dir.path(), &sha).unwrap();
+            let shown = path.to_string_lossy().into_owned();
+            git(dir.path(), &["worktree", "lock", &shown]);
+            assert!(tree.path().exists());
+        }
+        assert!(!path.exists(), "locked worktree directory remains");
+        assert!(!worktree_registered(dir.path()));
+    }
+
+    #[test]
+    fn a_failed_add_does_not_leave_a_worktree() {
+        let dir = init_repo();
+        commit_file(dir.path(), "src/work.rs", BASE_SRC, "base");
+        let error = Worktree::add(dir.path(), "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef");
+        assert!(error.is_err());
+        assert!(!dir.path().join(".liberado/diff-gate-worktree").exists());
+        assert!(!worktree_registered(dir.path()));
+    }
+
+    fn worktree_registered(dir: &Path) -> bool {
+        git_out(dir, &["worktree", "list", "--porcelain"]).contains("diff-gate-worktree")
     }
 }

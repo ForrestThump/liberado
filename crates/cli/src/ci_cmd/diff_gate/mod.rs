@@ -47,8 +47,11 @@
 //! Cyclomatic complexity on the base comes from cargo-crap on the merge-base versions of the
 //! changed, renamed, and deleted files. Coverage-backed CRAP is measured only when a touched
 //! or matched legacy function is over the CRAP limit. The result is cached at
-//! `.liberado/crap-base-<sha>.json`. The same host measures both sides, so Windows and Linux
-//! can both apply the full rule.
+//! `.liberado/crap-base-<sha>.json`. Before that run, the console and the machine report name
+//! each triggering function. The base lcov path is absolute under the HEAD checkout. The
+//! temporary worktree is removed on success and on error. Registry artifacts are seeded into
+//! a sibling coverage target; profraw and workspace binaries are not shared. The same host
+//! measures both sides, so Windows and Linux can both apply the full rule.
 
 use super::{
     CI_LOG_FILE, CRAP_REPORT_ARGS, CURRENT_REPORT, CiLog, LLVM_COV_ARGS, coverage_tools,
@@ -58,6 +61,8 @@ use super::{
 
 mod body;
 mod cache;
+mod dep_seed;
+use dep_seed::{head_llvm_cov_target, scrub_profiles, seed_registry_artifacts};
 mod classify;
 mod decide;
 mod git_io;

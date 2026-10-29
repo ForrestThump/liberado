@@ -5,7 +5,7 @@ authority: normative
 domain: ci
 canonical_for: local-readiness
 open_items: false
-last_verified: 2026-10-28
+last_verified: 2026-10-29
 ---
 
 # Local readiness
@@ -58,6 +58,23 @@ is new.
 cargo-crap. It measures merge-base coverage only when a touched legacy function is over 29.9.
 That report is cached at `.liberado/crap-base-<sha>.json`. GitHub Actions restores the same
 report from the `crap-report-<sha>` cache when a push to `main` saved it, and measures on a miss.
+The CRAP job inherits `contents: read`. It does not grant `actions: write`. `actions/cache`
+uses the runner cache token.
+
+The base lcov file is an absolute path under the HEAD checkout, `.liberado/diff-gate-base.lcov`.
+The merge-base worktree does not contain `.liberado`, so a relative `.liberado/crap.lcov` path
+cannot be created there. The temporary worktree is `.liberado/diff-gate-worktree`. It is removed
+with `git worktree remove --force` and `git worktree prune` when the measurement returns and
+when it returns an error.
+
+Before that coverage run, the console and `.liberado/diff-gate-report.json` name each touched
+legacy function that is over the CRAP limit. Each line has `file:line`, the function name, and
+the current CRAP score. The report field is `base_crap_triggers`.
+
+The base coverage target is `.liberado/diff-gate-cov-target`. It is separate from the HEAD
+llvm-cov target. Registry artifacts are hardlinked into it. Workspace binaries, profraw, and
+profdata are not copied, so the two coverage reports do not mix. A missing HEAD target leaves
+the base target cold. The gate still measures the merge-base.
 `just function-complexity` and the early-lint job run the cyclomatic half. They do not run
 coverage. Both halves write `.liberado/diff-gate-report.json`.
 

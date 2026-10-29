@@ -167,7 +167,7 @@ fn generate_lcov(log: &CiLog) -> Result<(), Box<dyn std::error::Error>> {
     )?;
     std::fs::create_dir_all(log.root.join(".liberado"))?;
     run_cmd(log, "cargo", LLVM_COV_ARGS)?;
-    relativize_lcov(&log.root)
+    relativize_lcov(&log.root, &log.root.join(LCOV_FILE))
 }
 
 pub(super) fn write_crap_json(log: &CiLog, output: &str) -> Result<(), Box<dyn std::error::Error>> {
@@ -180,9 +180,8 @@ pub(super) fn write_crap_json(log: &CiLog, output: &str) -> Result<(), Box<dyn s
 
 /// Strip the workspace root from an LCOV `SF:` path so Ubuntu CI and a Windows
 /// `just ci` compare the same keys (`crates/foo.rs`, not `C:\Users\...\foo.rs`).
-fn relativize_lcov(root: &Path) -> Result<(), Box<dyn std::error::Error>> {
-    let path = root.join(LCOV_FILE);
-    let text = std::fs::read_to_string(&path)?;
+fn relativize_lcov(root: &Path, lcov_file: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    let text = std::fs::read_to_string(lcov_file)?;
     let mut out = String::with_capacity(text.len());
     for line in text.lines() {
         if let Some(file) = line.strip_prefix("SF:") {
@@ -194,7 +193,7 @@ fn relativize_lcov(root: &Path) -> Result<(), Box<dyn std::error::Error>> {
             out.push('\n');
         }
     }
-    std::fs::write(path, out)?;
+    std::fs::write(lcov_file, out)?;
     Ok(())
 }
 

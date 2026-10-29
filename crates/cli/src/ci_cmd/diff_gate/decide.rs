@@ -6,7 +6,8 @@
 
 use super::classify::Classified;
 use super::model::{
-    Judgement, Limits, MetricJudgement, MetricKind, ScoredFn, strictly_worse, within_limit,
+    BaseCrapTrigger, Judgement, Limits, MetricJudgement, MetricKind, ScoredFn, strictly_worse,
+    within_limit,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -71,17 +72,33 @@ pub fn decide(
 }
 
 pub fn needs_measured_base_crap(judgements: &[Judgement]) -> bool {
-    judgements.iter().any(legacy_crap_missing_base)
+    !base_crap_triggers(judgements).is_empty()
 }
 
-fn legacy_crap_missing_base(judgement: &Judgement) -> bool {
-    if !judgement.class.is_legacy() {
-        return false;
+pub fn base_crap_triggers(judgements: &[Judgement]) -> Vec<BaseCrapTrigger> {
+    let mut found = Vec::new();
+    for judgement in judgements {
+        if let Some(crap) = trigger_crap(judgement) {
+            found.push(BaseCrapTrigger {
+                file: judgement.file.clone(),
+                line: judgement.line,
+                function: judgement.function.clone(),
+                crap,
+            });
+        }
     }
-    judgement.metrics.iter().any(|metric| {
-        metric.kind == MetricKind::Crap
+    found
+}
+
+fn trigger_crap(judgement: &Judgement) -> Option<f64> {
+    if !judgement.class.is_legacy() {
+        return None;
+    }
+    judgement.metrics.iter().find_map(|metric| {
+        let over = metric.kind == MetricKind::Crap
             && metric.base.is_none()
-            && !within_limit(metric.current, metric.limit, metric.kind.epsilon())
+            && !within_limit(metric.current, metric.limit, metric.kind.epsilon());
+        over.then_some(metric.current)
     })
 }
 
@@ -115,7 +132,7 @@ pub fn failures(judgements: &[Judgement]) -> Vec<&Judgement> {
 
 #[cfg(test)]
 mod tests {
-    use super::{MetricSet, decide};
+    use super::{MetricSet, base_crap_triggers, decide};
     use crate::ci_cmd::diff_gate::classify::Classified;
     use crate::ci_cmd::diff_gate::model::{Class, Limits, MetricKind, ScoredFn};
 
@@ -229,6 +246,12 @@ mod tests {
             MetricSet::Both,
         );
         assert!(outcome.needs_base_crap);
+        let triggers = base_crap_triggers(&outcome.judgements);
+        assert_eq!(triggers.len(), 1);
+        assert_eq!(triggers[0].file, "a.rs");
+        assert_eq!(triggers[0].function, "work");
+        assert_eq!(triggers[0].line, 10);
+        assert_eq!(triggers[0].crap, 40.0);
         let present = classified(Class::Legacy, Some(0));
         let held = decide(
             std::slice::from_ref(&over),
@@ -247,6 +270,30 @@ mod tests {
             MetricSet::Both,
         );
         assert!(!quiet.needs_base_crap);
+        assert!(base_crap_triggers(&quiet.judgements).is_empty());
+        let fresh = decide(
+            std::slice::from_ref(&over),
+            &[],
+            &[classified(Class::New, None)],
+            limits(),
+            MetricSet::Both,
+        );
+        assert!(!fresh.needs_base_crap);
+        assert!(base_crap_triggers(&fresh.judgements).is_empty());
+        let renamed = decide(
+            std::slice::from_ref(&over),
+            &[],
+            &[classified(
+                Class::RenamedFrom {
+                    file: "old.rs".into(),
+                    function: "old".into(),
+                },
+                None,
+            )],
+            limits(),
+            MetricSet::Both,
+        );
+        assert_eq!(base_crap_triggers(&renamed.judgements).len(), 1);
     }
 
     #[test]
