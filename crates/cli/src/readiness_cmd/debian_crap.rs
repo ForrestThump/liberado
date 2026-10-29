@@ -43,6 +43,7 @@ fn run_from_windows(root: &Path) -> Result<(), Box<dyn std::error::Error>> {
         &context.layout.driver_target,
         &context.layout.coverage_target,
         &context.layout.temp_dir,
+        &context.base,
     )
 }
 
@@ -52,6 +53,7 @@ struct WindowsRunContext {
     head: String,
     linux_bundle: String,
     layout: CacheLayout,
+    base: String,
 }
 
 fn windows_run_context(root: &Path) -> Result<WindowsRunContext, Box<dyn std::error::Error>> {
@@ -59,6 +61,7 @@ fn windows_run_context(root: &Path) -> Result<WindowsRunContext, Box<dyn std::er
         std::env::var("LIBERADO_DEBIAN_WSL_DISTRO").unwrap_or_else(|_| DEFAULT_DISTRO.into());
     let account = wsl_account(&distro)?;
     let head = super::git_text(root, &["rev-parse", "HEAD"])?;
+    let base = crate::ci_cmd::diff_gate::merge_base_sha(root, None)?;
     let bundle = create_bundle(root)?;
     let linux_bundle = wsl_path(&bundle, &distro)?;
     let cache_key = cache_key(root)?;
@@ -69,6 +72,7 @@ fn windows_run_context(root: &Path) -> Result<WindowsRunContext, Box<dyn std::er
         head,
         linux_bundle,
         layout,
+        base,
     })
 }
 
@@ -230,6 +234,7 @@ fn run_driver(
     driver_target: &str,
     coverage_target: &str,
     temp_dir: &str,
+    base: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let path_env = format!("PATH={}", cargo_path(&account.home));
     let coverage_env = format!("CARGO_TARGET_DIR={coverage_target}");
@@ -247,6 +252,8 @@ fn run_driver(
             &executable,
             "ci",
             "crap",
+            "--base",
+            base,
         ],
     )?;
     Ok(())

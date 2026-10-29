@@ -5,7 +5,7 @@ authority: normative
 domain: ci
 canonical_for: local-readiness
 open_items: false
-last_verified: 2026-09-18
+last_verified: 2026-10-28
 ---
 
 # Local readiness
@@ -13,8 +13,8 @@ last_verified: 2026-09-18
 `just push` is the canonical ship command on Windows and Debian. It runs full local CI, then
 `just ready`, verifies the final receipt, and pushes. `just ready` requires a full-CI receipt for
 the same commit and tree. It checks formatting, locked metadata, workspace Clippy, changed-package
-tests, architecture and workflow rules, module health, host-stable per-function complexity,
-documentation contracts, and the exact Linux CRAP gate. Success writes `.liberado/ready.json`.
+tests, architecture and workflow rules, module health, the cyclomatic diff gate,
+documentation contracts, and the exact Linux CRAP diff gate. Success writes `.liberado/ready.json`.
 
 Full CI writes `.liberado/ci-ready.json`. The exact Linux CRAP check writes
 `.liberado/crap-linux-ready.json`. The final receipt accepts both results only when all three
@@ -33,74 +33,55 @@ They compare `HEAD` with its merge base on `origin/main`; an isolated repository
 `HEAD^`. A contract-bearing source change must update the document named by `docs-audit.toml` or
 carry a narrow, reviewed waiver.
 
-Coverage-sensitive CRAP remains a Debian authority and is part of every final readiness run.
+CRAP and cyclomatic complexity share one diff gate. The gate scores a function only when that
+function's line span intersects a line `git diff` added or modified since the merge-base. The
+base defaults to `origin/main`. `--base <rev>` overrides it. A push to `main` uses the first
+parent. Untouched functions are not scored. There is no committed per-function baseline and no
+waiver.
+
+A new function must meet both limits: CRAP at or under 29.9 (`.cargo-crap.toml` `threshold`) and
+cyclomatic complexity at or under 20 (`code-metrics/function-complexity.toml`
+`new_function_ceiling`). A function that already exists on the merge-base may stay over a limit.
+If it is over a limit after the change, that score must not be strictly greater than the score
+measured on the merge-base. CRAP and cyclomatic are compared separately. A CRAP rise counts when
+the new score exceeds the base by more than 0.001. A cyclomatic rise counts when the new score
+exceeds the base by more than 0.01. Scores at or under the limit pass.
+
+A rename or a move is the same function. The gate pairs it with the merge-base function that no
+longer exists at its old identity: first by the same qualified name, then by a normalized body
+similarity of at least 0.8. The pair is a touched legacy function, and its cap is the matched
+base score. A copy of an over-limit function, while the original still exists, is a new function
+and must meet the limits. A split keeps the original identity as legacy. Each extracted function
+is new.
+
+`just ci` runs the CRAP diff gate on every host. It measures HEAD with cargo-llvm-cov and
+cargo-crap. It measures merge-base coverage only when a touched legacy function is over 29.9.
+That report is cached at `.liberado/crap-base-<sha>.json`. GitHub Actions restores the same
+report from the `crap-report-<sha>` cache when a push to `main` saved it, and measures on a miss.
+`just function-complexity` and the early-lint job run the cyclomatic half. They do not run
+coverage. Both halves write `.liberado/diff-gate-report.json`.
+
+`just ready` runs the cyclomatic diff gate, then the exact Linux CRAP diff gate.
 `just crap-linux` remains available for a focused check. It runs natively on Debian/Linux. On
 Windows it maps the checkout into the Debian WSL
 distribution, bundles the clean committed `HEAD` into a managed Linux-native workspace, and runs
-the same Rust CLI command there. The native workspace prevents Windows worktree metadata and
-coverage objects from contaminating Linux tests or reports. Driver and coverage artifacts use
-separate Linux-only target directories under the selected user's cache.
+`liberado ci crap --base <merge-base-sha>` there. The native workspace prevents Windows worktree
+metadata and coverage objects from contaminating Linux tests or reports. Driver and coverage
+artifacts use separate Linux-only target directories under the selected user's cache.
 The default distribution name is `Debian`; set `LIBERADO_DEBIAN_WSL_DISTRO` when the installed
 Debian-compatible distribution uses another name. The runner selects the first non-root login so
 permission-sensitive tests retain their meaning; set `LIBERADO_DEBIAN_WSL_USER` to choose another
 login. Windows checkout paths are changed to forward-slash form before `wslpath` maps the bundle,
 so a worktree such as `C:\tmp\review` keeps each path component intact.
 
-On Linux, `just ci` also runs and ratchets CRAP directly. The write adds passing new functions and
-saves improvements. If an existing function has worse CRAP or cyclomatic complexity, the write
-keeps its old complete entry. Thus, an ignored score increase below the CRAP floor cannot raise the
-baseline. A regression that the check rejects cannot write. On other hosts, `just ci` defers CRAP
-to final readiness. This avoids treating host-sensitive coverage as a proxy for the authoritative
-Linux result and avoids running the coverage suite twice before the WSL check.
-
-The same Linux-only write applies to `code-metrics/module-health-baseline.json` and
-`code-metrics/unwrap-classification-baseline.json`. Every host still *compares* them during `just ci`. Only
+On every host, `just ci` compares `code-metrics/module-health-baseline.json` and
+`code-metrics/unwrap-classification-baseline.json`. Only
 Linux `just ci` rewrites them. A Windows rewrite dirties the tree, and `just ready` then cannot
 run Debian CRAP, which validates a clean committed `HEAD`. GitHub only reads both files. To record
 a new best off Linux, run `just module-health-ratchet` or `just unwrap-ratchet` on purpose and
-inspect the diff before you commit it. The Linux write uses the same compile-time
-`cfg!(target_os = "linux")` gate as host CRAP, so `run_quality_ratchets` does not grow a
-runtime branch.
-
-The host-stable function ratchet is configured in `code-metrics/function-complexity.toml` and committed in
-`code-metrics/function-complexity-baseline.json`. Existing functions may not gain cyclomatic complexity. New
-functions must stay under the configured ceiling. A persistent exception must name one exact file
-and function and include an explicit ceiling, reason, and review date. The check fails if its
-generated report or committed baseline cannot be read and decoded.
-
-The cross-provider fallback feature carries three narrow function-complexity waivers — one per call
-site that gained an irreducible +1 cyclomatic branch for the fallback decision:
-`Config::validate_providers` (two inline error checks: self-reference guard + undeclared-name guard),
-`OpenAiCompatibleProvider::complete` (the single `if let Some(fb) = self.fallback_for_status(status)` branch),
-and `OpenAiCompatibleProvider::complete_stream` (the same shape on the streaming path). Each waiver
-carries a hard ceiling and review date; any further growth in these functions is not covered and must be
-split, not waived. The `Config::validate_providers` waiver is for the inline shape specifically — a
-prior split attempt regressed the metrics more than the inline because a new helper function adds to the
-`functions` count and its own cyclomatic.
-
-The mechanical-jobs feature (ADR-0020) carries two narrow function-complexity waivers — one
-per call site that gained an irreducible +1 cyclomatic branch for the new dispatch shape.
-`build_event` on `crates/cron/src/lib.rs`: the new
-`if let Some(job) = &schedule.job { insert_job(&mut map, job); }` branch — the body is the
-dedicated `insert_job` helper, so the inline is the ratchet-friendly shape. `Daemon::react` on
-`crates/daemon/src/react.rs`: the new
-`if let Some(outcome) = self.handle_mechanical(event) { return outcome; }` early-return mirrors
-the existing `handle_proposal_event` early-return directly above it — the handler itself is a
-sibling method, so the inline shape matches the function's existing pattern. Both ceilings sit
-at 21 (above the new-function ceiling of 20, per the same rule as the cross-provider fallback
-waivers). The four per-job-kind `if`/`&&` checks (job-kind allowlist, `habit-ping` requires
-`habit_text`, `inbox-if-present` requires `goal`) were extracted into a module-scope
-`validate_one_schedule` free function, which keeps `Config::validate_schedules` at its
-cyclomatic baseline (4) and sits at cyclomatic 8 itself — under the new-function ceiling (20)
-and the per-function CRAP ratchet's 10-point floor at full coverage. Each waiver carries a hard
-ceiling and review date; any further growth in these functions is not covered and must be split,
-not waived.
-
-The coverage-sensitive CRAP ceiling is 29.9. New functions must remain below 30. Existing
-functions may sit above 30; the per-function Linux baseline prevents those scores from rising.
-cargo-crap `--fail-above` is not applied to the whole report, because that would fail the
-known tail. `liberado ci crap` applies the ceiling only to entries that cargo-crap's
-move-aware baseline matcher classifies as new. This preserves distinct same-name functions.
+inspect the diff before you commit it. The Linux write uses
+`cfg!(target_os = "linux")` inside `run_quality_ratchets`. The CRAP diff gate is not behind that
+compile-time gate. It runs on every host.
 
 The unwraps classifier and ratchet are configured in `code-metrics/unwrap-classification.toml` and committed
 in `code-metrics/unwrap-classification-baseline.json`. The AST classifier walks production `.unwrap()` and

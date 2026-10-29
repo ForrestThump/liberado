@@ -109,31 +109,34 @@ The document rewrite (this file, `roadmap.md`, the root README strategy, and the
 
 **Approved by Forrest (2026-10-25).** If a pull request touches a function that is already over a limit, that function's score must not get worse than its score on `main`. `main`'s score is computed on the fly, or cached as a CI artifact. It is never stored in git. The function does not have to be fixed to get under the limit. New functions must meet the limits in full.
 
-**Proposed design, not yet approved.** Gates check only changed code. No per-function baseline file is committed.
+**Shipped for CRAP and cyclomatic complexity.** Those two gates use the diff gate. There is no committed per-function baseline and no complexity waiver. A function the pull request did not touch is not scored. A touched legacy function over a limit must not be strictly worse than the score measured on the merge-base. The CRAP report is cached at `.liberado/crap-base-<sha>.json`, and GitHub restores `crap-report-<sha>` when a push to `main` saved it. A rename or a move that holds the score is touched legacy. A copy, while the original still exists, is new. A split keeps the original as legacy; the extracted pieces are new. Module health and unwrap classification are unchanged. A coverage floor was not shipped.
+
+**Original proposal, kept as the record.** The CRAP and cyclomatic parts shipped with one change: a rename or a move that does not raise the score passes. Treating every rename as a new function would punish a move of an over-limit function. A copy, while the original still exists, is still new.
 
 - CI finds the merge-base with `origin/main` and gets changed line ranges from `git diff -U0`.
-- It runs the usual coverage and complexity analysis, then applies the CRAP, complexity, and module-health limits to every function or module whose span overlaps a changed line. A touched function that is already over a limit follows the approved rule above. A new function must meet the limits in full.
-- No baseline JSON is committed. A rename, move, or split counts as changed lines, so it is checked. That closes the rename-to-dodge-the-matcher loophole.
-- A whole-repo coverage floor catches deleted tests.
+- It runs coverage and complexity analysis, then applies the CRAP and cyclomatic limits to every function whose span overlaps a changed line. Module health is not on this gate.
+- No CRAP or cyclomatic baseline JSON is committed. A rename or a move is paired with the merge-base function that disappeared. A split leaves the original as legacy and treats the extracted pieces as new.
+- A whole-repo coverage floor is still only a proposal.
 
-Done when:
+Done when, for the shipped function gate:
 
-- A renamed over-limit function fails the gate.
-- A typical feature PR has no metrics-JSON diff.
-- The thresholds are unchanged.
+- A typical feature PR has no CRAP or cyclomatic metrics-JSON diff.
+- The thresholds are unchanged: CRAP 29.9 and cyclomatic 20.
 - Touching one line of an over-limit legacy function passes if its score did not get worse, and fails if it did.
+- A renamed over-limit function fails only when its score rises, or when the original still exists (a copy). A pure rename that holds the score passes.
+
+Still open:
+
+- A whole-repo coverage floor.
+- The same "must not get worse than `main`" rule for module health.
 
 Running the Windows test job and the mutant job nightly, instead of on every pull request, is an option. It is not a decision.
 
-**Conflicts with today's gates.** The legacy-code rule is approved. The rest of this design is not, and it does not match the tools as they run now.
+**Still open after the CRAP and cyclomatic diff gate.** Module health, a coverage floor, and the nightly mutant job are not part of that gate.
 
-- The approved rule matches today's ratchet where an existing function may stay over the ceiling and fails only when its score rises. It is stricter than CRAP (`liberado ci crap`, cargo-crap 0.4.3) where a rise counts only when the current score is at least 10. A worsening below 10 fails the approved rule and passes today's gate. A new function still fails above 29.9. Complexity (`liberado ci complexity`, `code-metrics/function-complexity.toml`) fails a new function above 20, and fails an existing function only when cyclomatic complexity rises past its baseline or its reviewed waiver. Module health (`liberado ci modules`, `code-metrics/module-health.toml`) is four file metrics (`ploc`, `lloc`, `functions`, `cyclomatic`) with a review ceiling, a higher new-file ceiling, and file waivers. The approved rule is about a function's score. A module-health file has no function score, so a touched file already over its review boundary has no decided rule yet.
-- The still-proposed done test "a renamed over-limit function fails the gate" is stricter than the approved rule when the rename does not raise the score and the gate can pair that function with its copy on `main`. Treating the rename as a new function makes an over-limit result fail, which matches "new functions must meet the limits in full." Which pairing that test uses is still part of the proposal.
-- The current reports have no function span. A cargo-crap entry is `file`, `function`, and one start `line`. The complexity compare ignores that line and pairs functions by file, name, and occurrence order. Module health is keyed by file path and has no function span. `git diff -U0` overlap cannot be computed from those reports. A changed line inside a function, below its start line, does not select that function today.
-- Coverage-backed CRAP runs on Ubuntu only. The GitHub job is `ubuntu-latest`. Windows `just ci` applies the new-function ceiling and does not run the per-function ratchet. `just ready` runs that ratchet through Debian WSL. Windows coverage numbers are not a stand-in. The CRAP, module-health, and early-lint checkouts do not set `fetch-depth: 0`. The doc-links job does. A depth-1 checkout cannot compute `git merge-base origin/main`.
-- The approved rule needs `main`'s score computed on the fly, or cached as a CI artifact, and never stored in git. Today that score is the committed baseline. Linux `just ci` rewrites `code-metrics/crap-baseline.json` and `code-metrics/module-health-baseline.json` and may amend that rewrite onto HEAD. GitHub only reads those files. Computing `main` fresh runs llvm-cov a second time. A CI artifact of `main`'s report is not what the jobs upload now: `crap-current-ubuntu` and `module-health-current-ubuntu` are the pull request's report. A laptop running `just ci` has no such artifact.
-- There is no coverage-percentage gate today. llvm-cov line coverage stays flat when another test still covers the deleted test's lines, so a floor does not catch every deleted test. Mutant testing is not a CI job. `code-metrics/mutants-ledger.json` is an append-only campaign ledger, not a function-span gate. The nightly mutant job remains an option. This design does not replace it.
-- "No baseline JSON" covers the CRAP, complexity, and module-health baselines. It does not cover `code-metrics/unwrap-classification-baseline.json`, which classifies unwrap sites and has no function span, or the mutants ledger. Clippy's `-D clippy::cognitive_complexity` deny stays a whole-crate check. This design does not narrow it to changed lines.
+- Module health (`liberado ci modules`, `code-metrics/module-health.toml`) is still four file metrics with a committed baseline, a review ceiling, a higher new-file ceiling, and file waivers. A module-health file has no function score. A touched file already over its review boundary still has no "must not get worse than `main`" rule of the kind the function gate uses. Linux `just ci` may still rewrite `code-metrics/module-health-baseline.json`. GitHub only reads it.
+- A coverage floor was not shipped. llvm-cov line coverage stays flat when another test still covers the deleted test's lines, so a floor does not catch every deleted test. Mutant testing is not a CI job. `code-metrics/mutants-ledger.json` is an append-only campaign ledger. The nightly mutant job remains an option.
+- Unwrap classification still uses `code-metrics/unwrap-classification-baseline.json`. Clippy's `-D clippy::cognitive_complexity` deny stays a whole-crate check.
 
 ### Order 3 — A1, agent registry
 

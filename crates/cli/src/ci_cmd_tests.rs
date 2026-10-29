@@ -1,32 +1,13 @@
 //! Split from `ci_cmd.rs` for module-health boundaries.
 
-use super::new_function_ceiling::compare_args;
 use super::{
-    BASELINE_FILE, CI_LOG_FILE, CRAP_CEILING, CRAP_CEILING_GH, CRAP_CEILING_HINT,
-    CRAP_COMPARE_SUMMARY, CRAP_EMPTY_BASELINE, CRAP_HOST_CEILING_ONLY, CRAP_REGRESSION_GH,
-    CRAP_REGRESSION_HINT, CRAP_REGRESSION_MIN, CRAP_REPORT_ARGS, CRAP_REPORT_THRESHOLD,
-    CURRENT_REPORT, CiLog, EXTRACT_MAX_LINES, LCOV_FILE, LLVM_COV_ARGS, announce_compare,
-    baseline_has_entries, compare_banners, compare_to_baseline, crap_failure_hint,
-    emit_crap_failure, exe_lives_in_cargo_target, extract_ci_failures,
-    keep_worse_existing_crap_entries, ratchet_crap_baseline, relativize_json_file, relativize_lcov,
-    repo_relative_source_path, repository_root, run_cmd, uses_per_function_ratchet,
-    write_after_success,
+    CI_LOG_FILE, CRAP_REPORT_ARGS, CRAP_REPORT_THRESHOLD, CiLog, EXTRACT_MAX_LINES, LCOV_FILE,
+    LLVM_COV_ARGS, exe_lives_in_cargo_target, extract_ci_failures, relativize_json_file,
+    relativize_lcov, repo_relative_source_path, repository_root, run_cmd,
 };
 use std::fs;
 use std::path::Path;
 use tempfile::tempdir;
-
-fn crap_report(entries: serde_json::Value) -> serde_json::Value {
-    serde_json::json!({"version": "0.4.3", "entries": entries})
-}
-
-fn crap_entry(crap: f64, cyclomatic: f64, coverage: f64) -> serde_json::Value {
-    serde_json::json!({
-        "file": "crates/demo/src/lib.rs", "function": "demo", "line": 10,
-        "cyclomatic": cyclomatic, "coverage": coverage, "crap": crap,
-        "crate": "demo"
-    })
-}
 
 #[test]
 fn finds_the_workspace_from_the_checkout_root() {
@@ -54,19 +35,6 @@ fn run_reports_a_missing_program() {
     assert!(
         logged.contains("definitely-not-a-real-program-xyz"),
         "{logged}"
-    );
-}
-
-/// A baseline compare of an empty workspace cannot succeed: either the cargo-crap probe
-/// fails (tool absent) or the comparer has no usable coverage input. A `compare_to_baseline`
-/// body replaced by `Ok(())` (the surviving mutant) reports success from thin air.
-#[test]
-fn compare_to_baseline_never_succeeds_on_an_empty_workspace() {
-    let temp = tempdir().unwrap();
-    let log = CiLog::create(temp.path()).unwrap();
-    assert!(
-        compare_to_baseline(&log).is_err(),
-        "comparing an empty workspace must be an error"
     );
 }
 
@@ -151,15 +119,6 @@ fn extract_ci_failures_strips_color_codes_before_matching() {
     let colored = "\u{1b}[31merror[E0425]\u{1b}[0m: missing\n";
     let extracted = extract_ci_failures(colored);
     assert!(extracted.contains("error[E0425]"), "{extracted}");
-}
-
-#[test]
-fn announce_compare_records_the_empty_baseline_banner() {
-    let temp = tempdir().unwrap();
-    let log = CiLog::create(temp.path()).unwrap();
-    assert!(!announce_compare(&log).unwrap());
-    let text = std::fs::read_to_string(&log.path).unwrap();
-    assert!(text.contains("no entries yet"), "{text}");
 }
 
 #[test]
@@ -270,55 +229,6 @@ fn local_ci_wires_the_base_aware_docs_impact_gate() {
 }
 
 #[test]
-fn regression_hint_tells_an_agent_not_to_raise_the_baseline() {
-    assert!(CRAP_REGRESSION_HINT.contains("per-function"));
-    assert!(CRAP_REGRESSION_HINT.contains("just ci"));
-    assert!(CRAP_REGRESSION_HINT.contains("below 10"));
-    assert!(CRAP_REGRESSION_HINT.contains("Do not raise the baseline"));
-    assert!(CRAP_REGRESSION_GH.contains("below 10"));
-    assert!(CRAP_COMPARE_SUMMARY.contains("below 10"));
-    assert!(CRAP_CEILING_HINT.contains(CRAP_CEILING));
-    assert!(CRAP_REGRESSION_GH.contains("Ubuntu"));
-    assert!(CRAP_CEILING_GH.contains(CRAP_CEILING));
-    assert!(CRAP_HOST_CEILING_ONLY.contains("ceiling only"));
-    assert_eq!(crap_failure_hint(true), CRAP_REGRESSION_HINT);
-    assert_eq!(crap_failure_hint(false), CRAP_CEILING_HINT);
-    let error = emit_crap_failure(true, "cargo crap failed".into()).to_string();
-    assert!(error.contains("cargo crap failed"), "{error}");
-    assert!(error.contains("Do not raise the baseline"), "{error}");
-}
-
-#[test]
-fn compare_args_apply_fail_above_only_when_the_baseline_is_empty() {
-    let ceiling = compare_args(false, true);
-    assert!(ceiling.contains(&"--fail-above"));
-    assert!(ceiling.contains(&"--threshold"));
-    assert!(ceiling.contains(&CRAP_CEILING));
-    assert!(!ceiling.contains(&"--fail-regression"));
-    assert!(
-        !ceiling.contains(&"--min"),
-        "ceiling-only must not hide low scores from a later reader of the argv"
-    );
-    let ratchet = compare_args(true, false);
-    assert!(
-        !ratchet.contains(&"--fail-above"),
-        "a filled baseline has entries above the new-function ceiling; --fail-above would fail them"
-    );
-    assert!(ratchet.contains(&"--fail-regression"));
-    assert!(ratchet.contains(&"--baseline"));
-    assert!(ratchet.contains(&"--format"));
-    assert!(ratchet.contains(&"--output"));
-    assert!(ratchet.contains(&super::DELTA_REPORT));
-    assert!(ratchet.contains(&"--min"));
-    assert!(ratchet.contains(&CRAP_REGRESSION_MIN));
-
-    let host_ceiling = compare_args(false, false);
-    assert!(host_ceiling.contains(&"--baseline"));
-    assert!(host_ceiling.contains(&super::DELTA_REPORT));
-    assert!(!host_ceiling.contains(&"--fail-regression"));
-}
-
-#[test]
 fn report_generation_defers_policy_to_the_explicit_compare() {
     assert!(
         CRAP_REPORT_THRESHOLD.parse::<f64>().unwrap() > 1e100,
@@ -337,167 +247,27 @@ fn report_generation_defers_policy_to_the_explicit_compare() {
     assert_eq!(CRAP_REPORT_ARGS.last(), Some(&"--output"));
 }
 
+/// The toml names the new-function CRAP limit. The diff gate reads it. `fail-above`
+/// stays off so a bare `cargo crap` does not fail functions the diff did not touch.
 #[test]
-fn regression_compare_drops_current_scores_below_ten() {
-    assert_eq!(CRAP_REGRESSION_MIN, "10");
-    let ratchet = compare_args(true, false);
-    let min_at = ratchet
-        .iter()
-        .position(|&flag| flag == "--min")
-        .expect("--min is part of the ratchet argv");
-    assert_eq!(ratchet.get(min_at + 1), Some(&CRAP_REGRESSION_MIN));
-    assert!(
-        ratchet.contains(&"--fail-regression"),
-        "the floor only applies when the per-function detector runs"
-    );
-}
-
-#[test]
-fn sub_min_crap_increase_is_not_saved() {
-    let old_entry = crap_entry(4.016, 4.0, 99.0);
-    let old = crap_report(serde_json::json!([old_entry.clone()]));
-    let mut current = crap_report(serde_json::json!([crap_entry(4.128, 4.0, 98.0)]));
-
-    keep_worse_existing_crap_entries(&old, &mut current).unwrap();
-
-    assert_eq!(current["entries"][0], old_entry);
-}
-
-#[test]
-fn crap_improvement_and_passing_new_function_are_saved() {
-    let old = crap_report(serde_json::json!([crap_entry(12.0, 4.0, 80.0)]));
-    let improved = crap_entry(9.0, 3.0, 90.0);
-    let mut new_entry = crap_entry(2.0, 2.0, 100.0);
-    new_entry["function"] = "new_function".into();
-    let mut current = crap_report(serde_json::json!([improved.clone(), new_entry.clone()]));
-
-    keep_worse_existing_crap_entries(&old, &mut current).unwrap();
-
-    assert_eq!(current["entries"], serde_json::json!([improved, new_entry]));
-}
-
-#[test]
-fn crap_ratchet_writes_the_best_complete_report() {
-    let temp = tempdir().unwrap();
-    let root = temp.path();
-    fs::create_dir(root.join(".liberado")).unwrap();
-    let old_entry = crap_entry(4.016, 4.0, 99.0);
-    let mut new_entry = crap_entry(2.0, 2.0, 100.0);
-    new_entry["function"] = "new_function".into();
-    let old = crap_report(serde_json::json!([old_entry.clone()]));
-    let current = crap_report(serde_json::json!([
-        crap_entry(4.128, 4.0, 98.0),
-        new_entry.clone()
-    ]));
-    fs::write(
-        {
-            fs::create_dir_all(root.join("code-metrics")).unwrap();
-            root.join(BASELINE_FILE)
-        },
-        serde_json::to_vec_pretty(&old).unwrap(),
-    )
-    .unwrap();
-    fs::write(
-        root.join(CURRENT_REPORT),
-        serde_json::to_vec_pretty(&current).unwrap(),
-    )
-    .unwrap();
-
-    ratchet_crap_baseline(root).unwrap();
-
-    let saved: serde_json::Value =
-        serde_json::from_slice(&fs::read(root.join(BASELINE_FILE)).unwrap()).unwrap();
-    assert_eq!(saved["entries"], serde_json::json!([old_entry, new_entry]));
-    assert!(
-        fs::read_to_string(root.join(BASELINE_FILE))
-            .unwrap()
-            .ends_with('\n')
-    );
-}
-
-#[test]
-fn above_min_regression_failure_does_not_write() {
-    let mut wrote = false;
-    let check = Err::<(), Box<dyn std::error::Error>>("CRAP 12 -> 13 regression".into());
-
-    let error = write_after_success(check, || {
-        wrote = true;
-        Ok(())
-    })
-    .unwrap_err();
-
-    assert!(error.to_string().contains("12 -> 13"));
-    assert!(!wrote, "a failed real-regression check must not write");
-}
-
-/// The toml names the new-function ceiling. `fail-above` stays off there because
-/// existing baseline entries sit above 30; Liberado applies the ceiling itself.
-#[test]
-fn cargo_crap_toml_threshold_matches_the_ci_ceiling() {
+fn cargo_crap_toml_threshold_matches_the_diff_gate_limit() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .and_then(Path::parent)
         .expect("crate is crates/cli");
     let toml = std::fs::read_to_string(root.join(".cargo-crap.toml")).expect("toml");
-    let expected = format!("threshold = {CRAP_CEILING}");
     assert!(
-        toml.lines().any(|line| line.trim() == expected),
-        ".cargo-crap.toml must set {expected}; got:\n{toml}"
+        toml.lines().any(|line| line.trim() == "threshold = 29.9"),
+        ".cargo-crap.toml must set threshold = 29.9; got:\n{toml}"
     );
     assert!(
         !toml
             .lines()
             .any(|line| line.trim_start().starts_with("min")),
-        "min in .cargo-crap.toml would also filter baseline writes; got:\n{toml}"
+        "min in .cargo-crap.toml is not used by the diff gate; got:\n{toml}"
     );
     assert!(
         toml.lines().any(|line| line.trim() == "fail-above = false"),
-        "fail-above must stay off: existing functions sit above the new-function ceiling; got:\n{toml}"
+        "fail-above must stay off; the diff gate owns pass/fail; got:\n{toml}"
     );
-}
-
-#[test]
-fn per_function_ratchet_runs_only_on_linux_with_a_filled_baseline() {
-    assert!(!uses_per_function_ratchet(false));
-    assert_eq!(
-        uses_per_function_ratchet(true),
-        cfg!(target_os = "linux"),
-        "a filled baseline still does not run --fail-regression off Linux"
-    );
-    let args = compare_args(uses_per_function_ratchet(true), false);
-    assert_eq!(
-        args.contains(&"--fail-regression"),
-        cfg!(target_os = "linux")
-    );
-}
-
-#[test]
-fn compare_banners_name_the_host_rule() {
-    let linux_filled = compare_banners(true, true);
-    assert_eq!(linux_filled, vec![CRAP_COMPARE_SUMMARY]);
-    let windows_filled = compare_banners(true, false);
-    assert_eq!(
-        windows_filled,
-        vec![CRAP_HOST_CEILING_ONLY, CRAP_COMPARE_SUMMARY]
-    );
-    let empty = compare_banners(false, false);
-    assert_eq!(empty, vec![CRAP_EMPTY_BASELINE, CRAP_COMPARE_SUMMARY]);
-    let empty_linux = compare_banners(false, true);
-    assert_eq!(empty_linux, vec![CRAP_EMPTY_BASELINE, CRAP_COMPARE_SUMMARY]);
-}
-
-#[test]
-fn empty_or_missing_baseline_is_not_a_ratchet_yet() {
-    let temp = tempdir().unwrap();
-    assert!(!baseline_has_entries(&temp.path().join("missing.json")));
-    let empty = temp.path().join("empty.json");
-    fs::write(&empty, r#"{"$schema":"x","version":"0.0.2","entries":[]}"#).unwrap();
-    assert!(!baseline_has_entries(&empty));
-    let filled = temp.path().join("filled.json");
-    fs::write(
-        &filled,
-        r#"{"version":"0.0.2","entries":[{"function":"f","crap":1.0}]}"#,
-    )
-    .unwrap();
-    assert!(baseline_has_entries(&filled));
 }

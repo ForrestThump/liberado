@@ -66,14 +66,11 @@ check:
     cargo fmt --check
     cargo clippy --locked --workspace --exclude liberado-webui --all-targets -- -D warnings -D clippy::cognitive_complexity
 
-# Full local CI. Includes the host-stable module-health ratchet on every OS.
-# Linux also runs the same per-function CRAP compare GitHub runs.
-# Other hosts defer coverage to `just ready`, which runs the exact Linux gate
-# natively or through Debian WSL. Host coverage is not a reliable proxy.
-# The baseline is not rewritten while that check is red. On Linux success,
-# ratchet `code-metrics/crap-baseline.json` without saving worse existing scores. If the tree
-# is otherwise clean, a Linux update is amended onto HEAD. GitHub never writes it.
-# Console: log path, one ok/FAILED per gate, extracted errors on red.
+# Full local CI. Runs the CRAP diff gate on every host. The gate scores only
+# functions the diff touched. It does not rewrite a committed baseline.
+# Module-health and unwrap baselines still write only on Linux.
+# `just ready` then runs the exact Linux CRAP diff gate, natively or through
+# Debian WSL. Console: log path, one ok/FAILED per gate, extracted errors on red.
 # Full child output: `.liberado/ci.log`.
 ci:
     cargo run --locked --quiet -p liberado-cli --features ci-unwraps -- ci
@@ -120,12 +117,9 @@ setup-hooks:
 crap-linux:
     cargo run --locked --quiet -p liberado-cli -- ci crap-linux
 
-# Host-stable per-function cyclomatic-complexity ratchet.
+# Cyclomatic half of the diff gate. No coverage run.
 function-complexity:
     cargo run --locked --quiet -p liberado-cli -- ci complexity
-
-function-complexity-ratchet:
-    cargo run --locked --quiet -p liberado-cli -- ci complexity-ratchet
 
 # Compare production Rust files with the committed structural-health baseline.
 module-health:
