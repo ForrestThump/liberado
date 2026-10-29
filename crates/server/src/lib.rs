@@ -109,14 +109,7 @@ pub async fn run(vault_path: String) -> Result<(), Box<dyn std::error::Error>> {
     // the whole value of that assumption is that it is checked where it can still refuse.
     let (guard, plan) = control_plane_boot::prepare_control_plane(&boot.config.topology.api)?;
 
-    let (daemon_handle, app, state) = assemble_daemon(
-        boot.config,
-        #[cfg(feature = "coding")]
-        boot.coder_tuning,
-        vault_path,
-        Arc::clone(&guard),
-    )
-    .await?;
+    let (daemon_handle, app, state) = assemble_daemon(boot, vault_path, Arc::clone(&guard)).await?;
     finish_serve(daemon_handle, app, state, &plan.addr.to_string()).await
 }
 
@@ -151,11 +144,14 @@ fn open_live_surfaces(
 /// Split from [`run`] so profile, plugin, library, and schedule wiring does not sit in the
 /// fail-fast preamble. [`finish_serve`] owns the drain and the post-drain abort.
 async fn assemble_daemon(
-    config: liberado_bootstrap::Config,
-    #[cfg(feature = "coding")] coder_tuning: liberado_coder_core::CoderTuning,
+    boot: DaemonBoot,
     vault_path: String,
     guard: Arc<auth::ApiGuard>,
 ) -> Result<(tokio::task::JoinHandle<()>, Router, Arc<AppState>), Box<dyn std::error::Error>> {
+    // Coder tuning stays inside this function so `run` has no feature-gated argument lines.
+    #[cfg(feature = "coding")]
+    let coder_tuning = boot.coder_tuning;
+    let config = boot.config;
     // One live catalog + shared MCP registry (boot apply + hot-reload). Every consumer (API,
     // daemon pools, chat, dispatch pack) uses the same cloneable registry handle.
     let live_mcp = liberado_bootstrap::live_mcp_from_config(&config, None);
@@ -410,9 +406,7 @@ async fn serve_with_drain(
     Ok(())
 }
 
-/// The vault path this daemon serves, CLI-over-config: the `run` argument wins (the CLI always
-/// supplies one); an empty argument falls back to `topology.vault_path`. Both empty is a hard
-/// error.
+/// Config loaded for one daemon boot, including coder tuning when `coding` is enabled.
 struct DaemonBoot {
     config: liberado_bootstrap::Config,
     #[cfg(feature = "coding")]
@@ -442,6 +436,9 @@ fn load_daemon_config() -> Result<DaemonBoot, Box<dyn std::error::Error>> {
     }
 }
 
+/// The vault path this daemon serves, CLI-over-config: the `run` argument wins (the CLI always
+/// supplies one); an empty argument falls back to `topology.vault_path`. Both empty is a hard
+/// error.
 fn resolve_vault_path(
     vault_path: String,
     config: &liberado_bootstrap::Config,
