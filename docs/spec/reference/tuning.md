@@ -58,7 +58,7 @@ human = { env = "LIBERADO_HUMAN_TOKEN" }   # owner: WebUI sign-in, approvals, pr
 
 [[api.clients]]
 name = "cli"
-token = { env = "LIBERADO_API_TOKEN" }     # native clients (TUI, `liberado chat`, MCP)
+token = { env = "LIBERADO_API_TOKEN" }     # native clients listed below
 
 # Optional: exact origins for cross-origin dev (e.g. `dx serve` on :8080 → API on :4201)
 # allowed_origins = ["http://127.0.0.1:8080"]
@@ -67,6 +67,13 @@ token = { env = "LIBERADO_API_TOKEN" }     # native clients (TUI, `liberado chat
 Never put token values in TOML — only `env` or `file` references. `GET /api/health` stays
 unauthenticated for health checks; everything else needs the human session (browser cookie +
 `X-Liberado-CSRF` on writes) or `Authorization: Bearer` with a client token.
+
+Native clients that send that bearer when `LIBERADO_API_TOKEN` is set: the TUI, `liberado chat`,
+the operator dogfood MCP, acp-bridge face mode (`liberado-acp`, including Zed and Paseo), and
+`liberado shepherd`. Point the variable at one `[[api.clients]]` token when `[api]` credentials
+are configured. Leave it unset when the daemon has no `[api]` table; those clients then send no
+`Authorization` header. Shepherd attaches the token only to its daemon goal calls (`GET` and
+`POST` `/api/goals`). Its GitHub calls use `gh` and do not receive this token.
 
 **Upgrade (step 1):** add `[api]` before exposing the daemon beyond loopback. Set
 `LIBERADO_HUMAN_TOKEN` and at least one `[[api.clients]]` secret. Point Compose at
@@ -646,6 +653,10 @@ exit code (`0`) remain under `[projects.preflight]`; do not duplicate CI command
 Without a configured project, it reads `SHEPHERD_MAX_KICKBACKS` (2), `SHEPHERD_COLD_REVIEWS` (2),
 `SHEPHERD_MAX_CONCURRENT` (2), `SHEPHERD_POLL_SECONDS` (120), `SHEPHERD_BASE` (`main`),
 `SHEPHERD_PROJECT` (`liberado`), and `LIBERADO_SERVER` (`http://localhost:4201`).
+
+When the daemon has `[api]` credentials configured, set `LIBERADO_API_TOKEN` to a
+`[[api.clients]]` token. Shepherd sends it as `Authorization: Bearer` on daemon goal calls.
+GitHub reads and labels stay on `gh`.
 
 ## 3. Reading what the daemon decided
 

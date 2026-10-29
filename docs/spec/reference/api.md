@@ -335,12 +335,17 @@ Both native clients are landed and share code (`chat-client-contract`'s `ChatEve
   (`crates/cli`, `chat_client.rs`) that streams the *same* `POST /api/chat/stream` and prints the
   conversation. It embeds no agent logic — it learns the session id from the `session` event and
   reuses it. Run it against a running server (`LIBERADO_SERVER` overrides the default
-  `http://127.0.0.1:4201`).
+  `http://127.0.0.1:4201`). When `[api]` credentials are configured, set
+  `LIBERADO_API_TOKEN` to a `[[api.clients]]` token.
 - **`crates/tui`** (ratatui) — a native client hitting the *same* endpoints with `reqwest`: a chat
   pane consuming `/api/chat/stream`, a status line from `/api/status`, slash commands via
   `liberado-commands`, full-screen `/session` browser and `/model` model picker (`GET`/`POST`
   models APIs). Confirms the API is genuinely client-agnostic — model hot-swap and session
   browsing are ordinary HTTP, not client-specific RPC.
+
+acp-bridge face mode and `liberado shepherd` are native daemon clients of the same API. When
+`[api]` credentials are configured, set `LIBERADO_API_TOKEN` to a `[[api.clients]]` token for
+each of them. Shepherd sends that bearer only on its goal calls. GitHub access stays on `gh`.
 
 ### Persistence paths (ops, not vault)
 

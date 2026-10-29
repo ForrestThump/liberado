@@ -41,6 +41,12 @@
     "functions": 29,
     "cyclomatic": 60
   },
+  "crates/acp-bridge/src/face_client_auth_tests.rs": {
+    "ploc": 124,
+    "lloc": 40,
+    "functions": 14,
+    "cyclomatic": 22
+  },
   "crates/acp-bridge/src/face_client_stream_tests.rs": {
     "ploc": 81,
     "lloc": 40,
@@ -742,6 +748,12 @@
     "lloc": 53,
     "functions": 13,
     "cyclomatic": 14
+  },
+  "crates/cli/src/shepherd_cmd/daemon_http.rs": {
+    "ploc": 168,
+    "lloc": 51,
+    "functions": 24,
+    "cyclomatic": 34
   },
   "crates/cli/src/shepherd_cmd/invocation.rs": {
     "ploc": 109,

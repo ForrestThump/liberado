@@ -3,6 +3,10 @@
 //! Same wire as `liberado chat` (`POST /api/chat/stream`). The face agent,
 //! vault tools, and `delegate` live **in the daemon** — this module only
 //! streams events into ACP `session/update` notifications.
+//!
+//! When the daemon has `[api]` credentials, the process that starts this bridge
+//! sets the shared API token env var. The face request then sends
+//! `Authorization: Bearer`. An unset or blank token sends no Authorization header.
 
 use chat_client_contract::native::{SseDecoder, SseEvent};
 use chat_client_contract::{SessionEvent, SessionEventKind};
@@ -28,14 +32,18 @@ pub async fn run_face_turn(
     let base = server_base();
     let endpoint = format!("{base}/api/chat/stream");
     let client = reqwest::Client::new();
-    let body = json!({ "message": message, "session": daemon_session });
+    let token = chat_client_contract::api_auth::bearer_token_from_env();
 
-    let response = client
-        .post(&endpoint)
-        .json(&body)
-        .send()
-        .await
-        .map_err(|e| daemon_unreachable_error(&base, &e.without_url().to_string()))?;
+    let response = face_stream_request(
+        &client,
+        &endpoint,
+        daemon_session,
+        message,
+        token.as_deref(),
+    )
+    .send()
+    .await
+    .map_err(|e| daemon_unreachable_error(&base, &e.without_url().to_string()))?;
 
     if !response.status().is_success() {
         let status = response.status();
@@ -55,6 +63,25 @@ pub async fn run_face_turn(
         }
     }
     Ok(())
+}
+
+/// `POST /api/chat/stream` with the optional daemon bearer token.
+///
+/// `token` is already the secret value. This function does not read the environment,
+/// so tests can pass a fake token without changing process state.
+fn face_stream_request(
+    client: &reqwest::Client,
+    endpoint: &str,
+    session: &Option<String>,
+    message: &str,
+    token: Option<&str>,
+) -> reqwest::RequestBuilder {
+    let body = json!({ "message": message, "session": session });
+    let mut request = client.post(endpoint).json(&body);
+    if let Some(value) = chat_client_contract::api_auth::authorization_value(token) {
+        request = request.header(reqwest::header::AUTHORIZATION, value);
+    }
+    request
 }
 
 /// Face-client text when the daemon cannot be reached.
@@ -461,3 +488,7 @@ mod face_env_tests {
 #[cfg(test)]
 #[path = "face_client_stream_tests.rs"]
 mod stream_tests;
+
+#[cfg(test)]
+#[path = "face_client_auth_tests.rs"]
+mod auth_tests;
