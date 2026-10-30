@@ -60,7 +60,22 @@ async fn fetch_subscriptions(api_base: &str) -> Result<Vec<SubscriptionRow>, Str
 }
 
 #[cfg(target_arch = "wasm32")]
+fn js_error_message(value: &wasm_bindgen::JsValue) -> String {
+    if let Some(text) = value.as_string() {
+        return text;
+    }
+    js_sys::JSON::stringify(value)
+        .ok()
+        .and_then(|json| json.as_string())
+        .unwrap_or_else(|| "unknown JavaScript error".into())
+}
+
+#[cfg(target_arch = "wasm32")]
 async fn enable_push(api_base: &str, label: &str) -> Result<(), String> {
+    use js_sys::{Function, Promise};
+    use wasm_bindgen::JsValue;
+    use wasm_bindgen_futures::JsFuture;
+
     let key_url = format!("{api_base}/api/push/vapid-public-key");
     let resp = crate::http::get(&key_url)
         .await
@@ -75,36 +90,51 @@ async fn enable_push(api_base: &str, label: &str) -> Result<(), String> {
     let Some(public_key) = body.get("public_key").and_then(|v| v.as_str()) else {
         return Err("Daemon returned no VAPID public key.".into());
     };
-    let label_json = serde_json::to_string(label).unwrap_or_else(|_| "\"device\"".into());
+    let public_key_json =
+        serde_json::to_string(public_key).map_err(|e| format!("Bad public key: {e}"))?;
+    let api_base_json =
+        serde_json::to_string(api_base).map_err(|e| format!("Bad api base: {e}"))?;
+    let label_json = serde_json::to_string(label).map_err(|e| format!("Bad label: {e}"))?;
     let script = format!(
-        r#"(async () => {{
-  const reg = await navigator.serviceWorker.ready;
-  const sub = await reg.pushManager.subscribe({{
-    userVisibleOnly: true,
-    applicationServerKey: (function (b64) {{
-      const pad = "=".repeat((4 - (b64.length % 4)) % 4);
-      const base64 = (b64 + pad).replace(/-/g, "+").replace(/_/g, "/");
-      const raw = atob(base64);
-      const out = new Uint8Array(raw.length);
-      for (let i = 0; i < raw.length; i++) out[i] = raw.charCodeAt(i);
-      return out;
-    }})({public_key:?}));
-  }});
-  const json = sub.toJSON();
-  const resp = await fetch({api_base:?} + "/api/push/subscriptions", {{
-    method: "POST",
-    credentials: "same-origin",
-    headers: {{ "content-type": "application/json", "x-liberado-csrf": document.cookie.match(/liberado_csrf=([^;]+)/)?.[1] || "" }},
-    body: JSON.stringify({{ endpoint: json.endpoint, keys: json.keys, label: {label_json} }}),
-  }});
-  if (!resp.ok) throw new Error("subscribe failed");
-}})()"#
+        r#"
+const reg = await navigator.serviceWorker.ready;
+const publicKey = {public_key_json};
+const sub = await reg.pushManager.subscribe({{
+  userVisibleOnly: true,
+  applicationServerKey: (function (b64) {{
+    const pad = "=".repeat((4 - (b64.length % 4)) % 4);
+    const base64 = (b64 + pad).replace(/-/g, "+").replace(/_/g, "/");
+    const raw = atob(base64);
+    const out = new Uint8Array(raw.length);
+    for (let i = 0; i < raw.length; i++) out[i] = raw.charCodeAt(i);
+    return out;
+  }})(publicKey);
+}});
+const json = sub.toJSON();
+const apiBase = {api_base_json};
+const resp = await fetch(apiBase + "/api/push/subscriptions", {{
+  method: "POST",
+  credentials: "same-origin",
+  headers: {{ "content-type": "application/json", "x-liberado-csrf": document.cookie.match(/liberado_csrf=([^;]+)/)?.[1] || "" }},
+  body: JSON.stringify({{ endpoint: json.endpoint, keys: json.keys, label: {label_json} }}),
+}});
+if (!resp.ok) {{
+  const text = await resp.text();
+  throw new Error("subscribe failed: " + resp.status + " " + text);
+}}
+return {{ ok: true }};
+"#
     );
-    web_sys::window()
-        .ok_or_else(|| "no window".to_string())?
-        .eval(&script)
-        .map_err(|e| format!("Push subscribe failed: {e:?}"))?;
-    Ok(())
+    let runner = format!("return (async () => {{\n{script}\n}})();");
+    let func = Function::new_with_args("", &runner);
+    let promise_val = func
+        .call0(&JsValue::NULL)
+        .map_err(|e| format!("Push subscribe failed: {}", js_error_message(&e)))?;
+    let promise = Promise::from(promise_val);
+    JsFuture::from(promise)
+        .await
+        .map(|_| ())
+        .map_err(|e| format!("Push subscribe failed: {}", js_error_message(&e)))
 }
 
 #[cfg(not(target_arch = "wasm32"))]
