@@ -18,6 +18,7 @@
 mod debounce;
 mod helpers;
 mod jobs;
+mod jobs_mechanical;
 mod proposals;
 mod react;
 pub mod reminders;

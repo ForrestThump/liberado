@@ -191,68 +191,6 @@ impl Daemon {
         }
     }
 
-    fn finish_mechanical(
-        &self,
-        request: &JobRequest,
-        event: &Event,
-        effect: JobEffect,
-    ) -> Option<ReactionOutcome> {
-        match effect {
-            JobEffect::Continue => None,
-            JobEffect::Quiet => {
-                tracing::info!(job = %request.name, kind = %request.kind, "mechanical job quiet");
-                Some(ReactionOutcome::Observed)
-            }
-            JobEffect::RemindRows(items) => self.deliver_mechanical_rows(request, event, items),
-            JobEffect::Remind(text) => self.deliver_mechanical_text(request, event, text),
-        }
-    }
-
-    fn deliver_mechanical_rows(
-        &self,
-        request: &JobRequest,
-        event: &Event,
-        items: Vec<crate::reminders::MechanicalReminder>,
-    ) -> Option<ReactionOutcome> {
-        tracing::info!(job = %request.name, kind = %request.kind, count = items.len(), "mechanical job reminder rows");
-        let fire_at = crate::helpers::cron_fire_at(event);
-        let catch_up = crate::helpers::cron_catch_up(&event.payload.data);
-        self.send_reminder_rows(&items, request, catch_up, fire_at);
-        Some(ReactionOutcome::Observed)
-    }
-
-    fn deliver_mechanical_text(
-        &self,
-        request: &JobRequest,
-        event: &Event,
-        text: String,
-    ) -> Option<ReactionOutcome> {
-        tracing::info!(job = %request.name, kind = %request.kind, "mechanical job reminder");
-        let fire_at = crate::helpers::cron_fire_at(event);
-        let catch_up = crate::helpers::cron_catch_up(&event.payload.data);
-        self.send_reminder(&text, request, catch_up, fire_at);
-        Some(ReactionOutcome::Observed)
-    }
-
-    fn apply_startup_effect(&self, job: &JobRequest, effect: JobEffect) {
-        match effect {
-            JobEffect::Quiet => {
-                tracing::info!(job = %job.name, "startup snapshot clean");
-            }
-            JobEffect::RemindRows(items) => {
-                tracing::warn!(job = %job.name, count = items.len(), "startup snapshot needs attention");
-                let now = chrono::Utc::now();
-                self.send_reminder_rows(&items, job, false, now);
-            }
-            JobEffect::Continue => {}
-            JobEffect::Remind(text) => {
-                tracing::warn!(job = %job.name, "startup snapshot needs attention");
-                let now = chrono::Utc::now();
-                self.send_reminder(&text, job, false, now);
-            }
-        }
-    }
-
     fn mechanical_clock(&self) -> (NaiveDate, String) {
         let zone = self
             .user_timezone
@@ -279,7 +217,7 @@ impl Daemon {
         }
     }
 
-    fn send_reminder(
+    pub(crate) fn send_reminder(
         &self,
         text: &str,
         job: &JobRequest,
@@ -290,7 +228,7 @@ impl Daemon {
         self.send_reminder_rows(std::slice::from_ref(&item), job, catch_up, fire_at);
     }
 
-    fn send_reminder_rows(
+    pub(crate) fn send_reminder_rows(
         &self,
         items: &[crate::reminders::MechanicalReminder],
         job: &JobRequest,

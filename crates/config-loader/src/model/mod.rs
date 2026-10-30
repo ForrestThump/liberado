@@ -13,6 +13,7 @@ mod config;
 mod config_builtin_editor;
 mod config_profile_provider;
 mod config_readonly_delegation;
+mod config_tuning_bounds;
 mod config_turn_budgets;
 mod policy;
 mod reminders;
