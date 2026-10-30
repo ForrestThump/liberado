@@ -74,7 +74,7 @@ allow-build-scripts = [
     "instability@0.3.12", "jni@0.22.4", "jni-macros@0.22.4",
     "jni-sys@0.3.1", "khronos_api@3.1.0", "khronos-egl@6.0.0",
     "libc@0.2.186", "libfuzzer-sys@0.4.13", "libgit2-sys@0.18.5+1.9.4",
-    "libm@0.2.16", "libsqlite3-sys@0.37.0", "libz-sys@1.1.29",
+    "libm@0.2.16", "libsqlite3-sys@0.37.0", "libz-sys@1.1.31",
     "link-cplusplus@1.0.12", "matrixmultiply@0.3.11", "memoffset@0.9.1",
     "mime_guess@2.0.5", "multer@3.1.0", "naga@29.0.4",
     "native-tls@0.2.18", "nix@0.31.3", "numkong@7.7.0",

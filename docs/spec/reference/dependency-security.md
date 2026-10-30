@@ -47,6 +47,8 @@ replaced.
 | `webpki-root-certs` | 1.0.8 | 1.0.11 | RUSTSEC-2026-0383, bundled emSign roots |
 | `tokio` | 1.52.3 | 1.53.3 | RUSTSEC-2026-0386, `AsyncFd::new` I/O safety |
 
+| `libz-sys` | 1.1.29 | 1.1.31 | RUSTSEC-2026-0418, build script printed probe command into build output; 1.1.30 also narrows wasm32 `Z_SOLO` and adds optional aarch64 CRC `-march` forwarding |
+
 `tokio` is pinned to 1.53.3, the first release in the 1.53 line that carries
 the fix, rather than the newest 1.54. The smaller step is the one the lockfile
 can carry on its own.
