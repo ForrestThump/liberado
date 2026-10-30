@@ -192,7 +192,6 @@ fn fail(status: StatusCode, message: &str) -> Response {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use liberado_outbox::VisibleReminder;
 
     #[test]
