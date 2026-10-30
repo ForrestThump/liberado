@@ -13,13 +13,13 @@
 //!   LIBERADO_VAULT=\\<\1\\> liberado  same, taking the vault from the environment
 //!   liberado chat [session-id]       the streaming terminal client of a running daemon
 //!   liberado config check            load + validate config, print a summary (or an error)
-//!   liberado ci                      full local CI; ratchet and stage/amend code-metrics/crap-baseline.json
+//!   liberado ci                      full local CI, including the CRAP diff gate
 //!   liberado ci check                ship preflight (fmt, clippy, tests, deny)
-//!   liberado ci crap                 compare CRAP scores to code-metrics/crap-baseline.json (no write)
+//!   liberado ci crap                 CRAP diff gate against the merge-base
+//!   liberado ci complexity           cyclomatic diff gate against the merge-base
 //!   liberado ci ready                final checks + exact Linux CRAP + readiness receipt
 //!   liberado ci verify-ready         reject a stale readiness receipt
 //!   liberado ci crap-linux           native Debian CRAP; Debian WSL on Windows
-//!   liberado ci ratchet              check, write baseline, then stage or amend it
 //!                                    console is a summary; full child log is .liberado/ci.log
 //!   liberado shepherd --once          run the unattended PR shepherd once
 //!   liberado deploy <homelab|webui|smoke|latency> run configured deployment operations
