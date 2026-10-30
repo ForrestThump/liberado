@@ -69,10 +69,10 @@ pub fn pick_emit_fire(
     missed: &[DateTime<Utc>],
     now: DateTime<Utc>,
 ) -> (DateTime<Utc>, bool) {
-    if let Some(&latest) = missed.last() {
-        if latest <= now {
-            return (latest, true);
-        }
+    if let Some(&latest) = missed.last()
+        && latest <= now
+    {
+        return (latest, true);
     }
     (scheduled, false)
 }
