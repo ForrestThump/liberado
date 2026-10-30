@@ -45,6 +45,16 @@ pub struct AckBody {
     token: String,
 }
 
+pub async fn list_subscriptions(State(state): State<Arc<AppState>>) -> Response {
+    let Some(outbox) = state.outbox.as_ref() else {
+        return fail(StatusCode::SERVICE_UNAVAILABLE, "outbox is not available");
+    };
+    match outbox.list_subscriptions() {
+        Ok(rows) => Json(rows).into_response(),
+        Err(err) => fail(StatusCode::INTERNAL_SERVER_ERROR, &err.to_string()),
+    }
+}
+
 pub async fn push_status(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let count = state
         .outbox

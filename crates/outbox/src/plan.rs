@@ -249,6 +249,33 @@ mod tests {
     }
 
     #[test]
+    fn the_mode_matrix_covers_vapid_and_subscription_gaps() {
+        let (rows, reason) = plan_targets(input(TelegramMode::Fallback, false, &[], false));
+        assert_eq!(rows[0].channel, "webpush");
+        assert_eq!(rows[0].target, "");
+        assert!(reason.is_none());
+
+        let (rows, reason) = plan_targets(input(TelegramMode::Fallback, false, &[], true));
+        assert_eq!(rows[0].channel, "telegram");
+        assert_eq!(reason, Some("no VAPID keys"));
+
+        let (rows, reason) = plan_targets(input(TelegramMode::Fallback, true, &[], true));
+        assert_eq!(rows[0].channel, "telegram");
+        assert_eq!(reason, Some("no push subscriptions"));
+
+        let (rows, reason) = plan_targets(input(TelegramMode::Fallback, true, &[2], true));
+        assert_eq!(rows[0].channel, "webpush");
+        assert_eq!(rows[0].target, "sub:2");
+        assert!(reason.is_none());
+
+        let (rows, _) = plan_targets(input(TelegramMode::Always, true, &[2], true));
+        assert_eq!(rows.len(), 2);
+
+        let (rows, _) = plan_targets(input(TelegramMode::Off, true, &[2], true));
+        assert!(rows.iter().all(|row| row.channel != "telegram"));
+    }
+
+    #[test]
     fn a_digest_is_only_for_a_catch_up_burst() {
         let now = DateTime::parse_from_rfc3339("2026-10-29T15:00:00Z")
             .unwrap()

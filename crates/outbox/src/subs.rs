@@ -26,6 +26,7 @@ pub struct SubscriptionView {
     pub id: i64,
     pub label: String,
     pub host: String,
+    pub endpoint: String,
 }
 
 #[derive(Debug, Clone)]
@@ -97,6 +98,7 @@ impl Outbox {
                 id: row.get(0)?,
                 label: row.get(1)?,
                 host: host_label(&endpoint),
+                endpoint,
             })
         })?;
         rows.collect::<std::result::Result<Vec<_>, _>>()

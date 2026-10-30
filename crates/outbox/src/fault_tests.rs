@@ -106,10 +106,10 @@ async fn telegram_failures_then_one_accepted_send() {
         .enqueue(&reminder("k", "telegram", "reminder", false, at), at)
         .unwrap();
     let sink = Script::ready(vec![
+        DeliveryOutcome::Retryable("500".into()),
+        DeliveryOutcome::Retryable("500".into()),
+        DeliveryOutcome::Retryable("500".into()),
         DeliveryOutcome::Accepted,
-        DeliveryOutcome::Retryable("500".into()),
-        DeliveryOutcome::Retryable("500".into()),
-        DeliveryOutcome::Retryable("500".into()),
     ]);
     let mut at = at;
     for _ in 0..3 {
@@ -124,6 +124,29 @@ async fn telegram_failures_then_one_accepted_send() {
         .unwrap();
     assert_eq!(outbox.state_of(1).unwrap(), "delivered");
     assert_eq!(sink.calls(), 4);
+}
+
+#[tokio::test]
+async fn telegram_ok_false_is_a_retryable_failure_not_a_delivery() {
+    let (outbox, _) = db();
+    let at = now();
+    outbox
+        .enqueue(&reminder("bad", "telegram", "reminder", false, at), at)
+        .unwrap();
+    let sink = Script::ready(vec![
+        DeliveryOutcome::Retryable("telegram 200".into()),
+        DeliveryOutcome::Accepted,
+    ]);
+    run_pass(&outbox, &sink, at, PassLimits::default())
+        .await
+        .unwrap();
+    assert_eq!(outbox.attempts_of(1).unwrap(), 1);
+    assert_eq!(outbox.state_of(1).unwrap(), "pending");
+    run_pass(&outbox, &sink, at + Duration::hours(2), PassLimits::default())
+        .await
+        .unwrap();
+    assert_eq!(outbox.state_of(1).unwrap(), "delivered");
+    assert_eq!(sink.calls(), 2);
 }
 
 #[tokio::test]

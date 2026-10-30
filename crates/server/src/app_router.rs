@@ -48,7 +48,9 @@ pub(crate) fn owner_only_routes(state: &Arc<AppState>) -> Router {
         )
         .route(
             "/api/push/subscriptions",
-            axum::routing::post(api::upsert_subscription).delete(api::delete_subscription),
+            axum::routing::get(api::list_subscriptions)
+                .post(api::upsert_subscription)
+                .delete(api::delete_subscription),
         )
         .route("/api/push/test", axum::routing::post(api::push_test))
         .route("/api/outbox", axum::routing::get(api::list_outbox))
