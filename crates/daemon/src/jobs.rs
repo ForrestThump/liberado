@@ -128,21 +128,7 @@ pub(crate) fn execute_on(
         "event-ping" => {
             JobEffect::Remind(crate::vault_pings::event_ping_message(root, today, zone))
         }
-        "vault-reminder-tick" => {
-            if outbox {
-                let rows = crate::vault_pings::due_reminder_rows(root, tick);
-                if rows.is_empty() {
-                    JobEffect::Quiet
-                } else {
-                    JobEffect::RemindRows(rows.into_iter().map(mechanical_from_vault).collect())
-                }
-            } else {
-                match crate::vault_pings::reminder_message(root, tick) {
-                    Some(text) => JobEffect::Remind(text),
-                    None => JobEffect::Quiet,
-                }
-            }
-        }
+        "vault-reminder-tick" => vault_reminder_tick_effect(root, tick, outbox),
         "habit-ping" => match job
             .habit_text
             .as_deref()
@@ -163,6 +149,24 @@ pub(crate) fn execute_on(
     }
 }
 
+fn vault_reminder_tick_effect(
+    root: &Path,
+    tick: &crate::vault_pings::ReminderTick,
+    outbox: bool,
+) -> JobEffect {
+    if outbox {
+        let rows = crate::vault_pings::due_reminder_rows(root, tick);
+        if rows.is_empty() {
+            return JobEffect::Quiet;
+        }
+        return JobEffect::RemindRows(rows.into_iter().map(mechanical_from_vault).collect());
+    }
+    match crate::vault_pings::reminder_message(root, tick) {
+        Some(text) => JobEffect::Remind(text),
+        None => JobEffect::Quiet,
+    }
+}
+
 impl Daemon {
     /// `Some` when this event was a mechanical job and is finished.
     /// `None` when it is not mechanical, or the inbox gate found captures and the goal
@@ -173,27 +177,8 @@ impl Daemon {
         let (today, zone) = self.mechanical_clock();
         let tick = self.reminder_tick();
         let outbox = self.outbox.is_some() && self.outbox_delivery.is_some();
-        match execute_on(self.vault.root(), &request, today, &zone, &tick, outbox) {
-            JobEffect::Continue => None,
-            JobEffect::Quiet => {
-                tracing::info!(job = %request.name, kind = %request.kind, "mechanical job quiet");
-                Some(ReactionOutcome::Observed)
-            }
-            JobEffect::RemindRows(items) => {
-                tracing::info!(job = %request.name, kind = %request.kind, count = items.len(), "mechanical job reminder rows");
-                let fire_at = crate::helpers::cron_fire_at(event);
-                let catch_up = crate::helpers::cron_catch_up(&event.payload.data);
-                self.send_reminder_rows(&items, &request, catch_up, fire_at);
-                Some(ReactionOutcome::Observed)
-            }
-            JobEffect::Remind(text) => {
-                tracing::info!(job = %request.name, kind = %request.kind, "mechanical job reminder");
-                let fire_at = crate::helpers::cron_fire_at(event);
-                let catch_up = crate::helpers::cron_catch_up(&event.payload.data);
-                self.send_reminder(&text, &request, catch_up, fire_at);
-                Some(ReactionOutcome::Observed)
-            }
-        }
+        let effect = execute_on(self.vault.root(), &request, today, &zone, &tick, outbox);
+        self.finish_mechanical(&request, event, effect)
     }
 
     pub(crate) fn run_startup_jobs(&self) {
@@ -201,21 +186,69 @@ impl Daemon {
         let tick = self.reminder_tick();
         let outbox = self.outbox.is_some() && self.outbox_delivery.is_some();
         for job in &self.startup_jobs {
-            match execute_on(self.vault.root(), job, today, &zone, &tick, outbox) {
-                JobEffect::Quiet => {
-                    tracing::info!(job = %job.name, "startup snapshot clean");
-                }
-                JobEffect::RemindRows(items) => {
-                    tracing::warn!(job = %job.name, count = items.len(), "startup snapshot needs attention");
-                    let now = chrono::Utc::now();
-                    self.send_reminder_rows(&items, job, false, now);
-                }
-                JobEffect::Continue => {}
-                JobEffect::Remind(text) => {
-                    tracing::warn!(job = %job.name, "startup snapshot needs attention");
-                    let now = chrono::Utc::now();
-                    self.send_reminder(&text, job, false, now);
-                }
+            let effect = execute_on(self.vault.root(), job, today, &zone, &tick, outbox);
+            self.apply_startup_effect(job, effect);
+        }
+    }
+
+    fn finish_mechanical(
+        &self,
+        request: &JobRequest,
+        event: &Event,
+        effect: JobEffect,
+    ) -> Option<ReactionOutcome> {
+        match effect {
+            JobEffect::Continue => None,
+            JobEffect::Quiet => {
+                tracing::info!(job = %request.name, kind = %request.kind, "mechanical job quiet");
+                Some(ReactionOutcome::Observed)
+            }
+            JobEffect::RemindRows(items) => self.deliver_mechanical_rows(request, event, items),
+            JobEffect::Remind(text) => self.deliver_mechanical_text(request, event, text),
+        }
+    }
+
+    fn deliver_mechanical_rows(
+        &self,
+        request: &JobRequest,
+        event: &Event,
+        items: Vec<crate::reminders::MechanicalReminder>,
+    ) -> Option<ReactionOutcome> {
+        tracing::info!(job = %request.name, kind = %request.kind, count = items.len(), "mechanical job reminder rows");
+        let fire_at = crate::helpers::cron_fire_at(event);
+        let catch_up = crate::helpers::cron_catch_up(&event.payload.data);
+        self.send_reminder_rows(&items, request, catch_up, fire_at);
+        Some(ReactionOutcome::Observed)
+    }
+
+    fn deliver_mechanical_text(
+        &self,
+        request: &JobRequest,
+        event: &Event,
+        text: String,
+    ) -> Option<ReactionOutcome> {
+        tracing::info!(job = %request.name, kind = %request.kind, "mechanical job reminder");
+        let fire_at = crate::helpers::cron_fire_at(event);
+        let catch_up = crate::helpers::cron_catch_up(&event.payload.data);
+        self.send_reminder(&text, request, catch_up, fire_at);
+        Some(ReactionOutcome::Observed)
+    }
+
+    fn apply_startup_effect(&self, job: &JobRequest, effect: JobEffect) {
+        match effect {
+            JobEffect::Quiet => {
+                tracing::info!(job = %job.name, "startup snapshot clean");
+            }
+            JobEffect::RemindRows(items) => {
+                tracing::warn!(job = %job.name, count = items.len(), "startup snapshot needs attention");
+                let now = chrono::Utc::now();
+                self.send_reminder_rows(&items, job, false, now);
+            }
+            JobEffect::Continue => {}
+            JobEffect::Remind(text) => {
+                tracing::warn!(job = %job.name, "startup snapshot needs attention");
+                let now = chrono::Utc::now();
+                self.send_reminder(&text, job, false, now);
             }
         }
     }

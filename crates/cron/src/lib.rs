@@ -26,6 +26,7 @@ mod cursor;
 mod english;
 mod fire_at;
 mod next_fires;
+mod run_loop;
 mod zoned;
 pub use catch_up::CatchUpSettings;
 pub use cursor::ScheduleCursorStore;
@@ -234,18 +235,10 @@ impl EventSource for CronEventSource {
             return;
         }
 
-        // One next-fire time per schedule, kept in a min-heap (via `Reverse`) so the loop always
-        // sleeps exactly until the earliest one, regardless of how many schedules are attached.
         let now = Utc::now();
-        if let Some(cu) = &self.catch_up {
-            for schedule in &self.schedules {
-                if catch_up::mechanical_reminder(&schedule.job) {
-                    cu.store.ensure(&schedule.name, now);
-                }
-            }
-        }
+        self.seed_mechanical_cursors(now);
 
-        let mut heap: BinaryHeap<Reverse<(DateTime<Utc>, usize)>> = self
+        let heap: BinaryHeap<Reverse<(DateTime<Utc>, usize)>> = self
             .schedules
             .iter()
             .enumerate()
@@ -254,46 +247,7 @@ impl EventSource for CronEventSource {
             })
             .collect();
 
-        loop {
-            let Some(Reverse((fire_at, idx))) = heap.pop() else {
-                tracing::warn!("cron: no schedule has any future occurrence; stopping");
-                return;
-            };
-
-            let wait = (fire_at - Utc::now())
-                .to_std()
-                .unwrap_or(std::time::Duration::ZERO);
-            tokio::time::sleep(wait).await;
-
-            let schedule = &self.schedules[idx];
-            let now = Utc::now();
-            let (emit_at, is_catch_up) = self.resolve_fire(schedule, fire_at, now);
-            if self.should_skip_emit(schedule, emit_at) {
-                if let Some(next) = fire_at::next_utc(&schedule.parsed, schedule.zone, now) {
-                    heap.push(Reverse((next, idx)));
-                }
-                continue;
-            }
-            if let Some(cu) = &self.catch_up {
-                catch_up::remember_floor(&cu.floor, &schedule.name, emit_at);
-            }
-            tracing::info!(
-                schedule = %schedule.name,
-                fire_at = %emit_at,
-                catch_up = is_catch_up,
-                "cron schedule fired"
-            );
-            if tx
-                .send(build_event(schedule, emit_at, is_catch_up))
-                .is_err()
-            {
-                return;
-            }
-
-            if let Some(next) = fire_at::next_utc(&schedule.parsed, schedule.zone, now) {
-                heap.push(Reverse((next, idx)));
-            }
-        }
+        self.drive_heap(heap, tx).await;
     }
 }
 

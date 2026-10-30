@@ -362,6 +362,12 @@ impl Config {
     }
 
     fn validate_tuning_bounds(&self) -> Result<()> {
+        self.validate_dispatch_bounds()?;
+        self.validate_reminders_bounds()?;
+        self.validate_turn_budgets()
+    }
+
+    fn validate_dispatch_bounds(&self) -> Result<()> {
         if self.tuning.dispatch.max_concurrent_subagents == 0 {
             return Err(Error::Config(
                 "tuning.dispatch.max_concurrent_subagents must be >= 1".into(),
@@ -377,10 +383,14 @@ impl Config {
                 "tuning.concurrency.max_reaction_depth must be >= 1".into(),
             ));
         }
+        Ok(())
+    }
+
+    fn validate_reminders_bounds(&self) -> Result<()> {
         if let Some(problem) = self.tuning.reminders.problems().first() {
             return Err(Error::Config(problem.clone()));
         }
-        self.validate_turn_budgets()
+        Ok(())
     }
 
     /// `[tuning.capture]` parses and validates. `inbox_ignore_globs`, `inbox_path`,
