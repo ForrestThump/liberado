@@ -19,12 +19,14 @@ liberado-vault = { workspace = true }
 turbovault-core = { workspace = true }
 turbovault-parser = { workspace = true }
 turbovault-plugin-tasks = { workspace = true }
+liberado-cron = { workspace = true }
 liberado-dispatcher = { workspace = true }
 liberado-orchestrator = { workspace = true }
 liberado-session = { workspace = true }
 # For `latency::with_correlation` only: the approval path executes inference and must attribute it
 # to the proposal's originating correlation, or the cost journal records `"-"`.
 liberado-provider = { workspace = true }
+chrono-tz = { workspace = true }
 chrono = { workspace = true }
 reqwest = { workspace = true }
 serde_json = { workspace = true }

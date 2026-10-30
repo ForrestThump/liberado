@@ -13,7 +13,7 @@ use tracing::info;
 
 use super::delivery::OutboxDelivery;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct MechanicalReminder {
     pub idempotency_key: String,
     pub title: String,

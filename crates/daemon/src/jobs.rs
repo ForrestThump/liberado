@@ -98,12 +98,14 @@ impl JobRequest {
 }
 
 /// What the reactor should do with a mechanical result.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq)]
 pub enum JobEffect {
     /// Nothing to tell the human.
     Quiet,
-    /// Send this text on the reminder channel.
+    /// Send this text on the reminder channel (legacy when outbox is absent).
     Remind(String),
+    /// Enqueue durable reminder rows.
+    RemindRows(Vec<crate::reminders::MechanicalReminder>),
     /// The inbox has captures. Dispatch the schedule goal.
     Continue,
 }
@@ -114,6 +116,7 @@ pub(crate) fn execute_on(
     today: NaiveDate,
     zone: &str,
     tick: &crate::vault_pings::ReminderTick,
+    outbox: bool,
 ) -> JobEffect {
     match job.kind.as_str() {
         "git-snapshot" => git_snapshot(root, job),
@@ -125,9 +128,21 @@ pub(crate) fn execute_on(
         "event-ping" => {
             JobEffect::Remind(crate::vault_pings::event_ping_message(root, today, zone))
         }
-        "vault-reminder-tick" => crate::vault_pings::reminder_message(root, tick)
-            .map(JobEffect::Remind)
-            .unwrap_or(JobEffect::Quiet),
+        "vault-reminder-tick" => {
+            if outbox {
+                let rows = crate::vault_pings::due_reminder_rows(root, tick);
+                if rows.is_empty() {
+                    JobEffect::Quiet
+                } else {
+                    JobEffect::RemindRows(rows.into_iter().map(mechanical_from_vault).collect())
+                }
+            } else {
+                match crate::vault_pings::reminder_message(root, tick) {
+                    Some(text) => JobEffect::Remind(text),
+                    None => JobEffect::Quiet,
+                }
+            }
+        }
         "habit-ping" => match job
             .habit_text
             .as_deref()
@@ -157,10 +172,18 @@ impl Daemon {
         let request = JobRequest::from_event(name, &event.payload.data)?;
         let (today, zone) = self.mechanical_clock();
         let tick = self.reminder_tick();
-        match execute_on(self.vault.root(), &request, today, &zone, &tick) {
+        let outbox = self.outbox.is_some() && self.outbox_delivery.is_some();
+        match execute_on(self.vault.root(), &request, today, &zone, &tick, outbox) {
             JobEffect::Continue => None,
             JobEffect::Quiet => {
                 tracing::info!(job = %request.name, kind = %request.kind, "mechanical job quiet");
+                Some(ReactionOutcome::Observed)
+            }
+            JobEffect::RemindRows(items) => {
+                tracing::info!(job = %request.name, kind = %request.kind, count = items.len(), "mechanical job reminder rows");
+                let fire_at = crate::helpers::cron_fire_at(event);
+                let catch_up = crate::helpers::cron_catch_up(&event.payload.data);
+                self.send_reminder_rows(&items, &request, catch_up, fire_at);
                 Some(ReactionOutcome::Observed)
             }
             JobEffect::Remind(text) => {
@@ -176,17 +199,23 @@ impl Daemon {
     pub(crate) fn run_startup_jobs(&self) {
         let (today, zone) = self.mechanical_clock();
         let tick = self.reminder_tick();
+        let outbox = self.outbox.is_some() && self.outbox_delivery.is_some();
         for job in &self.startup_jobs {
-            match execute_on(self.vault.root(), job, today, &zone, &tick) {
+            match execute_on(self.vault.root(), job, today, &zone, &tick, outbox) {
                 JobEffect::Quiet => {
                     tracing::info!(job = %job.name, "startup snapshot clean");
                 }
+                JobEffect::RemindRows(items) => {
+                    tracing::warn!(job = %job.name, count = items.len(), "startup snapshot needs attention");
+                    let now = chrono::Utc::now();
+                    self.send_reminder_rows(&items, job, false, now);
+                }
+                JobEffect::Continue => {}
                 JobEffect::Remind(text) => {
                     tracing::warn!(job = %job.name, "startup snapshot needs attention");
                     let now = chrono::Utc::now();
                     self.send_reminder(&text, job, false, now);
                 }
-                JobEffect::Continue => {}
             }
         }
     }
@@ -206,6 +235,7 @@ impl Daemon {
             now: self.reminder_now(&zone),
             settings: self.vault_reminders.clone(),
             state_path: self.reminder_state_path.clone(),
+            zone: zone.iana_name().to_string(),
         }
     }
 
@@ -223,13 +253,17 @@ impl Daemon {
         catch_up: bool,
         fire_at: chrono::DateTime<chrono::Utc>,
     ) {
-        let item = crate::reminders::MechanicalReminder {
-            idempotency_key: format!("job/{}/{}", job.kind, fire_at.to_rfc3339()),
-            title: job.name.clone(),
-            body: text.to_string(),
-            due_at: fire_at,
-            catch_up,
-        };
+        let item = mechanical_from_text(job, text, catch_up, fire_at);
+        self.send_reminder_rows(std::slice::from_ref(&item), job, catch_up, fire_at);
+    }
+
+    fn send_reminder_rows(
+        &self,
+        items: &[crate::reminders::MechanicalReminder],
+        job: &JobRequest,
+        _catch_up: bool,
+        fire_at: chrono::DateTime<chrono::Utc>,
+    ) {
         if let (Some(outbox), Some(delivery)) = (&self.outbox, &self.outbox_delivery) {
             let telegram_ready = self.reminder.is_some()
                 || crate::reminders::TelegramReminderSender::from_env().is_some();
@@ -238,7 +272,7 @@ impl Daemon {
                 &self.reminders_config,
                 delivery,
                 telegram_ready,
-                &[item],
+                items,
                 chrono::Utc::now(),
             ) {
                 tracing::warn!(error = %err, "outbox enqueue failed");
@@ -247,16 +281,43 @@ impl Daemon {
             }
             return;
         }
-        let Some(notifier) = self.reminder.clone() else {
-            tracing::warn!(%text, "reminder bot is not configured; message not sent");
-            return;
-        };
-        let text = text.to_string();
-        tokio::spawn(async move {
-            if let Err(e) = notifier.notify(&text).await {
-                tracing::warn!(error = %e, "reminder delivery failed");
-            }
-        });
+        if items.len() == 1 {
+            let Some(notifier) = self.reminder.clone() else {
+                tracing::warn!("reminder bot is not configured; message not sent");
+                return;
+            };
+            let text = items[0].body.clone();
+            tokio::spawn(async move {
+                if let Err(e) = notifier.notify(&text).await {
+                    tracing::warn!(error = %e, "reminder delivery failed");
+                }
+            });
+        }
+    }
+}
+
+fn mechanical_from_text(
+    job: &JobRequest,
+    text: &str,
+    catch_up: bool,
+    fire_at: chrono::DateTime<chrono::Utc>,
+) -> crate::reminders::MechanicalReminder {
+    crate::reminders::MechanicalReminder {
+        idempotency_key: format!("job/{}/{}", job.kind, fire_at.to_rfc3339()),
+        title: job.name.clone(),
+        body: text.to_string(),
+        due_at: fire_at,
+        catch_up,
+    }
+}
+
+fn mechanical_from_vault(row: crate::vault_pings::DueReminderRow) -> crate::reminders::MechanicalReminder {
+    crate::reminders::MechanicalReminder {
+        idempotency_key: row.idempotency_key,
+        title: row.title,
+        body: row.body,
+        due_at: row.due_at,
+        catch_up: false,
     }
 }
 

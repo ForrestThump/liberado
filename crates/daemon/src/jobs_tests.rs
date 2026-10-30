@@ -41,6 +41,7 @@ fn idle_tick() -> crate::vault_pings::ReminderTick {
             .expect("time"),
         settings: liberado_config::VaultRemindersConfig::default(),
         state_path: std::path::PathBuf::from("vault-reminder-fires.json"),
+        zone: "UTC".into(),
     }
 }
 
@@ -52,6 +53,7 @@ fn execute(dir: &std::path::Path, request: &JobRequest) -> JobEffect {
         zone.now().date_naive(),
         zone.iana_name(),
         &idle_tick(),
+        false,
     )
 }
 
@@ -272,6 +274,7 @@ fn event_ping_message_names_the_zone_for_a_fixed_day() {
         today,
         "America/Chicago",
         &idle_tick(),
+        false,
     ) {
         JobEffect::Remind(text) => text,
         other => panic!("expected a reminder, got {other:?}"),

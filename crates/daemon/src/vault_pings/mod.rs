@@ -6,6 +6,7 @@
 //! `docs/spec/liberado-architecture.md`). Dates are calendar dates in the operator zone.
 //! `cron_expr` stays UTC.
 
+mod local_time;
 mod date;
 mod events;
 mod remind;
@@ -15,7 +16,7 @@ mod walk;
 
 pub(crate) use events::event_ping_message;
 pub(crate) use tasks::task_ping_message;
-pub(crate) use tick::{ReminderTick, reminder_message};
+pub(crate) use tick::{DueReminderRow, ReminderTick, due_reminder_rows, reminder_message};
 
 #[cfg(test)]
 pub(crate) use events::{EVENT_HORIZON_DAYS, VaultEvent, event_in_window};
