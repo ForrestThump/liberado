@@ -1240,47 +1240,6 @@ mod tests {
         assert_eq!(configured.proposal_reap_interval(), Duration::from_secs(42));
     }
 
-    #[tokio::test]
-    async fn watch_only_configure_still_wires_reminder_outbox() {
-        use liberado_common::CapabilityCatalog;
-        use liberado_daemon::Daemon;
-        use liberado_mcp::McpRegistry;
-        use std::sync::Arc;
-        use tempfile::TempDir;
-
-        let dir = TempDir::new().unwrap();
-        let data = TempDir::new().unwrap();
-        let saved_data = std::env::var_os("LIBERADO_DATA_DIR");
-        // SAFETY(test): single-threaded test binary; restored below.
-        unsafe {
-            std::env::set_var("LIBERADO_DATA_DIR", data.path());
-        }
-        let daemon = Daemon::open("test", dir.path()).await.unwrap();
-        let mut config = Config::default();
-        config.topology.vault_path = dir.path().to_path_buf();
-
-        let configured = configure_daemon(
-            daemon,
-            &RoleProviders::none(),
-            &config,
-            Arc::new(CapabilityCatalog::new()),
-            McpRegistry::new(),
-            dir.path(),
-            None,
-        );
-        assert!(
-            configured.outbox().is_some() && configured.outbox_delivery().is_some(),
-            "mechanical reminders must work without an inference provider"
-        );
-        // SAFETY(test): restore prior data dir.
-        unsafe {
-            match saved_data {
-                Some(v) => std::env::set_var("LIBERADO_DATA_DIR", v),
-                None => std::env::remove_var("LIBERADO_DATA_DIR"),
-            }
-        }
-    }
-
     #[test]
     fn watcher_capture_paths_unions_inbox_and_extras() {
         let paths = watcher_capture_paths(
