@@ -76,6 +76,8 @@ fn app_with(config: liberado_bootstrap::Config) -> (Router, Arc<GoalSessionHub>)
         live_mcp: liberado_bootstrap::LiveMcpController::empty(),
         drain: crate::shutdown::DrainGate::default(),
         approval_hub: None,
+        outbox: None,
+        outbox_delivery: None,
     });
     let app = Router::new()
         .route("/api/goals", axum::routing::post(goals_start))
@@ -185,6 +187,8 @@ async fn domains_list_omits_coding_when_the_pack_is_not_registered() {
         live_mcp: liberado_bootstrap::LiveMcpController::empty(),
         drain: crate::shutdown::DrainGate::default(),
         approval_hub: None,
+        outbox: None,
+        outbox_delivery: None,
     });
     let app = Router::new()
         .route("/api/goals/domains", axum::routing::get(goals_domains))
