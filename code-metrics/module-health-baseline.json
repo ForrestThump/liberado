@@ -456,16 +456,10 @@
     "cyclomatic": 58
   },
   "crates/cli/src/ci_cmd.rs": {
-    "ploc": 392,
-    "lloc": 95,
-    "functions": 36,
-    "cyclomatic": 104
-  },
-  "crates/cli/src/ci_cmd/announce_compare_tests.rs": {
-    "ploc": 19,
-    "lloc": 7,
-    "functions": 1,
-    "cyclomatic": 2
+    "ploc": 227,
+    "lloc": 51,
+    "functions": 21,
+    "cyclomatic": 67
   },
   "crates/cli/src/ci_cmd/coverage_tools.rs": {
     "ploc": 125,
@@ -473,23 +467,95 @@
     "functions": 10,
     "cyclomatic": 28
   },
-  "crates/cli/src/ci_cmd/crap_baseline_ratchet.rs": {
-    "ploc": 111,
-    "lloc": 28,
-    "functions": 14,
+  "crates/cli/src/ci_cmd/diff_gate/body.rs": {
+    "ploc": 80,
+    "lloc": 39,
+    "functions": 13,
+    "cyclomatic": 24
+  },
+  "crates/cli/src/ci_cmd/diff_gate/cache.rs": {
+    "ploc": 101,
+    "lloc": 39,
+    "functions": 11,
+    "cyclomatic": 30
+  },
+  "crates/cli/src/ci_cmd/diff_gate/classify.rs": {
+    "ploc": 496,
+    "lloc": 127,
+    "functions": 43,
+    "cyclomatic": 68
+  },
+  "crates/cli/src/ci_cmd/diff_gate/decide.rs": {
+    "ploc": 292,
+    "lloc": 79,
+    "functions": 23,
+    "cyclomatic": 36
+  },
+  "crates/cli/src/ci_cmd/diff_gate/dep_seed.rs": {
+    "ploc": 327,
+    "lloc": 148,
+    "functions": 30,
+    "cyclomatic": 94
+  },
+  "crates/cli/src/ci_cmd/diff_gate/git_io.rs": {
+    "ploc": 318,
+    "lloc": 126,
+    "functions": 33,
+    "cyclomatic": 58
+  },
+  "crates/cli/src/ci_cmd/diff_gate/hunks.rs": {
+    "ploc": 253,
+    "lloc": 106,
+    "functions": 23,
+    "cyclomatic": 57
+  },
+  "crates/cli/src/ci_cmd/diff_gate/limits.rs": {
+    "ploc": 63,
+    "lloc": 20,
+    "functions": 4,
+    "cyclomatic": 11
+  },
+  "crates/cli/src/ci_cmd/diff_gate/measure.rs": {
+    "ploc": 462,
+    "lloc": 103,
+    "functions": 40,
+    "cyclomatic": 108
+  },
+  "crates/cli/src/ci_cmd/diff_gate/measure_tests.rs": {
+    "ploc": 270,
+    "lloc": 136,
+    "functions": 25,
     "cyclomatic": 39
   },
-  "crates/cli/src/ci_cmd/crap_failure.rs": {
-    "ploc": 23,
-    "lloc": 6,
-    "functions": 1,
-    "cyclomatic": 5
-  },
-  "crates/cli/src/ci_cmd/crap_failure_tests.rs": {
+  "crates/cli/src/ci_cmd/diff_gate/mod.rs": {
     "ploc": 21,
-    "lloc": 9,
-    "functions": 2,
-    "cyclomatic": 5
+    "lloc": 0,
+    "functions": 0,
+    "cyclomatic": 1
+  },
+  "crates/cli/src/ci_cmd/diff_gate/model.rs": {
+    "ploc": 91,
+    "lloc": 2,
+    "functions": 8,
+    "cyclomatic": 16
+  },
+  "crates/cli/src/ci_cmd/diff_gate/report.rs": {
+    "ploc": 289,
+    "lloc": 50,
+    "functions": 23,
+    "cyclomatic": 43
+  },
+  "crates/cli/src/ci_cmd/diff_gate/run.rs": {
+    "ploc": 543,
+    "lloc": 115,
+    "functions": 40,
+    "cyclomatic": 70
+  },
+  "crates/cli/src/ci_cmd/diff_gate/spans.rs": {
+    "ploc": 316,
+    "lloc": 161,
+    "functions": 36,
+    "cyclomatic": 102
   },
   "crates/cli/src/ci_cmd/dispatch.rs": {
     "ploc": 158,
@@ -515,18 +581,6 @@
     "functions": 8,
     "cyclomatic": 27
   },
-  "crates/cli/src/ci_cmd/new_function_ceiling.rs": {
-    "ploc": 110,
-    "lloc": 28,
-    "functions": 12,
-    "cyclomatic": 26
-  },
-  "crates/cli/src/ci_cmd/new_function_ceiling_tests.rs": {
-    "ploc": 79,
-    "lloc": 15,
-    "functions": 8,
-    "cyclomatic": 9
-  },
   "crates/cli/src/ci_cmd/preflight.rs": {
     "ploc": 152,
     "lloc": 36,
@@ -534,22 +588,16 @@
     "cyclomatic": 21
   },
   "crates/cli/src/ci_cmd/runtime_support.rs": {
-    "ploc": 41,
-    "lloc": 7,
-    "functions": 4,
-    "cyclomatic": 13
-  },
-  "crates/cli/src/ci_cmd_baseline_stage_tests.rs": {
-    "ploc": 131,
-    "lloc": 48,
-    "functions": 9,
-    "cyclomatic": 14
+    "ploc": 30,
+    "lloc": 5,
+    "functions": 3,
+    "cyclomatic": 9
   },
   "crates/cli/src/ci_cmd_tests.rs": {
-    "ploc": 428,
-    "lloc": 187,
-    "functions": 33,
-    "cyclomatic": 37
+    "ploc": 224,
+    "lloc": 87,
+    "functions": 17,
+    "cyclomatic": 21
   },
   "crates/cli/src/ci_cmd_usage_tests.rs": {
     "ploc": 7,
@@ -654,10 +702,10 @@
     "cyclomatic": 91
   },
   "crates/cli/src/function_complexity_cmd.rs": {
-    "ploc": 322,
-    "lloc": 89,
-    "functions": 21,
-    "cyclomatic": 56
+    "ploc": 7,
+    "lloc": 0,
+    "functions": 2,
+    "cyclomatic": 3
   },
   "crates/cli/src/lib.rs": {
     "ploc": 220,
@@ -733,9 +781,15 @@
   },
   "crates/cli/src/readiness_cmd/debian_crap.rs": {
     "ploc": 434,
-    "lloc": 82,
-    "functions": 39,
-    "cyclomatic": 90
+    "lloc": 78,
+    "functions": 38,
+    "cyclomatic": 86
+  },
+  "crates/cli/src/readiness_cmd/windows_pin.rs": {
+    "ploc": 66,
+    "lloc": 13,
+    "functions": 8,
+    "cyclomatic": 16
   },
   "crates/cli/src/shepherd_cmd.rs": {
     "ploc": 826,

@@ -1,31 +1,15 @@
 //! Repository checks that used to live in shell-specific preflight scripts.
 //!
-//! ## CRAP ratchet
+//! ## Diff gate
 //!
-//! `code-metrics/crap-baseline.json` is the last best per-function score. GitHub only *reads* it
-//! (`liberado ci crap` / `--fail-regression`, keyed by file + function name, not
-//! line). A local `liberado ci` run that stays
-//! green *ratchets* it (`liberado ci ratchet`). Existing functions only take
-//! non-worsening measurements; ignored low-score noise is not saved. That is
-//! the same check-vs-write split as `liberado docs crate-map` / `--write`.
+//! `liberado ci crap` and `liberado ci complexity` score only functions the git diff
+//! touched since the merge-base. New functions must meet the config limits. A function
+//! that already exists on the merge-base may stay over a limit, and that score must not
+//! rise. There is no committed per-function baseline and no waiver. See
+//! [`diff_gate`] for the rename, copy, and split rules.
 //!
-//! GitHub must not rewrite the file. Coverage is host-sensitive, and a bot commit
-//! on `main` races every open PR.
-//!
-//! After a green *Linux* write, `just ci` stages `code-metrics/crap-baseline.json`. If that
-//! is the only change, it amends HEAD (`--no-verify`, because this process just
-//! ran the suite) so a subsequent `git push` includes the ratchet. If the tree
-//! already has other dirty files, it only stages — the agent is about to commit
-//! its own work.
-//!
-//! Coverage is host-sensitive. Non-Linux `just ci` / `liberado ci crap` checks
-//! the 29.9 new-function ceiling only. Existing baseline entries may sit above
-//! 30; cargo-crap `--fail-above` would fail them, so Liberado applies the
-//! ceiling to entries cargo-crap's move-aware delta matcher classifies as new.
-//! The per-function ratchet (`--fail-regression`) runs on Linux, which is
-//! GitHub's Ubuntu job.
-//! A current score below 10 is not a regression: cargo-crap `--min` drops it
-//! before the detector runs, so a 4→5 move does not fail the job.
+//! The same host measures both sides, so Windows and Linux both apply the full CRAP rule.
+//! Module-health and unwrap baselines stay a Linux-only write.
 //!
 //! `just ci` is `cargo run -p liberado-cli -- ci`. On Windows, `cargo test` cannot
 //! overwrite a running `target/debug/liberado.exe` (Access is denied). A second
@@ -50,31 +34,17 @@ use std::process::Stdio;
 use liberado_common::process::std_command;
 use serde_json::Value;
 
-/// Pinned so a cargo-crap release cannot silently reshape the baseline schema.
+/// Pinned so a cargo-crap release cannot silently reshape the report schema.
 const CARGO_CRAP_VERSION: &str = "0.4.3";
-const BASELINE_FILE: &str = "code-metrics/crap-baseline.json";
 const LCOV_FILE: &str = ".liberado/crap.lcov";
 const CURRENT_REPORT: &str = ".liberado/crap-current.json";
-const DELTA_REPORT: &str = ".liberado/crap-delta.json";
-const USAGE: &str = "usage: liberado ci [check|crap|crap-linux|ratchet|modules|modules-ratchet|complexity|complexity-ratchet|unwraps|unwraps-ratchet|ready|verify-ready]";
+const USAGE: &str = "usage: liberado ci [--base REV] [check|crap|crap-linux|modules|modules-ratchet|complexity|unwraps|unwraps-ratchet|ready|verify-ready]";
 const VACATED_BIN: &str = "liberado-ci";
 const CI_LOG_FILE: &str = ".liberado/ci.log";
 const EXTRACT_MAX_LINES: usize = liberado_common::failure_excerpt::EXTRACT_MAX_LINES;
 
-/// New-function ceiling. Must match `.cargo-crap.toml` `threshold`.
-/// Existing baseline entries may sit above this score; only functions that
-/// cargo-crap classifies as new are failed against it.
-const CRAP_CEILING: &str = "29.9";
-
-/// cargo-crap `--min` keeps functions with `crap >= min`. Passing 10 drops a
-/// current score below 10, so a 4→5 move is not a regression. Do not put this
-/// in `.cargo-crap.toml`: that file is also read when writing the baseline, and
-/// a filtered write would make a 4→50 jump look like a new function under the ceiling.
-const CRAP_REGRESSION_MIN: &str = "10";
-
-/// Report generation must not enforce `.cargo-crap.toml`'s `fail-above` policy. The explicit
-/// compare that follows owns pass/fail and prints the offending functions. An effectively
-/// unreachable threshold overrides the configured ceiling for this report-only command.
+/// Report generation must not enforce `.cargo-crap.toml`'s `fail-above` policy. The diff
+/// gate owns pass/fail. An unreachable threshold overrides the configured ceiling here.
 const CRAP_REPORT_THRESHOLD: &str = "1e308";
 const CRAP_REPORT_ARGS: &[&str] = &[
     "crap",
@@ -93,8 +63,7 @@ const CRAP_REPORT_ARGS: &[&str] = &[
 /// llvm-cov flags live here, never after `--`. After `--` they become
 /// test-binary arguments, and libtest rejects them (`Unrecognized option`).
 /// `--ignore-run-fail` still writes the LCOV when a test is red (the test
-/// job already owns pass/fail). That is how a host-local `config check`
-/// failure cannot block the baseline write.
+/// job already owns pass/fail).
 const LLVM_COV_ARGS: &[&str] = &[
     "llvm-cov",
     "--workspace",
@@ -108,62 +77,20 @@ const LLVM_COV_ARGS: &[&str] = &[
     "--ignore-run-fail",
 ];
 
-/// Printed after `cargo crap` exits non-zero when a per-function score rose.
-const CRAP_REGRESSION_HINT: &str = "\
-CRAP check failed. A function's score went up vs code-metrics/crap-baseline.json \
-(per-function ratchet: 40 cannot become 45, even under the 29.9 new-function ceiling). \
-A current score below 10 is ignored. cargo-crap named the functions above. \
-Split the function or add tests until each score is at or below its baseline. \
-Do not raise the baseline. `just ci` will not rewrite it while this check is red. \
-Fix locally, then push.";
-
-/// Printed after a new function exceeds the ceiling, or when the baseline is empty.
-const CRAP_CEILING_HINT: &str = "\
-CRAP check failed. A new function is above the 29.9 ceiling. \
-Split it or add tests. New functions must land below 30. \
-Existing functions may sit above 30; the per-function ratchet holds them.";
-
-/// One-line GitHub Actions annotation (newlines are not legal in `::error`).
-const CRAP_REGRESSION_GH: &str = "\
-A function CRAP score went up vs code-metrics/crap-baseline.json (per-function ratchet). \
-Scores below 10 are ignored. Split the function or add tests. \
-Do not raise the baseline. Linux `just ci` or this Ubuntu job is the check that matches the file.";
-
-/// Banner when this host is not Linux: do not run `--fail-regression` here.
-const CRAP_HOST_CEILING_ONLY: &str = "\
-[liberado ci] this host is not Linux — new-function ceiling only (29.9). \
-Existing functions are not compared here; GitHub's Ubuntu job runs the per-function ratchet.";
-
-const CRAP_EMPTY_BASELINE: &str = "\
-[liberado ci] code-metrics/crap-baseline.json has no entries yet — ceiling only (`--fail-above`). \
-A green Linux `liberado ci ratchet` fills the per-function ratchet.";
-
-const CRAP_COMPARE_SUMMARY: &str = "\
-[liberado ci] CRAP compare against code-metrics/crap-baseline.json \
-(per-function ratchet on Linux; scores below 10 are ignored; 29.9 is the new-function ceiling)";
-
-const CRAP_CEILING_GH: &str = "\
-A new function is above the 29.9 CRAP ceiling. Split it or add tests. \
-New functions must land below 30.";
-
 mod coverage_tools;
-mod crap_baseline_ratchet;
+pub(crate) mod diff_gate;
 mod log;
 mod preflight;
 #[cfg(test)]
 pub(crate) use log::extract_ci_failures;
 pub(crate) use log::{CiLog, run_cmd};
-/// Dispatch `liberado ci …`. No subcommand means the local full run (gates + ratchet).
+/// Dispatch `liberado ci …`. No subcommand means the local full run.
 mod dispatch;
 mod job_budget;
-mod new_function_ceiling;
 mod runtime_support;
 
-#[cfg(test)]
-pub(super) use crap_baseline_ratchet::{keep_worse_existing_crap_entries, ratchet_crap_baseline};
-use crap_baseline_ratchet::{write_after_success, write_and_stage_ratcheted_baseline};
 pub use dispatch::run;
-use runtime_support::{announce_staged_baseline, move_running_image, vacated_image_destination};
+use runtime_support::{move_running_image, vacated_image_destination};
 
 fn with_log(
     body: impl FnOnce(&CiLog) -> Result<(), Box<dyn std::error::Error>>,
@@ -204,28 +131,13 @@ fn check(log: &CiLog) -> Result<(), Box<dyn std::error::Error>> {
     crate::branch_cleaner_ci::run(log)
 }
 
-/// Full local CI: the ship preflight, then the CRAP check, then ratchet and stage the baseline.
-/// Compare the current tree against `code-metrics/crap-baseline.json`. Never writes the baseline.
-///
-/// Always writes `.liberado/crap-current.json` (gitignored) so a red GitHub job
-/// still has an Ubuntu-shaped report to commit as the next baseline. Coverage is
-/// host-sensitive; a Windows-generated file fails `--fail-regression` on Ubuntu.
-fn crap_check(log: &CiLog) -> Result<(), Box<dyn std::error::Error>> {
-    generate_lcov(log)?;
-    write_crap_json(log, CURRENT_REPORT)?;
-    compare_to_baseline(log)
+/// Score changed functions for CRAP. Writes `.liberado/crap-current.json` and the diff-gate report.
+fn crap_check(log: &CiLog, base: Option<&str>) -> Result<(), Box<dyn std::error::Error>> {
+    diff_gate::check_crap(log, base)
 }
 
 pub(crate) fn crap_for_root(root: &Path) -> Result<(), Box<dyn std::error::Error>> {
-    crap_check(&CiLog::create(root)?)
-}
-
-/// Check, then update `code-metrics/crap-baseline.json` with new functions and non-worsening scores.
-fn crap_ratchet(log: &CiLog) -> Result<(), Box<dyn std::error::Error>> {
-    generate_lcov(log)?;
-    write_after_success(compare_to_baseline(log), || {
-        write_and_stage_ratcheted_baseline(log)
-    })
+    crap_check(&CiLog::create(root)?, None)
 }
 
 fn generate_lcov(log: &CiLog) -> Result<(), Box<dyn std::error::Error>> {
@@ -237,48 +149,7 @@ fn generate_lcov(log: &CiLog) -> Result<(), Box<dyn std::error::Error>> {
     )?;
     std::fs::create_dir_all(log.root.join(".liberado"))?;
     run_cmd(log, "cargo", LLVM_COV_ARGS)?;
-    relativize_lcov(&log.root)
-}
-
-fn compare_to_baseline(log: &CiLog) -> Result<(), Box<dyn std::error::Error>> {
-    require_crap(&log.root)?;
-    let fail_regression = announce_compare(log)?;
-    new_function_ceiling::compare(log, fail_regression)
-}
-
-/// Record host/baseline banners in the log. Ceiling-only and empty-baseline
-/// also go to the console: they change what this run compared.
-fn announce_compare(log: &CiLog) -> Result<bool, Box<dyn std::error::Error>> {
-    let has_entries = baseline_has_entries(&log.root.join(BASELINE_FILE));
-    let fail_regression = uses_per_function_ratchet(has_entries);
-    for line in compare_banners(has_entries, fail_regression) {
-        log.writeln(line)?;
-        if line == CRAP_HOST_CEILING_ONLY || line == CRAP_EMPTY_BASELINE {
-            eprintln!("{line}");
-        }
-    }
-    Ok(fail_regression)
-}
-
-fn compare_banners(has_entries: bool, fail_regression: bool) -> Vec<&'static str> {
-    let mut lines = Vec::new();
-    if !has_entries {
-        lines.push(CRAP_EMPTY_BASELINE);
-    } else if !fail_regression {
-        lines.push(CRAP_HOST_CEILING_ONLY);
-    }
-    lines.push(CRAP_COMPARE_SUMMARY);
-    lines
-}
-
-/// `--fail-regression` only on Linux. Coverage numbers are host-sensitive;
-/// a Windows compare against the Ubuntu baseline false-fails (`explain_write` +127).
-fn uses_per_function_ratchet(baseline_has_entries: bool) -> bool {
-    baseline_has_entries && cfg!(target_os = "linux")
-}
-
-fn write_baseline(log: &CiLog) -> Result<(), Box<dyn std::error::Error>> {
-    crap_baseline_ratchet::write_ratcheted_baseline(log)
+    relativize_lcov(&log.root, &log.root.join(LCOV_FILE))
 }
 
 pub(super) fn write_crap_json(log: &CiLog, output: &str) -> Result<(), Box<dyn std::error::Error>> {
@@ -291,9 +162,8 @@ pub(super) fn write_crap_json(log: &CiLog, output: &str) -> Result<(), Box<dyn s
 
 /// Strip the workspace root from an LCOV `SF:` path so Ubuntu CI and a Windows
 /// `just ci` compare the same keys (`crates/foo.rs`, not `C:\Users\...\foo.rs`).
-fn relativize_lcov(root: &Path) -> Result<(), Box<dyn std::error::Error>> {
-    let path = root.join(LCOV_FILE);
-    let text = std::fs::read_to_string(&path)?;
+fn relativize_lcov(root: &Path, lcov_file: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    let text = std::fs::read_to_string(lcov_file)?;
     let mut out = String::with_capacity(text.len());
     for line in text.lines() {
         if let Some(file) = line.strip_prefix("SF:") {
@@ -305,7 +175,7 @@ fn relativize_lcov(root: &Path) -> Result<(), Box<dyn std::error::Error>> {
             out.push('\n');
         }
     }
-    std::fs::write(path, out)?;
+    std::fs::write(lcov_file, out)?;
     Ok(())
 }
 
@@ -363,66 +233,6 @@ fn strip_root_prefix(root: &Path, file: &Path) -> Option<String> {
         .map(|relative| relative.to_string_lossy().replace('\\', "/"))
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum StageOutcome {
-    Unchanged,
-    Staged,
-    Amended,
-}
-
-/// Stage `code-metrics/crap-baseline.json`. Amend HEAD only when that file is the sole dirty path.
-///
-/// `--no-verify` on the amend: this process just ran the suite, and a pre-commit hook
-/// that called `just ci` would recurse.
-fn stage_ratcheted_baseline(root: &Path) -> Result<StageOutcome, Box<dyn std::error::Error>> {
-    if !is_git_work_tree(root) {
-        eprintln!("[liberado ci] not a git work tree — left {BASELINE_FILE} unstaged");
-        return Ok(StageOutcome::Staged);
-    }
-    git(root, &["add", "--", BASELINE_FILE])?;
-    let porcelain = git(root, &["status", "--porcelain"])?;
-    let mut baseline_dirty = false;
-    let mut other_dirty = false;
-    for line in porcelain.lines() {
-        let Some(path) = porcelain_path(line) else {
-            continue;
-        };
-        if path == BASELINE_FILE {
-            baseline_dirty = true;
-        } else {
-            other_dirty = true;
-        }
-    }
-    if !baseline_dirty {
-        return Ok(StageOutcome::Unchanged);
-    }
-    if other_dirty {
-        return Ok(StageOutcome::Staged);
-    }
-    git(root, &["commit", "--amend", "--no-edit", "--no-verify"])?;
-    Ok(StageOutcome::Amended)
-}
-
-fn is_git_work_tree(root: &Path) -> bool {
-    std_command("git")
-        .args(["rev-parse", "--is-inside-work-tree"])
-        .current_dir(root)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .is_ok_and(|status| status.success())
-}
-
-fn porcelain_path(line: &str) -> Option<&str> {
-    // `XY PATH` — two status columns, a space, then the path. Renames (`R  a -> b`)
-    // are not expected for this file; treat the whole remainder as the path.
-    if line.len() < 4 {
-        return None;
-    }
-    Some(line[3..].trim())
-}
-
 fn git(root: &Path, args: &[&str]) -> Result<String, Box<dyn std::error::Error>> {
     let output = std_command("git")
         .args(args)
@@ -469,49 +279,6 @@ fn require_tool(
     }
 }
 
-/// Explain a red CRAP gate in the log, and as a GitHub annotation when CI set `GITHUB_ACTIONS`.
-fn emit_crap_failure(
-    has_ratchet: bool,
-    error: Box<dyn std::error::Error>,
-) -> Box<dyn std::error::Error> {
-    crap_failure::emit_crap_failure_to(
-        std::env::var_os("GITHUB_ACTIONS").is_some(),
-        has_ratchet,
-        error,
-    )
-}
-
-mod crap_failure;
-
-#[cfg(test)]
-#[path = "ci_cmd/crap_failure_tests.rs"]
-mod crap_failure_tests;
-
-#[cfg(test)]
-#[path = "ci_cmd/new_function_ceiling_tests.rs"]
-mod new_function_ceiling_tests;
-
-fn crap_failure_hint(has_ratchet: bool) -> &'static str {
-    if has_ratchet {
-        CRAP_REGRESSION_HINT
-    } else {
-        CRAP_CEILING_HINT
-    }
-}
-
-fn baseline_has_entries(path: &Path) -> bool {
-    let Ok(text) = std::fs::read_to_string(path) else {
-        return false;
-    };
-    let Ok(value) = serde_json::from_str::<Value>(&text) else {
-        return false;
-    };
-    value
-        .get("entries")
-        .and_then(Value::as_array)
-        .is_some_and(|entries| !entries.is_empty())
-}
-
 fn repository_root() -> Result<PathBuf, Box<dyn std::error::Error>> {
     let mut candidate = std::env::current_dir()?;
     loop {
@@ -529,10 +296,6 @@ fn repository_root() -> Result<PathBuf, Box<dyn std::error::Error>> {
 #[cfg(test)]
 #[path = "ci_cmd_usage_tests.rs"]
 mod ci_cmd_usage_tests;
-
-#[cfg(test)]
-#[path = "ci_cmd_baseline_stage_tests.rs"]
-mod ci_cmd_baseline_stage_tests;
 
 #[cfg(test)]
 #[path = "ci_cmd_tests.rs"]

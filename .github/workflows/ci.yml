@@ -57,6 +57,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          fetch-depth: 0
 
       - name: Rust toolchain (from rust-toolchain.toml)
         run: rustup show
@@ -75,10 +76,32 @@ jobs:
           cargo clippy --locked -p liberado-test-support --all-targets -- -D warnings -D clippy::cognitive_complexity
           cargo test --locked -p liberado-test-support --test workflow_security_rules
 
-      - name: Host-stable function complexity
+      - name: Resolve the diff-gate base
+        id: gate_base
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            rev="${{ github.event.pull_request.base.sha }}"
+          else
+            rev="HEAD^1"
+          fi
+          mb="$(git merge-base HEAD "$rev")"
+          echo "rev=$rev" >> "$GITHUB_OUTPUT"
+          echo "merge_base=$mb" >> "$GITHUB_OUTPUT"
+
+      - name: Cyclomatic diff gate
         # Use the same policy implementation as `just ready`. The raw cargo-crap
         # defaults belong to the coverage-sensitive CRAP gate, not this gate.
-        run: cargo run --locked -p liberado-cli -- ci complexity
+        run: cargo run --locked -p liberado-cli -- ci complexity --base ${{ steps.gate_base.outputs.merge_base }}
+
+      - name: Upload the cyclomatic diff-gate report
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: diff-gate-report-complexity
+          path: .liberado/diff-gate-report.json
+          if-no-files-found: warn
 
   test:
     name: test (${{ matrix.os }})
@@ -214,6 +237,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          fetch-depth: 0
 
       - name: Rust toolchain (from rust-toolchain.toml)
         run: rustup show
@@ -226,8 +250,46 @@ jobs:
         with:
           tool: cargo-llvm-cov,cargo-crap@0.4.3
 
-      - name: Compare CRAP scores to the committed baseline
-        run: cargo run --locked --quiet -p liberado-cli -- ci crap
+      - name: Resolve the diff-gate base
+        id: gate_base
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            rev="${{ github.event.pull_request.base.sha }}"
+          else
+            rev="HEAD^1"
+          fi
+          mb="$(git merge-base HEAD "$rev")"
+          echo "rev=$rev" >> "$GITHUB_OUTPUT"
+          echo "merge_base=$mb" >> "$GITHUB_OUTPUT"
+
+      - name: Restore the merge-base CRAP report
+        uses: actions/cache/restore@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: .liberado/crap-current.json
+          key: crap-report-${{ steps.gate_base.outputs.merge_base }}
+
+      - name: Move a restored report off the HEAD path
+        shell: bash
+        run: |
+          set -euo pipefail
+          src=".liberado/crap-current.json"
+          dest=".liberado/crap-base-${{ steps.gate_base.outputs.merge_base }}.json"
+          if [ -f "$src" ]; then
+            mv "$src" "$dest"
+          fi
+
+      - name: CRAP diff gate
+        run: cargo run --locked --quiet -p liberado-cli -- ci crap --base ${{ steps.gate_base.outputs.merge_base }}
+
+      - name: Save this commit's CRAP report
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        continue-on-error: true
+        uses: actions/cache/save@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: .liberado/crap-current.json
+          key: crap-report-${{ github.sha }}
 
       - name: Upload this host's CRAP report
         if: always()
@@ -235,6 +297,14 @@ jobs:
         with:
           name: crap-current-ubuntu
           path: .liberado/crap-current.json
+          if-no-files-found: warn
+
+      - name: Upload the CRAP diff-gate report
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: diff-gate-report-crap
+          path: .liberado/diff-gate-report.json
           if-no-files-found: warn
 
       - name: Upload the quiet-CI full log

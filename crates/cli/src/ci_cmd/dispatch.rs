@@ -1,11 +1,12 @@
 //! Argument dispatch for the repository CI commands.
 
-use super::{CiLog, USAGE, check, crap_check, crap_ratchet, repository_root, with_log};
+use super::{CiLog, USAGE, check, crap_check, repository_root, with_log};
 
 pub fn run(args: impl Iterator<Item = String>) -> Result<(), Box<dyn std::error::Error>> {
-    let mut args = args.peekable();
-    let command = parse_command(args.next().as_deref(), args.peek().is_none())?;
-    execute(command)
+    let collected: Vec<String> = args.collect();
+    let (base, verb) = split_args(&collected)?;
+    let command = parse_command(verb.as_deref())?;
+    execute(command, base)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -14,11 +15,9 @@ enum CiCommand {
     Check,
     Crap,
     CrapLinux,
-    Ratchet,
     Modules,
     ModulesRatchet,
     Complexity,
-    ComplexityRatchet,
     Unwraps,
     UnwrapsRatchet,
     Ready,
@@ -31,24 +30,43 @@ const CI_COMMANDS: &[(&str, CiCommand)] = &[
     ("check", CiCommand::Check),
     ("crap", CiCommand::Crap),
     ("crap-linux", CiCommand::CrapLinux),
-    ("ratchet", CiCommand::Ratchet),
     ("modules", CiCommand::Modules),
     ("modules-ratchet", CiCommand::ModulesRatchet),
     ("complexity", CiCommand::Complexity),
-    ("complexity-ratchet", CiCommand::ComplexityRatchet),
     ("unwraps", CiCommand::Unwraps),
     ("unwraps-ratchet", CiCommand::UnwrapsRatchet),
     ("ready", CiCommand::Ready),
     ("verify-ready", CiCommand::VerifyReady),
 ];
 
-fn parse_command(
-    verb: Option<&str>,
-    has_no_extra_args: bool,
-) -> Result<CiCommand, Box<dyn std::error::Error>> {
-    if !has_no_extra_args && verb.is_some() {
-        return Err(USAGE.into());
+fn split_args(
+    args: &[String],
+) -> Result<(Option<String>, Option<String>), Box<dyn std::error::Error>> {
+    let mut base = None;
+    let mut verb = None;
+    let mut index = 0;
+    while index < args.len() {
+        if args[index] == "--base" {
+            let Some(rev) = args.get(index + 1) else {
+                return Err(USAGE.into());
+            };
+            if base.is_some() || rev.starts_with('-') {
+                return Err(USAGE.into());
+            }
+            base = Some(rev.clone());
+            index += 2;
+            continue;
+        }
+        if verb.is_some() || args[index].starts_with('-') {
+            return Err(USAGE.into());
+        }
+        verb = Some(args[index].clone());
+        index += 1;
     }
+    Ok((base, verb))
+}
+
+fn parse_command(verb: Option<&str>) -> Result<CiCommand, Box<dyn std::error::Error>> {
     match verb {
         None => Ok(CiCommand::Local),
         Some(v) => CI_COMMANDS
@@ -59,32 +77,37 @@ fn parse_command(
     }
 }
 
-fn execute(command: CiCommand) -> Result<(), Box<dyn std::error::Error>> {
+fn execute(command: CiCommand, base: Option<String>) -> Result<(), Box<dyn std::error::Error>> {
     // Deliberately tiered: every tier stays under the complexity ceiling even though none of
     // these arms is unit-testable without running the real tool behind it (`parse_command`
     // above carries the testable half of this dispatch).
     match command {
-        CiCommand::Local => with_log(local_run),
+        CiCommand::Local => with_log(|log| local_run(log, base.as_deref())),
         CiCommand::Check => with_log(check),
-        CiCommand::Crap => with_log(crap_check),
-        CiCommand::Ratchet => with_log(crap_ratchet),
-        command => execute_health(command),
+        CiCommand::Crap => with_log(|log| crap_check(log, base.as_deref())),
+        command => execute_health(command, base),
     }
 }
 
-fn execute_health(command: CiCommand) -> Result<(), Box<dyn std::error::Error>> {
+fn execute_health(
+    command: CiCommand,
+    base: Option<String>,
+) -> Result<(), Box<dyn std::error::Error>> {
     match command {
         CiCommand::Modules => crate::module_health_cmd::check(&repository_root()?),
         CiCommand::ModulesRatchet => crate::module_health_cmd::ratchet(&repository_root()?),
-        command => execute_unwraps(command),
+        command => execute_unwraps(command, base),
     }
 }
 
-fn execute_unwraps(command: CiCommand) -> Result<(), Box<dyn std::error::Error>> {
+fn execute_unwraps(
+    command: CiCommand,
+    base: Option<String>,
+) -> Result<(), Box<dyn std::error::Error>> {
     match command {
         CiCommand::Unwraps => unwraps_check(&repository_root()?),
         CiCommand::UnwrapsRatchet => unwraps_ratchet(&repository_root()?),
-        command => execute_readiness(command),
+        command => execute_readiness(command, base),
     }
 }
 
@@ -114,11 +137,14 @@ fn unwraps_ratchet(_root: &Path) -> Result<(), Box<dyn std::error::Error>> {
     )
 }
 
-fn execute_readiness(command: CiCommand) -> Result<(), Box<dyn std::error::Error>> {
+fn execute_readiness(
+    command: CiCommand,
+    base: Option<String>,
+) -> Result<(), Box<dyn std::error::Error>> {
     if let Some(action) = readiness_action(command) {
         action(&repository_root()?)
     } else {
-        execute_complexity(command)
+        execute_complexity(command, base)
     }
 }
 
@@ -133,44 +159,37 @@ fn readiness_action(command: CiCommand) -> Option<ReadinessAction> {
     }
 }
 
-fn execute_complexity(command: CiCommand) -> Result<(), Box<dyn std::error::Error>> {
+fn execute_complexity(
+    command: CiCommand,
+    base: Option<String>,
+) -> Result<(), Box<dyn std::error::Error>> {
     match command {
-        CiCommand::Complexity => crate::function_complexity_cmd::check(&repository_root()?),
-        CiCommand::ComplexityRatchet => {
-            crate::function_complexity_cmd::ratchet(&repository_root()?)
+        CiCommand::Complexity => {
+            crate::function_complexity_cmd::check_against(&repository_root()?, base.as_deref())
         }
         _ => unreachable!("core CI commands are handled by execute"),
     }
 }
 
-fn local_run(log: &CiLog) -> Result<(), Box<dyn std::error::Error>> {
+fn local_run(log: &CiLog, base: Option<&str>) -> Result<(), Box<dyn std::error::Error>> {
     check(log)?;
-    finish_local_run(log)
+    finish_local_run(log, base)
 }
 
-fn finish_local_run(log: &CiLog) -> Result<(), Box<dyn std::error::Error>> {
-    local_audits(log)?;
+fn finish_local_run(log: &CiLog, base: Option<&str>) -> Result<(), Box<dyn std::error::Error>> {
+    local_audits(log, base)?;
     crate::readiness_cmd::record_full_ci(&log.root)
 }
 
-fn local_audits(log: &CiLog) -> Result<(), Box<dyn std::error::Error>> {
+fn local_audits(log: &CiLog, base: Option<&str>) -> Result<(), Box<dyn std::error::Error>> {
     crate::readiness_cmd::audit_docs(&log.root)?;
-    ratchet_quality(log)
+    ratchet_quality(log, base)
 }
 
-fn ratchet_quality(log: &CiLog) -> Result<(), Box<dyn std::error::Error>> {
+fn ratchet_quality(log: &CiLog, base: Option<&str>) -> Result<(), Box<dyn std::error::Error>> {
     run_quality_checks(&log.root)?;
-    run_host_crap(log)?;
+    crap_check(log, base)?;
     run_quality_ratchets(&log.root)
-}
-
-fn run_host_crap(log: &CiLog) -> Result<(), Box<dyn std::error::Error>> {
-    if cfg!(target_os = "linux") {
-        crap_ratchet(log)
-    } else {
-        eprintln!("[liberado ci] host CRAP deferred; final readiness runs the exact Linux gate");
-        Ok(())
-    }
 }
 
 fn run_quality_checks(root: &Path) -> Result<(), Box<dyn std::error::Error>> {
@@ -178,9 +197,8 @@ fn run_quality_checks(root: &Path) -> Result<(), Box<dyn std::error::Error>> {
     unwraps_check(root)
 }
 
-/// Linux `just ci` records a new best for module-health and unwraps. Other hosts compare only:
-/// a Windows rewrite dirties the tree and blocks `just ready` (Debian CRAP requires a clean HEAD),
-/// and GitHub's Ubuntu job is the host of truth — same split as CRAP.
+/// Linux `just ci` records a new best for module-health and unwraps. Other hosts compare only.
+/// A Windows rewrite dirties the tree and blocks `just ready` (Debian CRAP requires a clean HEAD).
 fn run_quality_ratchets(root: &Path) -> Result<(), Box<dyn std::error::Error>> {
     if cfg!(target_os = "linux") {
         write_quality_baselines(root)
@@ -200,7 +218,7 @@ fn write_quality_baselines(root: &Path) -> Result<(), Box<dyn std::error::Error>
 
 #[cfg(test)]
 mod tests {
-    use super::{CiCommand, parse_command};
+    use super::{CiCommand, parse_command, split_args};
 
     #[test]
     fn quality_baseline_auto_write_is_linux_only() {
@@ -209,7 +227,7 @@ mod tests {
             src.contains(
                 "if cfg!(target_os = \"linux\") {\n        write_quality_baselines(root)\n    } else {"
             ),
-            "quality baseline writes must be a compile-time Linux gate, matching host CRAP"
+            "module-health and unwrap writes must stay a compile-time Linux gate"
         );
         assert!(
             src.contains("module-health and unwrap baseline writes are Linux-only"),
@@ -224,17 +242,28 @@ mod tests {
             (Some("check"), CiCommand::Check),
             (Some("crap"), CiCommand::Crap),
             (Some("crap-linux"), CiCommand::CrapLinux),
-            (Some("ratchet"), CiCommand::Ratchet),
             (Some("modules"), CiCommand::Modules),
             (Some("modules-ratchet"), CiCommand::ModulesRatchet),
             (Some("complexity"), CiCommand::Complexity),
-            (Some("complexity-ratchet"), CiCommand::ComplexityRatchet),
             (Some("ready"), CiCommand::Ready),
             (Some("verify-ready"), CiCommand::VerifyReady),
         ] {
-            assert_eq!(parse_command(verb, true).unwrap(), expected);
+            assert_eq!(parse_command(verb).unwrap(), expected);
         }
-        assert!(parse_command(Some("unknown"), true).is_err());
-        assert!(parse_command(Some("modules"), false).is_err());
+        assert!(parse_command(Some("ratchet")).is_err());
+        assert!(parse_command(Some("complexity-ratchet")).is_err());
+        assert!(parse_command(Some("unknown")).is_err());
+    }
+
+    #[test]
+    fn base_may_precede_or_follow_the_verb() {
+        let (base, verb) = split_args(&["--base".into(), "abc".into(), "crap".into()]).unwrap();
+        assert_eq!(base.as_deref(), Some("abc"));
+        assert_eq!(verb.as_deref(), Some("crap"));
+        let (base, verb) =
+            split_args(&["complexity".into(), "--base".into(), "def".into()]).unwrap();
+        assert_eq!(base.as_deref(), Some("def"));
+        assert_eq!(verb.as_deref(), Some("complexity"));
+        assert!(split_args(&["crap".into(), "--nope".into()]).is_err());
     }
 }
