@@ -5,9 +5,9 @@ use std::sync::{Arc, Mutex};
 
 use chrono::{DateTime, Duration, Utc};
 
+use crate::MechanicalJob;
 use crate::cursor::ScheduleCursorStore;
 use crate::fire_at;
-use crate::MechanicalJob;
 
 pub const MECHANICAL_REMINDER_JOBS: &[&str] = &[
     "task-ping",
@@ -77,7 +77,11 @@ pub fn pick_emit_fire(
     (scheduled, false)
 }
 
-pub fn floor_blocks(floor: &Mutex<HashMap<String, DateTime<Utc>>>, name: &str, fire: DateTime<Utc>) -> bool {
+pub fn floor_blocks(
+    floor: &Mutex<HashMap<String, DateTime<Utc>>>,
+    name: &str,
+    fire: DateTime<Utc>,
+) -> bool {
     floor
         .lock()
         .unwrap_or_else(|err| err.into_inner())
@@ -85,7 +89,11 @@ pub fn floor_blocks(floor: &Mutex<HashMap<String, DateTime<Utc>>>, name: &str, f
         .is_some_and(|seen| *seen == fire)
 }
 
-pub fn remember_floor(floor: &Mutex<HashMap<String, DateTime<Utc>>>, name: &str, fire: DateTime<Utc>) {
+pub fn remember_floor(
+    floor: &Mutex<HashMap<String, DateTime<Utc>>>,
+    name: &str,
+    fire: DateTime<Utc>,
+) {
     floor
         .lock()
         .unwrap_or_else(|err| err.into_inner())

@@ -16,8 +16,6 @@ impl OutboxScheduleCursor {
 
 impl ScheduleCursorStore for OutboxScheduleCursor {
     fn ensure(&self, schedule: &str, now: DateTime<Utc>) -> DateTime<Utc> {
-        self.outbox
-            .ensure_cursor(schedule, now)
-            .unwrap_or(now)
+        self.outbox.ensure_cursor(schedule, now).unwrap_or(now)
     }
 }

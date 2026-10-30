@@ -1,13 +1,16 @@
 //! Local civil minute matching with DST rules (PLAN.md).
 
-use chrono::{NaiveDate, NaiveDateTime, NaiveTime, Timelike};
 use chrono::TimeZone;
+use chrono::{NaiveDate, NaiveDateTime, NaiveTime, Timelike};
 use chrono_tz::Tz;
 
 /// True when `date`+`time` is the operator's current local minute.
 /// Spring gap (`None`): false. Autumn fold (`Ambiguous`): earlier offset only.
 pub fn same_local_minute(zone: Tz, date: NaiveDate, time: NaiveTime, now: NaiveDateTime) -> bool {
-    if now.date() != date || now.time().hour() != time.hour() || now.time().minute() != time.minute() {
+    if now.date() != date
+        || now.time().hour() != time.hour()
+        || now.time().minute() != time.minute()
+    {
         return false;
     }
     let local = NaiveDateTime::new(date, time);

@@ -1,8 +1,8 @@
 //! Durable reminders: enqueue into the outbox and run the delivery worker.
 
+mod cursor;
 mod delivery;
 mod enqueue;
-mod cursor;
 
 pub use cursor::OutboxScheduleCursor;
 pub use delivery::{OutboxDelivery, TelegramReminderSender};

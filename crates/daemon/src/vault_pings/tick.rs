@@ -12,16 +12,16 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
 use chrono::TimeZone;
+use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
 use chrono_tz::Tz;
 use turbovault_plugin_tasks::TasksConfig;
 
 use liberado_outbox::{content_id, task_key};
 
 use super::date::parse_ymd;
-use super::local_time;
 use super::events::events_in_note;
+use super::local_time;
 use super::remind::remind_opt_in;
 use super::tasks::{load_tasks_config, parse_tasks_for_jobs};
 use super::walk::markdown_notes;
@@ -110,13 +110,7 @@ fn collect(root: &Path, tick: &ReminderTick, zone: Tz) -> Vec<DueItem> {
     let mut items = Vec::new();
     for (rel, text) in markdown_notes(root) {
         if tick.settings.tasks {
-            items.extend(tasks_due(
-                &rel,
-                &text,
-                tick.now,
-                zone,
-                &tasks_config,
-            ));
+            items.extend(tasks_due(&rel, &text, tick.now, zone, &tasks_config));
         }
         if tick.settings.events {
             items.extend(events_due(&rel, &text, tick.now, zone));
@@ -140,13 +134,7 @@ fn tasks_due(
         .collect()
 }
 
-fn task_due(
-    rel: &str,
-    content: &str,
-    line: &str,
-    now: NaiveDateTime,
-    zone: Tz,
-) -> Option<DueItem> {
+fn task_due(rel: &str, content: &str, line: &str, now: NaiveDateTime, zone: Tz) -> Option<DueItem> {
     if !remind_opt_in(line) {
         return None;
     }

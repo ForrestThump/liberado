@@ -37,7 +37,10 @@ async fn fetch_status(api_base: &str) -> Result<PushStatus, String> {
     if !resp.status().is_success() {
         return Err(format!("Push status unavailable ({})", resp.status()));
     }
-    let text = resp.text().await.map_err(|e| format!("Bad response: {e}"))?;
+    let text = resp
+        .text()
+        .await
+        .map_err(|e| format!("Bad response: {e}"))?;
     parse_status(&text)
 }
 
@@ -49,7 +52,10 @@ async fn fetch_subscriptions(api_base: &str) -> Result<Vec<SubscriptionRow>, Str
     if !resp.status().is_success() {
         return Err(format!("Subscriptions unavailable ({})", resp.status()));
     }
-    let text = resp.text().await.map_err(|e| format!("Bad response: {e}"))?;
+    let text = resp
+        .text()
+        .await
+        .map_err(|e| format!("Bad response: {e}"))?;
     parse_subscriptions(&text)
 }
 
@@ -252,10 +258,9 @@ mod tests {
 
     #[test]
     fn push_status_json_parses() {
-        let row = parse_status(
-            r#"{"vapid_configured":true,"subscription_count":2,"public_key":"abc"}"#,
-        )
-        .unwrap();
+        let row =
+            parse_status(r#"{"vapid_configured":true,"subscription_count":2,"public_key":"abc"}"#)
+                .unwrap();
         assert!(row.vapid_configured);
         assert_eq!(row.subscription_count, 2);
         assert_eq!(row.public_key.as_deref(), Some("abc"));

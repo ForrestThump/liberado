@@ -311,7 +311,9 @@ fn mechanical_from_text(
     }
 }
 
-fn mechanical_from_vault(row: crate::vault_pings::DueReminderRow) -> crate::reminders::MechanicalReminder {
+fn mechanical_from_vault(
+    row: crate::vault_pings::DueReminderRow,
+) -> crate::reminders::MechanicalReminder {
     crate::reminders::MechanicalReminder {
         idempotency_key: row.idempotency_key,
         title: row.title,

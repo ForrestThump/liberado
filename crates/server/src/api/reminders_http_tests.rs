@@ -16,13 +16,15 @@ use crate::state::AppState;
 
 async fn app_with_outbox(outbox: Arc<Outbox>) -> Router {
     let dir = tempfile::tempdir().unwrap();
-    let sessions = Arc::new(
-        liberado_session_store::SessionStore::open(dir.path().join("sessions")).await,
-    );
+    let sessions =
+        Arc::new(liberado_session_store::SessionStore::open(dir.path().join("sessions")).await);
     let mut state = AppState::for_test(sessions, None, dir.path().to_path_buf());
     state.outbox = Some(outbox);
     Router::new()
-        .route("/api/outbox/ack", axum::routing::post(outbox_ack_with_state))
+        .route(
+            "/api/outbox/ack",
+            axum::routing::post(outbox_ack_with_state),
+        )
         .with_state(Arc::new(state))
 }
 

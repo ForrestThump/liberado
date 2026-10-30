@@ -142,9 +142,14 @@ async fn telegram_ok_false_is_a_retryable_failure_not_a_delivery() {
         .unwrap();
     assert_eq!(outbox.attempts_of(1).unwrap(), 1);
     assert_eq!(outbox.state_of(1).unwrap(), "pending");
-    run_pass(&outbox, &sink, at + Duration::hours(2), PassLimits::default())
-        .await
-        .unwrap();
+    run_pass(
+        &outbox,
+        &sink,
+        at + Duration::hours(2),
+        PassLimits::default(),
+    )
+    .await
+    .unwrap();
     assert_eq!(outbox.state_of(1).unwrap(), "delivered");
     assert_eq!(sink.calls(), 2);
 }
