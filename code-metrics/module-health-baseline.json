@@ -5172,7 +5172,7 @@
     "cyclomatic": 74
   },
   "crates/server/src/lib_assemble_daemon_tests.rs": {
-    "ploc": 155,
+    "ploc": 153,
     "lloc": 58,
     "functions": 10,
     "cyclomatic": 24
