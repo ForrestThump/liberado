@@ -376,6 +376,8 @@ mod tests {
             live_mcp: liberado_bootstrap::LiveMcpController::empty(),
             drain: crate::shutdown::DrainGate::default(),
             approval_hub: None,
+        outbox: None,
+        outbox_delivery: None,
         });
 
         let app = Router::new()
@@ -451,6 +453,8 @@ mod tests {
             live_mcp: liberado_bootstrap::LiveMcpController::empty(),
             drain: crate::shutdown::DrainGate::default(),
             approval_hub: None,
+        outbox: None,
+        outbox_delivery: None,
         });
         let app = Router::new()
             .route("/api/hooks/{name}", axum::routing::post(trigger_hook))
@@ -510,6 +514,8 @@ mod tests {
             live_mcp: liberado_bootstrap::LiveMcpController::empty(),
             drain: crate::shutdown::DrainGate::default(),
             approval_hub: None,
+        outbox: None,
+        outbox_delivery: None,
         });
         let app = Router::new()
             .route("/api/hooks/{name}", axum::routing::post(trigger_hook))
@@ -663,6 +669,8 @@ mod tests {
             live_mcp: liberado_bootstrap::LiveMcpController::empty(),
             drain: crate::shutdown::DrainGate::default(),
             approval_hub: None,
+        outbox: None,
+        outbox_delivery: None,
         });
         state.drain.begin_drain();
         assert!(!state.drain.is_accepting());

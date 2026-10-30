@@ -492,8 +492,7 @@ mod tests {
             context_window: Some(128000),
             chat_tools: 1,
             chat_tool_names: vec!["tasks:add".into()],
-            enter_sends: true,
-            mcp: Vec::new(),
+            ..Default::default()
         };
         let json = serde_json::to_value(&status).unwrap();
         let back: DaemonStatus = serde_json::from_value(json).unwrap();

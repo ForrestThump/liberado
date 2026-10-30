@@ -189,6 +189,8 @@ fn rewind_app() -> (Router, Arc<GoalSessionHub>, Arc<GoalSessionStore>) {
         live_mcp: liberado_bootstrap::LiveMcpController::empty(),
         drain: crate::shutdown::DrainGate::default(),
         approval_hub: None,
+        outbox: None,
+        outbox_delivery: None,
     });
 
     let app = Router::new()

@@ -294,18 +294,7 @@ mod tests {
         DaemonStatus {
             running,
             vault_path: "/vault".into(),
-            uptime_seconds: 0,
-            watcher_active: false,
-            dispatcher_attached: false,
-            orchestrator_attached: false,
-            reactions_seen: 0,
-            model_name: None,
-            token_usage_total: None,
-            context_window: None,
-            chat_tools: 0,
-            chat_tool_names: Vec::new(),
-            enter_sends: true,
-            mcp: Vec::new(),
+            ..Default::default()
         }
     }
 

@@ -219,18 +219,8 @@ mod tests {
         app.status = Some(crate::api::DaemonStatus {
             running: true,
             vault_path: "/v".into(),
-            uptime_seconds: 0,
-            watcher_active: false,
-            dispatcher_attached: false,
-            orchestrator_attached: false,
-            reactions_seen: 0,
             model_name: Some("alpha".into()),
-            token_usage_total: None,
-            context_window: None,
-            chat_tools: 0,
-            chat_tool_names: Vec::new(),
-            enter_sends: true,
-            mcp: Vec::new(),
+            ..Default::default()
         });
         // No conversation open + the current model is selected → nothing to do.
         let effects = handle(&mut app, key(KeyCode::Enter));
