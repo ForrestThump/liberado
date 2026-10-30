@@ -199,6 +199,7 @@ fn config_explain_requires_three_arguments() {
 }
 
 #[test]
+#[cfg(feature = "coding")]
 fn shepherd_requires_a_mode_flag() {
     let temp = tempdir().unwrap();
     let stderr = run_usage(temp.path(), &["shepherd"]);
@@ -265,6 +266,7 @@ fn config_explain_reaches_the_explain_arm() {
 /// `shepherd config check` resolves the repository and prints the effective configuration — a
 /// no-op instead would exit zero from a throwaway directory.
 #[test]
+#[cfg(feature = "coding")]
 fn shepherd_config_check_requires_a_repository() {
     let temp = tempdir().unwrap();
     let output = run_cli(temp.path(), &["shepherd", "config", "check"]);
@@ -281,6 +283,7 @@ fn shepherd_config_check_requires_a_repository() {
 }
 
 #[test]
+#[cfg(feature = "coding")]
 fn coder_requires_a_subcommand() {
     let temp = tempdir().unwrap();
     let stderr = run_usage(temp.path(), &["coder"]);
@@ -288,6 +291,7 @@ fn coder_requires_a_subcommand() {
 }
 
 #[test]
+#[cfg(feature = "coding")]
 fn coder_rejects_an_unknown_subcommand() {
     let temp = tempdir().unwrap();
     let stderr = run_usage(temp.path(), &["coder", "bogus"]);
@@ -308,7 +312,30 @@ fn bare_invocation_requires_a_vault() {
     assert!(stderr.contains("usage: liberado"), "{stderr}");
 }
 
+/// The default binary keeps these command names and fails closed.
+#[cfg(not(feature = "coding"))]
 #[test]
+fn coder_and_shepherd_name_the_missing_feature() {
+    let temp = tempdir().unwrap();
+    for args in [
+        &["coder"][..],
+        &["coder", "compare"],
+        &["coder", "smoke"],
+        &["shepherd"],
+        &["shepherd", "--self-test"],
+    ] {
+        let output = run_cli(temp.path(), args);
+        assert!(!output.status.success(), "{args:?} must exit non-zero");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("built without the `coding` feature"),
+            "{args:?}: {stderr}"
+        );
+    }
+}
+
+#[test]
+#[cfg(feature = "coding")]
 fn compare_prepare_creates_pinned_worktrees_with_separate_caches_and_artifacts() {
     let source = tempdir().expect("temporary source repository");
     let runs = tempdir().expect("temporary run parent");
@@ -373,6 +400,7 @@ fn compare_prepare_creates_pinned_worktrees_with_separate_caches_and_artifacts()
 }
 
 #[test]
+#[cfg(feature = "coding")]
 fn compare_save_commits_failed_work_and_collects_git_and_trace_artifacts() {
     let source = tempdir().expect("temporary source repository");
     let runs = tempdir().expect("temporary run parent");
@@ -451,6 +479,7 @@ fn compare_save_commits_failed_work_and_collects_git_and_trace_artifacts() {
 }
 
 #[test]
+#[cfg(feature = "coding")]
 fn compare_run_uses_owned_paths_and_saves_both_results() {
     let source = tempdir().expect("temporary source repository");
     let runs = tempdir().expect("temporary run parent");
@@ -548,6 +577,7 @@ fn compare_run_uses_owned_paths_and_saves_both_results() {
 }
 
 #[test]
+#[cfg(feature = "coding")]
 fn compare_run_does_not_enforce_native_dispatch_scope() {
     let source = tempdir().expect("temporary source repository");
     let runs = tempdir().expect("temporary run parent");
@@ -608,6 +638,7 @@ fn compare_run_does_not_enforce_native_dispatch_scope() {
 }
 
 #[test]
+#[cfg(feature = "coding")]
 fn compare_run_saves_launch_failure_and_still_runs_the_other_harness() {
     let source = tempdir().expect("temporary source repository");
     let runs = tempdir().expect("temporary run parent");
@@ -685,6 +716,7 @@ fn compare_run_saves_launch_failure_and_still_runs_the_other_harness() {
 }
 
 #[test]
+#[cfg(feature = "coding")]
 fn compare_run_rejects_zero_exit_when_the_common_verifier_fails() {
     let source = tempdir().expect("temporary source repository");
     let runs = tempdir().expect("temporary run parent");
@@ -750,6 +782,7 @@ fn compare_run_rejects_zero_exit_when_the_common_verifier_fails() {
 }
 
 #[test]
+#[cfg(feature = "coding")]
 fn compare_run_applies_hidden_acceptance_overlay_to_both_harnesses() {
     let source = tempdir().expect("temporary source repository");
     let runs = tempdir().expect("temporary run parent");
@@ -838,6 +871,7 @@ fn result_matches_hidden_contract() {
 }
 
 #[test]
+#[cfg(feature = "coding")]
 fn compare_run_refuses_an_acceptance_overlay_that_would_overwrite_source() {
     let source = tempdir().expect("temporary source repository");
     let runs = tempdir().expect("temporary run parent");
@@ -908,6 +942,7 @@ fn compare_run_refuses_an_acceptance_overlay_that_would_overwrite_source() {
     remove_compare_worktrees(source.path(), &run);
 }
 
+#[cfg(feature = "coding")]
 fn initialize_compare_source(root: &Path) {
     git_test(root, &["init", "-b", "main"]);
     git_test(root, &["config", "user.email", "test@example.com"]);
@@ -950,6 +985,7 @@ fn initialize_compare_source(root: &Path) {
 }
 
 #[cfg(windows)]
+#[cfg(feature = "coding")]
 fn write_fake_harness(root: &Path) -> std::path::PathBuf {
     let path = root.join("fake-harness.cmd");
     fs::write(
@@ -961,6 +997,7 @@ fn write_fake_harness(root: &Path) -> std::path::PathBuf {
 }
 
 #[cfg(unix)]
+#[cfg(feature = "coding")]
 fn write_fake_harness(root: &Path) -> std::path::PathBuf {
     use std::os::unix::fs::PermissionsExt;
 
@@ -978,6 +1015,7 @@ fn write_fake_harness(root: &Path) -> std::path::PathBuf {
     path
 }
 
+#[cfg(feature = "coding")]
 fn remove_compare_worktrees(source: &Path, run: &Path) {
     for harness in ["liberado", "pi"] {
         let path = run.join("worktrees").join(harness);
@@ -994,6 +1032,7 @@ fn remove_compare_worktrees(source: &Path, run: &Path) {
     }
 }
 
+#[cfg(feature = "coding")]
 fn git_capture_test(root: &Path, args: &[&str]) -> String {
     let output = std_command("git")
         .arg("-C")
@@ -1006,6 +1045,7 @@ fn git_capture_test(root: &Path, args: &[&str]) -> String {
 }
 
 #[test]
+#[cfg(feature = "coding")]
 fn compare_reset_restores_tracked_files_and_preserves_untracked_files() {
     let temp = tempdir().expect("temporary workspace");
     let workspace = temp.path().join("compare-workspace");
@@ -1046,6 +1086,7 @@ fn compare_reset_restores_tracked_files_and_preserves_untracked_files() {
     assert!(String::from_utf8_lossy(&output.stdout).contains("untracked path-deps left in place"));
 }
 
+#[cfg(feature = "coding")]
 fn git_test(workspace: &Path, args: &[&str]) {
     let status = std_command("git")
         .arg("-C")
@@ -1057,6 +1098,7 @@ fn git_test(workspace: &Path, args: &[&str]) {
 }
 
 #[test]
+#[cfg(feature = "coding")]
 fn coder_summarize_command_dispatches_and_reports_native_trace() {
     let temp = tempdir().expect("temporary directory");
     let trace = temp.path().join("run.json");

@@ -41,7 +41,7 @@ const CURRENT_REPORT: &str = ".liberado/crap-current.json";
 const USAGE: &str = "usage: liberado ci [--base REV] [check|crap|crap-linux|modules|modules-ratchet|complexity|unwraps|unwraps-ratchet|ready|verify-ready]";
 const VACATED_BIN: &str = "liberado-ci";
 const CI_LOG_FILE: &str = ".liberado/ci.log";
-const EXTRACT_MAX_LINES: usize = liberado_coder_core::FAILURE_EXTRACT_MAX_LINES;
+const EXTRACT_MAX_LINES: usize = liberado_common::failure_excerpt::EXTRACT_MAX_LINES;
 
 /// Report generation must not enforce `.cargo-crap.toml`'s `fail-above` policy. The diff
 /// gate owns pass/fail. An unreachable threshold overrides the configured ceiling here.
@@ -69,6 +69,8 @@ const LLVM_COV_ARGS: &[&str] = &[
     "--workspace",
     "--exclude",
     "liberado-webui",
+    "--features",
+    "coding",
     "--lcov",
     "--output-path",
     LCOV_FILE,
@@ -78,6 +80,7 @@ const LLVM_COV_ARGS: &[&str] = &[
 mod coverage_tools;
 pub(crate) mod diff_gate;
 mod log;
+mod preflight;
 #[cfg(test)]
 pub(crate) use log::extract_ci_failures;
 pub(crate) use log::{CiLog, run_cmd};
@@ -122,30 +125,9 @@ fn exe_lives_in_cargo_target(exe: &Path) -> bool {
 }
 
 /// Run the repository's local ship preflight (no CRAP llvm-cov).
-///
-/// The command list is deliberately kept here, rather than in a shell script, so the same
-/// preflight works through the native `liberado` binary on every host OS.
 fn check(log: &CiLog) -> Result<(), Box<dyn std::error::Error>> {
     vacate_cargo_target_image()?;
-    run_cmd(log, "cargo", &["fmt", "--check"])?;
-    crate::dependency_security_cmd::run(log)?;
-    run_cmd(
-        log,
-        "cargo",
-        &[
-            "clippy",
-            "--workspace",
-            "--exclude",
-            "liberado-webui",
-            "--all-targets",
-            "--",
-            "-D",
-            "warnings",
-            "-D",
-            "clippy::cognitive_complexity",
-        ],
-    )?;
-    run_cmd(log, "cargo", &["test", "--workspace", "--no-fail-fast"])?;
+    preflight::run(log)?;
     crate::branch_cleaner_ci::run(log)
 }
 

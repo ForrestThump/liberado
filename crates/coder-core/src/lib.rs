@@ -16,7 +16,6 @@ mod control_plane_cancel_tests;
 mod control_plane_ledger_contract_tests;
 #[cfg(test)]
 mod control_plane_tests;
-mod failure_excerpt;
 mod intake;
 pub mod pr_review;
 pub mod pr_review_admission;
@@ -61,7 +60,7 @@ pub use intake::{
 mod acceptance;
 pub mod prompts;
 pub use acceptance::{VERIFY_CMD_ENV, default_verifiers};
-pub use failure_excerpt::{
+pub use liberado_common::failure_excerpt::{
     EXTRACT_MAX_LINES as FAILURE_EXTRACT_MAX_LINES, extract_failures, extract_failures_capped,
     log_tail,
 };

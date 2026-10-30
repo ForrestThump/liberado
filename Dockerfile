@@ -54,9 +54,12 @@ COPY . .
 # is not part of the image, so /build/target is empty again the moment this step ends. Copying
 # out here is the only way the runtime stage can still find them - a
 # `COPY --from=builder /build/target/...` would start failing the moment the mount was added.
+#
+# `--features coding` keeps the in-process coding pack in the homelab image.
+# A default `cargo build -p liberado-cli` does not. `coder-full` stays off.
 RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,target=/build/target,sharing=locked \
-    cargo build --release -p liberado-cli -p liberado-conformance \
+    cargo build --release -p liberado-cli -p liberado-conformance --features coding \
     && mkdir -p /out/webui \
     && touch /out/webui/.keep \
     && cp target/release/liberado target/release/liberado-conformance /out/ \

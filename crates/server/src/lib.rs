@@ -14,6 +14,8 @@ mod control_plane_boot;
 
 pub(crate) use app_router::build_app_router;
 mod chat_agent_spawn;
+mod coding_notice;
+#[cfg(feature = "coding")]
 mod coding_pack;
 mod cron_delivery;
 mod dispatcher_guidance;
@@ -21,6 +23,7 @@ mod main_agent_budget;
 mod schedule_card_text;
 mod schedule_cards;
 mod schedule_timing;
+#[cfg(feature = "coding")]
 use coding_pack::{build_coding_pack, load_server_config};
 use main_agent_budget::main_agent_budget;
 mod bindings;
@@ -32,11 +35,17 @@ mod matrix_agent_chat;
 mod matrix_agents;
 mod matrix_cards;
 mod matrix_link;
+#[cfg(feature = "coding")]
 mod pr_review_diff;
+#[cfg(feature = "coding")]
 mod pr_review_dispatch;
+#[cfg(feature = "coding")]
 mod pr_review_observer;
+#[cfg(feature = "coding")]
 mod pr_review_poll;
+#[cfg(feature = "coding")]
 mod pr_review_publish;
+#[cfg(feature = "coding")]
 mod pr_review_publish_flow;
 mod profile_providers;
 mod shutdown;
@@ -89,20 +98,18 @@ use crate::state::AppState;
 pub async fn run(vault_path: String) -> Result<(), Box<dyn std::error::Error>> {
     // Load + validate the config up front (Decision 14 fail-fast). A bad config is a hard error
     // here rather than a half-booted daemon; the message names the file/setting to fix.
-    let (config, _, coder_tuning) =
-        load_server_config(liberado_bootstrap::config_dir().as_deref())?;
+    let boot = load_daemon_config()?;
 
     // Resolve the vault path CLI-over-config: the `run` argument wins (the CLI always supplies one);
     // an empty argument falls back to `topology.vault_path`. Both empty is a hard error.
-    let vault_path = resolve_vault_path(vault_path, &config)?;
+    let vault_path = resolve_vault_path(vault_path, &boot.config)?;
 
     // Credentials and the listen address, before a single component is assembled. Everything
     // below this point assumes the control plane is either loopback-only or authenticated, and
     // the whole value of that assumption is that it is checked where it can still refuse.
-    let (guard, plan) = control_plane_boot::prepare_control_plane(&config.topology.api)?;
+    let (guard, plan) = control_plane_boot::prepare_control_plane(&boot.config.topology.api)?;
 
-    let (daemon_handle, app, state) =
-        assemble_daemon(config, coder_tuning, vault_path, Arc::clone(&guard)).await?;
+    let (daemon_handle, app, state) = assemble_daemon(boot, vault_path, Arc::clone(&guard)).await?;
     finish_serve(daemon_handle, app, state, &plan.addr.to_string()).await
 }
 
@@ -137,11 +144,14 @@ fn open_live_surfaces(
 /// Split from [`run`] so profile, plugin, library, and schedule wiring does not sit in the
 /// fail-fast preamble. [`finish_serve`] owns the drain and the post-drain abort.
 async fn assemble_daemon(
-    config: liberado_bootstrap::Config,
-    coder_tuning: liberado_coder_core::CoderTuning,
+    boot: DaemonBoot,
     vault_path: String,
     guard: Arc<auth::ApiGuard>,
 ) -> Result<(tokio::task::JoinHandle<()>, Router, Arc<AppState>), Box<dyn std::error::Error>> {
+    // Coder tuning stays inside this function so `run` has no feature-gated argument lines.
+    #[cfg(feature = "coding")]
+    let coder_tuning = boot.coder_tuning;
+    let config = boot.config;
     // One live catalog + shared MCP registry (boot apply + hot-reload). Every consumer (API,
     // daemon pools, chat, dispatch pack) uses the same cloneable registry handle.
     let live_mcp = liberado_bootstrap::live_mcp_from_config(&config, None);
@@ -188,6 +198,7 @@ async fn assemble_daemon(
         &mcp_registry,
         &guidance,
         &sessions,
+        #[cfg(feature = "coding")]
         &coder_tuning,
     )
     .await;
@@ -395,6 +406,36 @@ async fn serve_with_drain(
     Ok(())
 }
 
+/// Config loaded for one daemon boot, including coder tuning when `coding` is enabled.
+struct DaemonBoot {
+    config: liberado_bootstrap::Config,
+    #[cfg(feature = "coding")]
+    coder_tuning: liberado_coder_core::CoderTuning,
+}
+
+/// Load config. With the `coding` feature, an invalid `[coder]` table is a startup error.
+/// Without it, config still loads and one warning names `coding` when coding settings are set.
+fn load_daemon_config() -> Result<DaemonBoot, Box<dyn std::error::Error>> {
+    #[cfg(feature = "coding")]
+    {
+        let (config, _, coder_tuning) =
+            load_server_config(liberado_bootstrap::config_dir().as_deref())?;
+        Ok(DaemonBoot {
+            config,
+            coder_tuning,
+        })
+    }
+    #[cfg(not(feature = "coding"))]
+    {
+        let (config, _) =
+            liberado_bootstrap::load_config(liberado_bootstrap::config_dir().as_deref())?;
+        if let Some(notice) = coding_notice::coding_config_notice(&config) {
+            tracing::warn!("{notice}");
+        }
+        Ok(DaemonBoot { config })
+    }
+}
+
 /// The vault path this daemon serves, CLI-over-config: the `run` argument wins (the CLI always
 /// supplies one); an empty argument falls back to `topology.vault_path`. Both empty is a hard
 /// error.
@@ -428,9 +469,10 @@ async fn build_goal_hub(
     mcp_registry: &McpRegistry,
     guidance: &Option<Arc<dyn liberado_common::ToolGuidanceSource>>,
     sessions: &Arc<SessionStore>,
-    coder_tuning: &liberado_coder_core::CoderTuning,
+    #[cfg(feature = "coding")] coder_tuning: &liberado_coder_core::CoderTuning,
 ) -> Arc<liberado_session::GoalSessionHub> {
     let mut goals_hub = liberado_session::GoalSessionHub::new(SessionStore::clone(sessions));
+    #[cfg(feature = "coding")]
     let coding_pack = register_goal_packs(
         &mut goals_hub,
         config,
@@ -442,11 +484,37 @@ async fn build_goal_hub(
         guidance,
         coder_tuning,
     );
-    finalize_goal_hub(goals_hub, config, coding_pack).await
+    #[cfg(not(feature = "coding"))]
+    register_goal_packs(
+        &mut goals_hub,
+        config,
+        providers,
+        provider,
+        vault_path,
+        capability_catalog,
+        mcp_registry,
+        guidance,
+    );
+    finalize_goal_hub(
+        goals_hub,
+        #[cfg(feature = "coding")]
+        config,
+        #[cfg(feature = "coding")]
+        coding_pack,
+    )
+    .await
 }
 
+/// The coding pack handle when the feature is on. `()` when it is off, so this module does not
+/// name the pack crate in a default build.
+#[cfg(feature = "coding")]
+type RegisteredCodingPack = Option<Arc<liberado_coder_agent::CodingSessionPack>>;
+#[cfg(not(feature = "coding"))]
+type RegisteredCodingPack = ();
+
 /// Register the goal-hub's domain packs: life-ops demo always; coding when a provider is
-/// attached; dispatch pack so cron/webhook/delegate are hosted sessions, not a second engine.
+/// attached and this binary was built with `coding`; dispatch pack so cron/webhook/delegate are
+/// hosted sessions, not a second engine.
 /// Returns the coding pack (held so the hub can be attached after `Arc::new`, S6 child goal
 /// sessions).
 #[allow(clippy::too_many_arguments)]
@@ -459,14 +527,19 @@ fn register_goal_packs(
     capability_catalog: &Arc<CapabilityCatalog>,
     mcp_registry: &McpRegistry,
     guidance: &Option<Arc<dyn liberado_common::ToolGuidanceSource>>,
-    coder_tuning: &liberado_coder_core::CoderTuning,
-) -> Option<Arc<liberado_coder_agent::CodingSessionPack>> {
+    #[cfg(feature = "coding")] coder_tuning: &liberado_coder_core::CoderTuning,
+) -> RegisteredCodingPack {
     goals_hub.register_pack(Arc::new(liberado_session::LifeOpsDemoRunner));
     // Coding pack: hold Arc so we can attach the hub after `Arc::new` (S6 child goal sessions).
-    let coding_pack = build_coding_pack(provider, config, coder_tuning);
-    if let Some(pack) = coding_pack.as_ref() {
-        goals_hub.register_pack(Arc::clone(pack) as Arc<dyn liberado_session::DomainPackRunner>);
-    }
+    #[cfg(feature = "coding")]
+    let coding_pack = {
+        let coding_pack = build_coding_pack(provider, config, coder_tuning);
+        if let Some(pack) = coding_pack.as_ref() {
+            goals_hub
+                .register_pack(Arc::clone(pack) as Arc<dyn liberado_session::DomainPackRunner>);
+        }
+        coding_pack
+    };
     if let Some(pack) = liberado_bootstrap::build_dispatch_pack(
         providers,
         config,
@@ -476,12 +549,19 @@ fn register_goal_packs(
         guidance.clone(),
     ) {
         goals_hub.register_pack(Arc::new(pack));
+        #[cfg(feature = "coding")]
         info!("goal session packs: life + coding + dispatch");
+        #[cfg(not(feature = "coding"))]
+        info!("goal session packs: life + dispatch");
     } else if provider.is_some() {
+        #[cfg(feature = "coding")]
         info!("goal session packs: life + coding (no dispatch pack)");
+        #[cfg(not(feature = "coding"))]
+        info!("goal session packs: life (no dispatch pack)");
     } else {
         info!("goal session packs: life only (no provider)");
     }
+    #[cfg(feature = "coding")]
     coding_pack
 }
 
@@ -489,8 +569,8 @@ fn register_goal_packs(
 /// sessions at startup (F7), and attach the hub to the coding pack for subagent fan-out (S6).
 async fn finalize_goal_hub(
     goals_hub: liberado_session::GoalSessionHub,
-    config: &liberado_bootstrap::Config,
-    coding_pack: Option<Arc<liberado_coder_agent::CodingSessionPack>>,
+    #[cfg(feature = "coding")] config: &liberado_bootstrap::Config,
+    #[cfg(feature = "coding")] coding_pack: RegisteredCodingPack,
 ) -> Arc<liberado_session::GoalSessionHub> {
     // E5: when a session awaits input and nobody has the stream open, ping out-of-band.
     let goals_hub = channels::attach_session_alert(goals_hub);
@@ -505,12 +585,14 @@ async fn finalize_goal_hub(
         );
     }
     let goals = Arc::new(goals_hub);
+    #[cfg(feature = "coding")]
     attach_coding_pack_hub(&goals, &coding_pack, config);
     goals
 }
 
 /// S6: coding fan-out spawns child goal sessions on this same hub — attach it once the hub is
 /// fully assembled.
+#[cfg(feature = "coding")]
 fn attach_coding_pack_hub(
     goals: &Arc<liberado_session::GoalSessionHub>,
     coding_pack: &Option<Arc<liberado_coder_agent::CodingSessionPack>>,

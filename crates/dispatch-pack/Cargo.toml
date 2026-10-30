@@ -8,10 +8,14 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 
+[features]
+default = []
+coding = ["dep:liberado-coder-core", "dep:liberado-coder-sandbox"]
+
 [dependencies]
 async-trait = { workspace = true }
-liberado-coder-core = { workspace = true }
-liberado-coder-sandbox = { workspace = true }
+liberado-coder-core = { workspace = true, optional = true }
+liberado-coder-sandbox = { workspace = true, optional = true }
 liberado-common = { workspace = true }
 liberado-dispatcher = { workspace = true }
 liberado-notify = { workspace = true }

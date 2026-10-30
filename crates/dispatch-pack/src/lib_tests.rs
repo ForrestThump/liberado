@@ -1,13 +1,20 @@
 //! Split from `lib.rs` for module-health boundaries.
 
 use super::*;
+#[cfg(feature = "coding")]
+use liberado_coder_core::CommandPolicy;
+#[cfg(feature = "coding")]
+use liberado_coder_sandbox::{Workspace, WorktreeWorkspace};
+#[cfg(feature = "coding")]
+use liberado_common::Consequence;
 use liberado_common::WriteProvenance;
 use liberado_common::{
-    Capability, CapabilitySet, Consequence, Delivery, DispatchAction, DispatchDecision, Outcome,
-    ProposalSigner, Report,
+    Capability, CapabilitySet, Delivery, DispatchAction, DispatchDecision, Outcome, ProposalSigner,
+    Report,
 };
 use liberado_config_loader::DispatchTuning;
 use liberado_executor::{RuntimeFactory, RuntimeSetupError, SUBMIT_REPORT_TOOL, ToolRuntime};
+#[cfg(feature = "coding")]
 use liberado_orchestrator::SubDispatch;
 use liberado_provider::{CompletionResponse, MockProvider, ToolInvocation};
 use liberado_session::{
@@ -293,11 +300,13 @@ fn pool_name_defaults_and_reads_payload() {
     assert_eq!(DispatchPack::pool_name(&goal), "research");
 }
 
+#[cfg(feature = "coding")]
 struct MarkerRuntime {
     root: std::path::PathBuf,
     marker_name: String,
 }
 
+#[cfg(feature = "coding")]
 #[async_trait]
 impl ToolRuntime for MarkerRuntime {
     fn catalog(&self) -> Vec<liberado_provider::ToolDef> {
@@ -317,12 +326,14 @@ impl ToolRuntime for MarkerRuntime {
     }
 }
 
+#[cfg(feature = "coding")]
 #[derive(Clone, Default)]
 struct RootedMarkerFactory {
     scoped_roots: Arc<std::sync::Mutex<Vec<std::path::PathBuf>>>,
     unscoped_calls: Arc<std::sync::Mutex<Vec<Vec<String>>>>,
 }
 
+#[cfg(feature = "coding")]
 #[async_trait]
 impl RuntimeFactory for RootedMarkerFactory {
     async fn runtime_for(
@@ -357,6 +368,35 @@ impl RuntimeFactory for RootedMarkerFactory {
     }
 }
 
+#[cfg(not(feature = "coding"))]
+#[tokio::test]
+async fn parallel_parent_root_names_the_missing_feature() {
+    let result = prepare_parallel_workspaces(
+        Some(std::path::Path::new("/tmp/parent")),
+        2,
+        "corr",
+        std::path::Path::new("/tmp/base"),
+    )
+    .await;
+    let Err(err) = result else {
+        panic!("parent_root needs the coding feature");
+    };
+    let PackError::Failed(message) = err else {
+        panic!("expected Failed, got {err:?}");
+    };
+    assert!(message.contains("`coding`"), "{message}");
+}
+
+#[cfg(not(feature = "coding"))]
+#[tokio::test]
+async fn parallel_without_parent_root_keeps_running() {
+    let prepared = prepare_parallel_workspaces(None, 2, "corr", std::path::Path::new("/tmp/base"))
+        .await
+        .expect("no parent_root");
+    assert_eq!(prepared.roots, vec![None, None]);
+}
+
+#[cfg(feature = "coding")]
 fn init_parent_repo(dir: &std::path::Path) {
     let run = |args: &[&str]| {
         let out = liberado_common::process::std_command("git")
@@ -383,6 +423,7 @@ fn init_parent_repo(dir: &std::path::Path) {
     run(&["commit", "--quiet", "-m", "init"]);
 }
 
+#[cfg(feature = "coding")]
 #[tokio::test]
 async fn dispatch_parallel_runs_each_worker_in_its_own_worktree() {
     let parent = tempfile::tempdir().unwrap();

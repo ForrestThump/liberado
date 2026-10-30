@@ -8,15 +8,16 @@
 //! `McpRegistry` that is not shareable across instances, so the pack holds one
 //! (dispatcher, orchestrator) pair per pool name.
 
+mod parallel_workspaces;
 mod waivers;
+
+use parallel_workspaces::prepare_parallel_workspaces;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use liberado_coder_core::CommandPolicy;
-use liberado_coder_sandbox::{Workspace, WorktreeWorkspace};
 use liberado_common::{
     CapabilityCatalog, DEFAULT_POOL, PROPOSALS_DIR, RiskWaiverSet, SignedProposal, WriteClass,
 };
@@ -231,26 +232,13 @@ impl DispatchPack {
             ))
             .await;
 
-        let mut worktrees: Vec<Option<WorktreeWorkspace>> =
-            Vec::with_capacity(parallel_goals.len());
-        if let Some(parent) = parent_root.as_ref() {
-            for i in 0..parallel_goals.len() {
-                let wt_session = format!("dp-{correlation_id}-{i}");
-                let ws = WorktreeWorkspace::new(
-                    parent,
-                    &wt_session,
-                    &worktrees_base,
-                    CommandPolicy::default(),
-                )
-                .await
-                .map_err(|e| {
-                    PackError::Failed(format!("worktree for parallel sub-goal {i}: {e}"))
-                })?;
-                worktrees.push(Some(ws));
-            }
-        } else {
-            worktrees.resize_with(parallel_goals.len(), || None);
-        }
+        let prepared = prepare_parallel_workspaces(
+            parent_root.as_deref(),
+            parallel_goals.len(),
+            correlation_id,
+            &worktrees_base,
+        )
+        .await?;
 
         let sub_dispatches: Vec<SubDispatch> = parallel_goals
             .iter()
@@ -290,7 +278,7 @@ impl DispatchPack {
                     success_criteria,
                     correlation_id: format!("{correlation_id}-{i}"),
                     label,
-                    workspace_root: worktrees[i].as_ref().map(|ws| ws.root().to_path_buf()),
+                    workspace_root: prepared.roots[i].clone(),
                 }
             })
             .collect();

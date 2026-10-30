@@ -27,6 +27,8 @@
 //! - [`local_time`] — operator timezone + helpers to stamp local wall-clock onto agent context
 //!   when a caller opts in (cron/webhook firings do this in the daemon).
 //! - [`error`] — the crate's error type.
+//! - [`failure_excerpt`] — pull failing lines out of a check log. `liberado ci` and the coding
+//!   pack share this matcher. It lives here so the CLI can compile without the pack.
 //!
 //! The typed config model (Decision 14) used to live here as a `config` module — moved to
 //! `liberado-config-loader` 2026-07-04 (`docs/future-work/archive/hygiene-audit-2026-07-04.md`), re-exported
@@ -46,6 +48,7 @@ pub use approval_ledger::{ApprovalDecision, ApprovalLedger, ApprovalRecord};
 pub mod dispatch;
 pub mod error;
 pub mod event;
+pub mod failure_excerpt;
 pub mod frontmatter;
 pub mod guidance;
 pub mod local_time;

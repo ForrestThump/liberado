@@ -58,7 +58,9 @@
 mod branch_cleaner_ci;
 mod chat_client;
 mod ci_cmd;
+#[cfg(feature = "coding")]
 mod coder_cmd;
+#[cfg(feature = "coding")]
 mod compare_cmd;
 mod crate_map_cmd;
 mod dependency_security_cmd;
@@ -71,7 +73,9 @@ mod module_health_cmd;
 mod mutants_cmd;
 mod ops_cmd;
 mod readiness_cmd;
+#[cfg(feature = "coding")]
 mod shepherd_cmd;
+#[cfg(feature = "coding")]
 mod summarize_cmd;
 #[cfg(feature = "ci-unwraps")]
 pub mod unwrap_classification_cmd;
@@ -168,7 +172,7 @@ fn dispatch_blocking_command(
         "dev" => ops_cmd::run_dev(&mut args),
         "paseo" => ops_cmd::run_paseo(&mut args),
         "ops" => ops_cmd::run_ops(&mut args),
-        "shepherd" => shepherd_cmd::run(&mut args),
+        "shepherd" => dispatch_shepherd(&mut args),
         _ => Err(format!("unknown operations command: {name}").into()),
     }
 }
@@ -183,7 +187,7 @@ fn route_sync(
     args: &mut impl Iterator<Item = String>,
 ) -> Option<Result<(), Box<dyn std::error::Error>>> {
     let route = match name {
-        "coder" => coder_cmd::run(args),
+        "coder" => dispatch_coder(args),
         "mutants" => cmd_mutants(args),
         "ci" => cmd_ci(args),
         "docs" => cmd_docs(args),
@@ -191,6 +195,41 @@ fn route_sync(
         _ => return None,
     };
     Some(route)
+}
+
+#[cfg(feature = "coding")]
+fn dispatch_shepherd(
+    args: &mut impl Iterator<Item = String>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    shepherd_cmd::run(args)
+}
+
+#[cfg(not(feature = "coding"))]
+fn dispatch_shepherd(
+    args: &mut impl Iterator<Item = String>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let _ = args;
+    Err(coding_feature_missing())
+}
+
+#[cfg(feature = "coding")]
+fn dispatch_coder(
+    args: &mut impl Iterator<Item = String>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    coder_cmd::run(args)
+}
+
+#[cfg(not(feature = "coding"))]
+fn dispatch_coder(
+    args: &mut impl Iterator<Item = String>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let _ = args;
+    Err(coding_feature_missing())
+}
+
+#[cfg(not(feature = "coding"))]
+fn coding_feature_missing() -> Box<dyn std::error::Error> {
+    "built without the `coding` feature".into()
 }
 
 /// `liberado ci …` — ship preflight, CRAP check, or the local check-then-ratchet run.
@@ -308,7 +347,12 @@ mod dispatch_tests {
     /// arms reach for a daemon or network and stay out of unit tests.
     #[tokio::test]
     async fn named_subcommands_reject_unknown_subarguments_with_usage() {
-        for command in ["ci", "coder", "mutants", "shepherd", "docs", "config"] {
+        let commands = ["ci", "mutants", "docs", "config"];
+        #[cfg(feature = "coding")]
+        let mut commands = commands.to_vec();
+        #[cfg(feature = "coding")]
+        commands.extend(["coder", "shepherd"]);
+        for command in commands {
             let args = [command.to_string(), "not-a-real-subcommand".to_string()];
             let err = dispatch(&mut args.into_iter())
                 .await
@@ -317,6 +361,29 @@ mod dispatch_tests {
             assert!(
                 err.to_lowercase().contains("usage"),
                 "{command}: expected usage text, got: {err}"
+            );
+        }
+    }
+
+    #[cfg(not(feature = "coding"))]
+    #[tokio::test]
+    async fn coder_and_shepherd_report_the_missing_feature() {
+        let cases = [
+            vec!["coder".to_string()],
+            vec!["coder".to_string(), "not-a-real-subcommand".to_string()],
+            vec!["coder".to_string(), "compare".to_string()],
+            vec!["coder".to_string(), "smoke".to_string()],
+            vec!["shepherd".to_string()],
+            vec!["shepherd".to_string(), "--self-test".to_string()],
+        ];
+        for args in cases {
+            let err = dispatch(&mut args.into_iter())
+                .await
+                .expect_err("the command must fail closed");
+            let err = err.to_string();
+            assert!(
+                err.contains("built without the `coding` feature"),
+                "got: {err}"
             );
         }
     }

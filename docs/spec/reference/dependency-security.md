@@ -19,6 +19,12 @@ cargo-vet before any job may compile a build script or procedural macro.
    entries, and the cargo-vet exemptions together.
 4. Run `just dependency-security` and request the CODEOWNER review.
 
+`deny.toml` allows the build script `libz-sys@1.1.31`. The vet exemption in
+`supply-chain/config.toml` moved from 1.1.29 to 1.1.31 for the build-script
+environment leak fixed in 1.1.31. The build script is not the same file as in
+1.1.29; the fix stops logging the zlib probe command. The exemption is still
+debt, not an audit.
+
 `deny.toml` allows the build script `rustls@0.23.46`. The vet exemption
 in `supply-chain/config.toml` names the same version. 0.23.46 is the
 2026-10-14 security release. It replaces 0.23.45, which cargo-deny
@@ -42,6 +48,7 @@ replaced.
 
 | Crate | Was | Now | Advisory |
 |---|---|---|---|
+| `libz-sys` | 1.1.29 | 1.1.31 | build-script env leak in `target/` (fixed in 1.1.31) |
 | `rustls-webpki` | 0.103.15 | 0.103.16 | RUSTSEC-2026-0382, distrusted intermediates accepted |
 | `webpki-roots` | 1.0.8 | 1.0.11 | RUSTSEC-2026-0381, bundled emSign roots |
 | `webpki-root-certs` | 1.0.8 | 1.0.11 | RUSTSEC-2026-0383, bundled emSign roots |
