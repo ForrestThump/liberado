@@ -494,7 +494,8 @@ pub fn configure_daemon(
 
     // Provider-independent knobs: proposal reaper and session-profile grants still matter in
     // watch-only mode (leftover proposals in the vault; fail-closed profile map if a source
-    // injects events without a full dispatcher stack). Apply before the provider early-return so
+    // injects events without a full dispatcher stack). Mechanical reminders (cron, vault pings,
+    // durable outbox) use the same rule. Apply before the provider early-return so
     // `reap_interval_secs = 0` actually disables the reaper when no API key is set.
     let daemon = daemon
         .with_proposal_reap_interval(config.tuning.proposals.reap_interval_secs)
@@ -516,7 +517,7 @@ pub fn configure_daemon(
         tracing::warn!(
             "provider not configured (API key unset) — running watch-only (no dispatch)"
         );
-        return daemon;
+        return attach_mechanical_reminders(daemon, config);
     };
     wire_dispatch_stack(
         daemon,
@@ -612,14 +613,7 @@ fn wire_dispatch_stack(
             liberado_config::data_dir(),
         ));
     let daemon = attach_notifier(daemon, &notifier);
-    let daemon = attach_reminder(daemon);
-    let daemon = reminders_outbox::attach_outbox(daemon, config);
-    let daemon = daemon.with_vault_reminders(
-        config.topology.vault_reminders.clone(),
-        liberado_config::data_dir().join("vault-reminder-fires.json"),
-    );
-    let daemon = attach_cron(daemon, config);
-    let daemon = daemon.with_startup_jobs(startup_snapshots(config));
+    let daemon = attach_mechanical_reminders(daemon, config);
     // Always wire the shared live registry (even when empty) so empty→add hot-reload can acquire
     // peers without a process restart. Emptiness only affects acquisition, not composition.
     tracing::info!(
@@ -739,6 +733,18 @@ fn attach_cron(daemon: Daemon, config: &Config) -> Daemon {
             daemon
         }
     }
+}
+
+/// Cron, vault pings, and the durable reminder outbox — independent of inference providers.
+fn attach_mechanical_reminders(daemon: Daemon, config: &Config) -> Daemon {
+    let daemon = attach_reminder(daemon);
+    let daemon = reminders_outbox::attach_outbox(daemon, config);
+    let daemon = daemon.with_vault_reminders(
+        config.topology.vault_reminders.clone(),
+        liberado_config::data_dir().join("vault-reminder-fires.json"),
+    );
+    let daemon = attach_cron(daemon, config);
+    daemon.with_startup_jobs(startup_snapshots(config))
 }
 
 /// Build the orchestrator infrastructure shared by every pool (and the dispatch pack): the worker
@@ -1232,6 +1238,47 @@ mod tests {
             None,
         );
         assert_eq!(configured.proposal_reap_interval(), Duration::from_secs(42));
+    }
+
+    #[tokio::test]
+    async fn watch_only_configure_still_wires_reminder_outbox() {
+        use liberado_common::CapabilityCatalog;
+        use liberado_daemon::Daemon;
+        use liberado_mcp::McpRegistry;
+        use std::sync::Arc;
+        use tempfile::TempDir;
+
+        let dir = TempDir::new().unwrap();
+        let data = TempDir::new().unwrap();
+        let saved_data = std::env::var_os("LIBERADO_DATA_DIR");
+        // SAFETY(test): single-threaded test binary; restored below.
+        unsafe {
+            std::env::set_var("LIBERADO_DATA_DIR", data.path());
+        }
+        let daemon = Daemon::open("test", dir.path()).await.unwrap();
+        let mut config = Config::default();
+        config.topology.vault_path = dir.path().to_path_buf();
+
+        let configured = configure_daemon(
+            daemon,
+            &RoleProviders::none(),
+            &config,
+            Arc::new(CapabilityCatalog::new()),
+            McpRegistry::new(),
+            dir.path(),
+            None,
+        );
+        assert!(
+            configured.outbox().is_some() && configured.outbox_delivery().is_some(),
+            "mechanical reminders must work without an inference provider"
+        );
+        // SAFETY(test): restore prior data dir.
+        unsafe {
+            match saved_data {
+                Some(v) => std::env::set_var("LIBERADO_DATA_DIR", v),
+                None => std::env::remove_var("LIBERADO_DATA_DIR"),
+            }
+        }
     }
 
     #[test]

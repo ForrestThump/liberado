@@ -1,5 +1,6 @@
 //! Static checks for the PWA service worker (fetch bypass, push, notification ack).
 
+/// The worker must own `/` (not `/assets/`) and must not intercept `/api/`.
 pub fn service_worker_errors(text: &str) -> Vec<String> {
     let mut errors = Vec::new();
     errors.extend(fetch_handler_errors(text));

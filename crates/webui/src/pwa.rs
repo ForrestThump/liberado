@@ -86,7 +86,7 @@ fn icons_claim_size(icons: &[Value], size: &str) -> bool {
     })
 }
 
-/// The worker must own `/` (not `/assets/`) and must not intercept `/api/`.
+/// Install-shell HTML must link the manifest, mount point, and root-scoped service worker.
 fn index_html_errors(text: &str) -> Vec<String> {
     let mut errors = Vec::new();
     if !text.contains("rel=\"manifest\"") {
