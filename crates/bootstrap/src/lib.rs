@@ -103,6 +103,7 @@ fn resolve_provider_profile<'a>(config: &'a Config, name: &str) -> Option<&'a Pr
 /// Parse a `ReasoningLevel` from a free-form string (`"off"`/`"low"`/`"medium"`/`"high"`).
 /// `None` for empty or unrecognized values — the provider default applies, which is the safe
 /// fallback for a config that mistypes the level.
+#[cfg(feature = "coding")]
 fn parse_reasoning_level(s: Option<&str>) -> Option<liberado_common::ReasoningLevel> {
     use liberado_common::ReasoningLevel;
     match s.map(str::trim).filter(|s| !s.is_empty()) {

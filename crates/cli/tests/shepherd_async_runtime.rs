@@ -1,3 +1,4 @@
+#![cfg(feature = "coding")]
 //! `liberado shepherd` from the CLI's async entry point.
 //!
 //! `main` is `#[tokio::main]` and calls [`liberado_cli::run`]. Shepherd's daemon

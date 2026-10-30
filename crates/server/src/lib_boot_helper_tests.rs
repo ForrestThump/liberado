@@ -80,6 +80,7 @@ fn main_agent_budget_reads_the_configured_ceiling_and_keeps_the_default() {
     assert_eq!(main_agent_budget(&configured).max_turns, 12);
 }
 
+#[cfg(feature = "coding")]
 #[test]
 fn coding_pack_refuses_an_unknown_configured_worker() {
     let mut config = liberado_bootstrap::Config::default();

@@ -29,8 +29,8 @@ liberado-memory-store = { workspace = true, optional = true }
 liberado-vault = { workspace = true }
 liberado-session = { workspace = true }
 liberado-session-store = { workspace = true }
-liberado-coder-agent = { workspace = true }
-liberado-coder-core = { workspace = true }
+liberado-coder-agent = { workspace = true, optional = true }
+liberado-coder-core = { workspace = true, optional = true }
 liberado-notify = { workspace = true }
 liberado-outbox = { workspace = true }
 liberado-messaging = { workspace = true }
@@ -57,8 +57,14 @@ thiserror = { workspace = true }
 
 [features]
 default = []
+# In-process coding pack (sandbox, tools, agent). Off the default product graph.
+coding = [
+    "dep:liberado-coder-agent",
+    "dep:liberado-coder-core",
+    "liberado-bootstrap/coding",
+]
 # In-process coding pack with gix + multi-lang repo-map (also available via liberado-coder-run).
-coder-full = ["liberado-coder-agent/full-tools"]
+coder-full = ["coding", "liberado-coder-agent/full-tools"]
 # Opt into procedural-memory guidance + local ONNX embeddings (fastembed).
 # Off by default so liberado serve/chat do not link turbovault-vector/fastembed.
 vector-local = ["dep:liberado-memory-store", "dep:turbovault-vector"]

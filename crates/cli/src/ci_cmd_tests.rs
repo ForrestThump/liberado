@@ -191,6 +191,8 @@ fn repo_relative_path_drops_the_workspace_root_on_either_os() {
 #[test]
 fn llvm_cov_flags_are_not_test_binary_args() {
     assert!(LLVM_COV_ARGS.contains(&"--ignore-run-fail"));
+    assert!(LLVM_COV_ARGS.contains(&"--features"));
+    assert!(LLVM_COV_ARGS.contains(&"coding"));
     assert!(
         !LLVM_COV_ARGS.contains(&"--"),
         "a `--` would send llvm-cov flags to libtest, which rejects them"

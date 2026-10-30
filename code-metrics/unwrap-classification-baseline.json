@@ -4,7 +4,7 @@
     "proven_invariant": 65,
     "local_failure": 0,
     "process_fatal": 45,
-    "files_scanned": 735,
+    "files_scanned": 739,
     "files_with_unwraps": 49
   },
   "files": {
@@ -1227,20 +1227,20 @@
         }
       ]
     },
-    "crates/server/src/api/goals.rs": {
+    "crates/server/src/api/goals_coding.rs": {
       "proven_invariant": 1,
       "local_failure": 0,
       "process_fatal": 0,
       "total": 1,
       "occurrences": [
         {
-          "file": "crates/server/src/api/goals.rs",
-          "line": 197,
-          "column": 31,
+          "file": "crates/server/src/api/goals_coding.rs",
+          "line": 69,
+          "column": 27,
           "method": "expect",
-          "snippet": "goal\n                    .payload\n                    .as_object_mut()\n                    .expect(\"CodingGoalPayload always serializes to an object\")",
-          "receiver": "goal\n                    .payload\n                    .as_object_mut()",
-          "context": "goals_startimpl IntoResponse",
+          "snippet": "goal\n                .payload\n                .as_object_mut()\n                .expect(\"CodingGoalPayload always serializes to an object\")",
+          "receiver": "goal\n                .payload\n                .as_object_mut()",
+          "context": "prepare_coding_goalOption<axum::response::Response>",
           "classification": "proven_invariant",
           "reason": "statically proven invariant or startup runtime boundary"
         }
