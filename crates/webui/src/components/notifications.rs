@@ -124,15 +124,41 @@ async fn send_test(api_base: &str) -> Result<(), String> {
     }
 }
 
-async fn remove_subscription(api_base: &str, endpoint_hint: &str) -> Result<(), String> {
+async fn remove_subscription(api_base: &str, endpoint: &str) -> Result<(), String> {
     let url = format!("{api_base}/api/push/subscriptions");
-    let resp = crate::http::delete_json(&url, &serde_json::json!({ "endpoint": endpoint_hint }))
+    let resp = crate::http::delete_json(&url, &serde_json::json!({ "endpoint": endpoint }))
         .await
         .map_err(|e| format!("Failed to reach daemon: {e}"))?;
     if resp.status().is_success() {
         Ok(())
     } else {
         Err(format!("Remove failed ({})", resp.status()))
+    }
+}
+
+#[component]
+fn RemoveSubscriptionButton(
+    api_base: String,
+    endpoint: String,
+    on_done: EventHandler<Result<Vec<SubscriptionRow>, String>>,
+    on_error: EventHandler<String>,
+) -> Element {
+    rsx! {
+        button {
+            class: "btn-link",
+            onclick: move |_| {
+                let base = api_base.clone();
+                let endpoint = endpoint.clone();
+                spawn(async move {
+                    if let Err(err) = remove_subscription(&base, &endpoint).await {
+                        on_error.call(err);
+                    } else if let Ok(rows) = fetch_subscriptions(&base).await {
+                        on_done.call(Ok(rows));
+                    }
+                });
+            },
+            "Remove"
+        }
     }
 }
 
@@ -158,6 +184,9 @@ pub fn Notifications(api_base: String) -> Element {
     });
 
     let ios_hint = "On iPhone: Safari → Share → Add to Home Screen (iOS 16.4+), open from the icon, then enable notifications here.";
+    let enable_base = api_base.clone();
+    let test_base = api_base.clone();
+    let list_base = api_base.clone();
 
     rsx! {
         section { class: "page-surface notifications-page",
@@ -189,7 +218,7 @@ pub fn Notifications(api_base: String) -> Element {
                 button {
                     class: "btn-primary",
                     onclick: move |_| {
-                        let base = api_base.clone();
+                        let base = enable_base.clone();
                         let name = label();
                         spawn(async move {
                             match enable_push(&base, &name).await {
@@ -208,7 +237,7 @@ pub fn Notifications(api_base: String) -> Element {
                 button {
                     class: "btn-secondary",
                     onclick: move |_| {
-                        let base = api_base.clone();
+                        let base = test_base.clone();
                         spawn(async move {
                             match send_test(&base).await {
                                 Ok(()) => message.set("Test notification queued.".into()),
@@ -225,24 +254,15 @@ pub fn Notifications(api_base: String) -> Element {
                     for row in subs().iter().cloned() {
                         li { key: "{row.id}",
                             span { "{row.label} ({row.host})" }
-                            button {
-                                class: "btn-link",
-                                onclick: {
-                                    let base = api_base.clone();
-                                    let host = row.host.clone();
-                                    let endpoint = row.endpoint.clone();
-                                    move |_| {
-                                        let base = base.clone();
-                                        spawn(async move {
-                                            if let Err(err) = remove_subscription(&base, &endpoint).await {
-                                                message.set(err);
-                                            } else if let Ok(rows) = fetch_subscriptions(&base).await {
-                                                subs.set(rows);
-                                            }
-                                        });
+                            RemoveSubscriptionButton {
+                                api_base: list_base.clone(),
+                                endpoint: row.endpoint.clone(),
+                                on_done: move |result: Result<Vec<SubscriptionRow>, String>| {
+                                    if let Ok(rows) = result {
+                                        subs.set(rows);
                                     }
                                 },
-                                "Remove"
+                                on_error: move |err: String| message.set(err),
                             }
                         }
                     }

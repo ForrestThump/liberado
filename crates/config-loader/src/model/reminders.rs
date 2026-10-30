@@ -22,7 +22,7 @@ pub struct RemindersConfig {
     pub channels: ReminderChannelsConfig,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct ReminderChannelsConfig {
     pub telegram: TelegramReminderConfig,
@@ -33,10 +33,15 @@ pub struct ReminderChannelsConfig {
 #[serde(default)]
 pub struct TelegramReminderConfig {
     /// `fallback` | `always` | `off`
+    #[serde(default = "default_telegram_mode")]
     pub mode: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+fn default_telegram_mode() -> String {
+    "fallback".into()
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct MatrixReminderConfig {
     pub enabled: bool,
@@ -56,28 +61,10 @@ impl Default for RemindersConfig {
     }
 }
 
-impl Default for ReminderChannelsConfig {
-    fn default() -> Self {
-        Self {
-            telegram: TelegramReminderConfig::default(),
-            matrix: MatrixReminderConfig::default(),
-        }
-    }
-}
-
 impl Default for TelegramReminderConfig {
     fn default() -> Self {
         Self {
-            mode: "fallback".into(),
-        }
-    }
-}
-
-impl Default for MatrixReminderConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            room: None,
+            mode: default_telegram_mode(),
         }
     }
 }
