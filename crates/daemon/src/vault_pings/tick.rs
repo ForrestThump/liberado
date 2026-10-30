@@ -12,7 +12,7 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Timelike, Utc};
+use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
 use chrono::TimeZone;
 use chrono_tz::Tz;
 use turbovault_plugin_tasks::TasksConfig;

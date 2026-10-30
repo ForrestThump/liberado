@@ -32,7 +32,11 @@ A schedule may set `job` to a built-in kind. The daemon runs that kind directly.
 
 "Today" follows `topology.timezone` (default `America/Chicago`). `cron_expr` stays UTC. Set `deliver = false` so the reminder is not also written into the sticky chat. Creating or editing a task or event is a vault markdown edit.
 
-Reminders go out through `LIBERADO_REMINDER_BOT_TOKEN` and `LIBERADO_REMINDER_CHAT_ID`. They do not use the sticky chat. If those variables are unset, the job still runs and the text is logged.
+Reminders enqueue into the durable outbox (`<data_dir>/liberado.db`). Web Push is the default
+when VAPID keys and a subscription exist; Telegram carries reminders only in `fallback` mode when
+Web Push cannot. Cron mechanical jobs (`task-ping`, `event-ping`, `habit-ping`, `vault-reminder-tick`)
+catch up once inside `[reminders].once_within` after a cursor exists; model schedules do not.
+If reminder env vars are unset and Web Push cannot send, rows stay pending and visible in status.
 
 A host crontab is not the product schedule. The daemon already owns the clock. The job body is `git` and the filesystem, not a second scheduler and not an agent.
 
