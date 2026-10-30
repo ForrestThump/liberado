@@ -10,22 +10,25 @@
 //! Deliberately vault-agnostic: this crate has no `liberado-vault` dependency at all, which is the
 //! concrete proof Decision 19's "the core is vault-agnostic" claim is real, not aspirational.
 //!
-//! **No catch-up/backfill on restart**: a schedule due while the daemon was down simply doesn't
-//! fire retroactively — ordinary cron semantics, not a regression from anything that exists today.
+//! **Catch-up** for mechanical reminder jobs: latest missed fire within `[reminders].once_within`,
+//! then resume. Model schedules and non-reminder mechanical jobs keep ordinary cron semantics.
 
 use std::cmp::Reverse;
 use std::collections::{BinaryHeap, HashSet};
 use std::str::FromStr;
-
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use liberado_common::{Event, EventPayload, EventSource, event_source};
 use tokio::sync::mpsc::UnboundedSender;
 
+mod catch_up;
+mod cursor;
 mod english;
 mod fire_at;
 mod next_fires;
 mod zoned;
+pub use catch_up::CatchUpSettings;
+pub use cursor::ScheduleCursorStore;
 pub use english::{cron_to_english, cron_to_english_at, cron_to_english_civil};
 pub use next_fires::{FireInstant, next_fires, next_fires_after};
 pub use zoned::{next_fires_zoned, next_fires_zoned_after};
@@ -131,6 +134,7 @@ struct ParsedSchedule {
 #[derive(Debug)]
 pub struct CronEventSource {
     schedules: Vec<ParsedSchedule>,
+    catch_up: Option<CatchUpSettings>,
 }
 
 impl CronEventSource {
@@ -145,7 +149,48 @@ impl CronEventSource {
             }
             parsed.push(parse_schedule(s)?);
         }
-        Ok(Self { schedules: parsed })
+        Ok(Self {
+            schedules: parsed,
+            catch_up: None,
+        })
+    }
+
+    pub fn with_catch_up(mut self, settings: CatchUpSettings) -> Self {
+        self.catch_up = Some(settings);
+        self
+    }
+
+    fn resolve_fire(
+        &self,
+        schedule: &ParsedSchedule,
+        scheduled: DateTime<Utc>,
+        now: DateTime<Utc>,
+    ) -> (DateTime<Utc>, bool) {
+        let Some(cu) = &self.catch_up else {
+            return (scheduled, false);
+        };
+        if !catch_up::mechanical_reminder(&schedule.job) {
+            return (scheduled, false);
+        }
+        let cursor = cu.store.ensure(&schedule.name, now);
+        let missed = catch_up::missed_fires_in_window(
+            &schedule.parsed,
+            schedule.zone,
+            cursor,
+            now,
+            cu.window,
+        );
+        catch_up::pick_emit_fire(scheduled, &missed, now)
+    }
+
+    fn should_skip_emit(&self, schedule: &ParsedSchedule, emit_at: DateTime<Utc>) -> bool {
+        let Some(cu) = &self.catch_up else {
+            return false;
+        };
+        if !catch_up::mechanical_reminder(&schedule.job) {
+            return false;
+        }
+        catch_up::floor_blocks(&cu.floor, &schedule.name, emit_at)
     }
 }
 
@@ -192,6 +237,14 @@ impl EventSource for CronEventSource {
         // One next-fire time per schedule, kept in a min-heap (via `Reverse`) so the loop always
         // sleeps exactly until the earliest one, regardless of how many schedules are attached.
         let now = Utc::now();
+        if let Some(cu) = &self.catch_up {
+            for schedule in &self.schedules {
+                if catch_up::mechanical_reminder(&schedule.job) {
+                    cu.store.ensure(&schedule.name, now);
+                }
+            }
+        }
+
         let mut heap: BinaryHeap<Reverse<(DateTime<Utc>, usize)>> = self
             .schedules
             .iter()
@@ -213,13 +266,31 @@ impl EventSource for CronEventSource {
             tokio::time::sleep(wait).await;
 
             let schedule = &self.schedules[idx];
-            tracing::info!(schedule = %schedule.name, fire_at = %fire_at, "cron schedule fired");
-            if tx.send(build_event(schedule, fire_at)).is_err() {
-                return; // receiver gone
+            let now = Utc::now();
+            let (emit_at, is_catch_up) = self.resolve_fire(schedule, fire_at, now);
+            if self.should_skip_emit(schedule, emit_at) {
+                if let Some(next) = fire_at::next_utc(&schedule.parsed, schedule.zone, now) {
+                    heap.push(Reverse((next, idx)));
+                }
+                continue;
+            }
+            if let Some(cu) = &self.catch_up {
+                catch_up::remember_floor(&cu.floor, &schedule.name, emit_at);
+            }
+            tracing::info!(
+                schedule = %schedule.name,
+                fire_at = %emit_at,
+                catch_up = is_catch_up,
+                "cron schedule fired"
+            );
+            if tx
+                .send(build_event(schedule, emit_at, is_catch_up))
+                .is_err()
+            {
+                return;
             }
 
-            // Requeue this schedule's next occurrence.
-            if let Some(next) = fire_at::next_utc(&schedule.parsed, schedule.zone, Utc::now()) {
+            if let Some(next) = fire_at::next_utc(&schedule.parsed, schedule.zone, now) {
                 heap.push(Reverse((next, idx)));
             }
         }
@@ -272,7 +343,7 @@ fn insert_job(map: &mut serde_json::Map<String, serde_json::Value>, job: &Mechan
 /// Build the standardized event for a cron firing. `correlation_id` is unique per firing (name +
 /// fire time), the idempotency key Decision 6 requires; `source` is `"cron:{name}"` so a consumer
 /// can tell which schedule fired without inspecting the payload.
-fn build_event(schedule: &ParsedSchedule, fire_at: DateTime<Utc>) -> Event {
+fn build_event(schedule: &ParsedSchedule, fire_at: DateTime<Utc>, catch_up: bool) -> Event {
     let correlation_id = format!("cron:{}:{}", schedule.name, fire_at.to_rfc3339());
     Event::trigger(
         "CronFired",
@@ -285,6 +356,9 @@ fn build_event(schedule: &ParsedSchedule, fire_at: DateTime<Utc>) -> Event {
             // same reason `profile` does. Absent means deliver — the pre-existing behaviour.
             data: {
                 let mut map = serde_json::Map::new();
+                if catch_up {
+                    map.insert("catch_up".into(), serde_json::Value::Bool(true));
+                }
                 if let Some(p) = &schedule.profile {
                     map.insert("profile".into(), serde_json::Value::String(p.clone()));
                 }
@@ -344,7 +418,7 @@ mod tests {
             ..MechanicalJob::default()
         });
         let parsed = CronEventSource::new(vec![s]).unwrap().schedules;
-        let event = build_event(&parsed[0], Utc::now());
+        let event = build_event(&parsed[0], Utc::now(), false);
         assert_eq!(
             event.payload.data.get("job").and_then(|v| v.as_str()),
             Some("git-snapshot")
@@ -373,7 +447,7 @@ mod tests {
         let parsed = CronEventSource::new(vec![schedule("plain", "0 0 * * * * *", "tidy")])
             .unwrap()
             .schedules;
-        let event = build_event(&parsed[0], Utc::now());
+        let event = build_event(&parsed[0], Utc::now(), false);
         assert!(event.payload.data.get("job").is_none());
     }
 
@@ -384,7 +458,7 @@ mod tests {
         let mut s = schedule("bigjob", "0 0 * * * * *", "process everything");
         s.max_turns = Some(20);
         let parsed = CronEventSource::new(vec![s]).unwrap().schedules;
-        let event = build_event(&parsed[0], Utc::now());
+        let event = build_event(&parsed[0], Utc::now(), false);
         assert_eq!(
             event.payload.data.get("max_turns").and_then(|v| v.as_u64()),
             Some(20)
@@ -397,7 +471,7 @@ mod tests {
         let parsed = CronEventSource::new(vec![schedule("plain", "0 0 * * * * *", "tidy")])
             .unwrap()
             .schedules;
-        let event = build_event(&parsed[0], Utc::now());
+        let event = build_event(&parsed[0], Utc::now(), false);
         assert!(event.payload.data.get("max_turns").is_none());
     }
 
@@ -408,7 +482,7 @@ mod tests {
         let mut s = schedule("quiet", "0 0 * * * * *", "sweep");
         s.deliver = Some(false);
         let parsed = CronEventSource::new(vec![s]).unwrap().schedules;
-        let event = build_event(&parsed[0], Utc::now());
+        let event = build_event(&parsed[0], Utc::now(), false);
         assert_eq!(
             event.payload.data.get("deliver").and_then(|v| v.as_bool()),
             Some(false)
@@ -423,7 +497,7 @@ mod tests {
         let mut s = schedule("inbox-filing", "0 0 * * * * *", "file captures");
         s.direct = Some(true);
         let parsed = CronEventSource::new(vec![s]).unwrap().schedules;
-        let event = build_event(&parsed[0], Utc::now());
+        let event = build_event(&parsed[0], Utc::now(), false);
         assert_eq!(
             event.payload.data.get("direct").and_then(|v| v.as_bool()),
             Some(true)
@@ -438,7 +512,7 @@ mod tests {
         let parsed = CronEventSource::new(vec![schedule("plain", "0 0 * * * * *", "tidy")])
             .unwrap()
             .schedules;
-        let event = build_event(&parsed[0], Utc::now());
+        let event = build_event(&parsed[0], Utc::now(), false);
         assert!(event.payload.data.get("direct").is_none());
     }
 
@@ -448,7 +522,7 @@ mod tests {
         let parsed = CronEventSource::new(vec![schedule("loud", "0 0 * * * * *", "report")])
             .unwrap()
             .schedules;
-        let event = build_event(&parsed[0], Utc::now());
+        let event = build_event(&parsed[0], Utc::now(), false);
         assert!(
             event.payload.data.get("deliver").is_none(),
             "{:?}",
@@ -463,7 +537,7 @@ mod tests {
         s.profile = Some("hat".into());
         s.deliver = Some(false);
         let parsed = CronEventSource::new(vec![s]).unwrap().schedules;
-        let event = build_event(&parsed[0], Utc::now());
+        let event = build_event(&parsed[0], Utc::now(), false);
         assert_eq!(
             event.payload.data.get("profile").and_then(|v| v.as_str()),
             Some("hat")

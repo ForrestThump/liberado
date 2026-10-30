@@ -45,6 +45,7 @@ pub use profile_providers::{ProfileProviderWiring, profile_providers_from_config
 // the ratchet boundary.
 pub use coder_provider_factory::ProfileProviderFactory;
 use liberado_daemon::Daemon;
+use liberado_daemon::reminders::OutboxScheduleCursor;
 use liberado_dispatch_pack::DispatchPack;
 use liberado_dispatcher::Dispatcher;
 use liberado_mcp::{McpPoolSettings, McpRegistry};
@@ -752,7 +753,22 @@ fn startup_snapshots(config: &Config) -> Vec<liberado_daemon::JobRequest> {
 
 fn attach_cron(daemon: Daemon, config: &Config) -> Daemon {
     match cron_source_from_config(config) {
-        Ok(Some(cron_source)) => {
+        Ok(Some(mut cron_source)) => {
+            if let Some(outbox) = daemon.outbox() {
+                let secs = config
+                    .tuning
+                    .reminders
+                    .once_within_secs()
+                    .unwrap_or(6 * 3600);
+                let window = chrono::Duration::seconds(i64::try_from(secs).unwrap_or(21_600));
+                let store = Arc::new(OutboxScheduleCursor::new(outbox));
+                let floor = Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
+                cron_source = cron_source.with_catch_up(liberado_cron::CatchUpSettings {
+                    window,
+                    store,
+                    floor,
+                });
+            }
             tracing::info!(
                 schedules = config.topology.schedules.len(),
                 "cron event source attached"
