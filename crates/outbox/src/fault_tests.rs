@@ -56,7 +56,8 @@ impl DeliverySink for Script {
         self.outcomes
             .lock()
             .unwrap()
-            .pop()
+            .drain(..1)
+            .next()
             .unwrap_or(DeliveryOutcome::Accepted)
     }
 }
@@ -116,9 +117,9 @@ async fn telegram_failures_then_one_accepted_send() {
         run_pass(&outbox, &sink, at, PassLimits::default())
             .await
             .unwrap();
+        assert_eq!(outbox.state_of(1).unwrap(), "failed");
         at += Duration::hours(2);
     }
-    assert_eq!(outbox.state_of(1).unwrap(), "failed");
     run_pass(&outbox, &sink, at, PassLimits::default())
         .await
         .unwrap();
@@ -141,7 +142,7 @@ async fn telegram_ok_false_is_a_retryable_failure_not_a_delivery() {
         .await
         .unwrap();
     assert_eq!(outbox.attempts_of(1).unwrap(), 1);
-    assert_eq!(outbox.state_of(1).unwrap(), "pending");
+    assert_eq!(outbox.state_of(1).unwrap(), "failed");
     run_pass(
         &outbox,
         &sink,
