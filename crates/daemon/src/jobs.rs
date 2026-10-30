@@ -165,7 +165,9 @@ impl Daemon {
             }
             JobEffect::Remind(text) => {
                 tracing::info!(job = %request.name, kind = %request.kind, "mechanical job reminder");
-                self.send_reminder(&text);
+                let fire_at = crate::helpers::cron_fire_at(event);
+                let catch_up = crate::helpers::cron_catch_up(&event.payload.data);
+                self.send_reminder(&text, &request, catch_up, fire_at);
                 Some(ReactionOutcome::Observed)
             }
         }
@@ -181,7 +183,8 @@ impl Daemon {
                 }
                 JobEffect::Remind(text) => {
                     tracing::warn!(job = %job.name, "startup snapshot needs attention");
-                    self.send_reminder(&text);
+                    let now = chrono::Utc::now();
+                    self.send_reminder(&text, job, false, now);
                 }
                 JobEffect::Continue => {}
             }
@@ -213,7 +216,37 @@ impl Daemon {
         }
     }
 
-    fn send_reminder(&self, text: &str) {
+    fn send_reminder(
+        &self,
+        text: &str,
+        job: &JobRequest,
+        catch_up: bool,
+        fire_at: chrono::DateTime<chrono::Utc>,
+    ) {
+        let item = crate::reminders::MechanicalReminder {
+            idempotency_key: format!("job/{}/{}", job.kind, fire_at.to_rfc3339()),
+            title: job.name.clone(),
+            body: text.to_string(),
+            due_at: fire_at,
+            catch_up,
+        };
+        if let (Some(outbox), Some(delivery)) = (&self.outbox, &self.outbox_delivery) {
+            let telegram_ready = self.reminder.is_some()
+                || crate::reminders::TelegramReminderSender::from_env().is_some();
+            if let Err(err) = crate::reminders::enqueue_mechanical(
+                outbox,
+                &self.reminders_config,
+                delivery,
+                telegram_ready,
+                &[item],
+                chrono::Utc::now(),
+            ) {
+                tracing::warn!(error = %err, "outbox enqueue failed");
+            } else {
+                let _ = crate::reminders::record_schedule_fire(outbox, &job.name, fire_at);
+            }
+            return;
+        }
         let Some(notifier) = self.reminder.clone() else {
             tracing::warn!(%text, "reminder bot is not configured; message not sent");
             return;

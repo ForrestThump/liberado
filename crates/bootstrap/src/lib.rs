@@ -612,6 +612,7 @@ fn wire_dispatch_stack(
         ));
     let daemon = attach_notifier(daemon, &notifier);
     let daemon = attach_reminder(daemon);
+    let daemon = attach_outbox(daemon, config);
     let daemon = daemon.with_vault_reminders(
         config.topology.vault_reminders.clone(),
         liberado_config::data_dir().join("vault-reminder-fires.json"),
@@ -691,6 +692,38 @@ fn attach_reminder(daemon: Daemon) -> Daemon {
         }
         None => daemon,
     }
+}
+
+fn attach_outbox(daemon: Daemon, config: &Config) -> Daemon {
+    use liberado_daemon::reminders::OutboxDelivery;
+    use liberado_outbox::Outbox;
+
+    let path = liberado_config::data_dir().join(liberado_outbox::DB_FILE);
+    let Ok(store) = Outbox::open(&path) else {
+        tracing::error!(path = %path.display(), "reminder outbox failed to open");
+        return daemon;
+    };
+    let outbox = Arc::new(store);
+    let vapid = match liberado_notify::web_push::load_vapid() {
+        Ok(keys) => keys,
+        Err(err) => {
+            tracing::warn!(error = %err, "VAPID keys could not be read");
+            None
+        }
+    };
+    if vapid.is_none() {
+        tracing::info!(
+            "Web Push off — set LIBERADO_VAPID_PUBLIC_KEY, LIBERADO_VAPID_PRIVATE_KEY, LIBERADO_VAPID_SUBJECT"
+        );
+    }
+    let telegram = liberado_daemon::reminders::TelegramReminderSender::from_env();
+    let delivery = Arc::new(OutboxDelivery::new(
+        Arc::clone(&outbox),
+        vapid,
+        telegram,
+    ));
+    let reminders = config.tuning.reminders.clone();
+    daemon.with_outbox(outbox, reminders, delivery)
 }
 
 fn startup_snapshots(config: &Config) -> Vec<liberado_daemon::JobRequest> {

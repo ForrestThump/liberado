@@ -20,6 +20,7 @@ mod helpers;
 mod jobs;
 mod proposals;
 mod react;
+pub mod reminders;
 mod types;
 mod vault_pings;
 mod vault_source;
@@ -80,6 +81,9 @@ impl Daemon {
             user_timezone: None,
             inbox_ignore_globs: Vec::new(),
             capture_scope: vault_source::CaptureScope::production_default(),
+            outbox: None,
+            reminders_config: liberado_config::RemindersConfig::default(),
+            outbox_delivery: None,
         })
     }
 
@@ -204,6 +208,29 @@ impl Daemon {
     pub fn with_reminder_notifier(mut self, notifier: Arc<dyn Notifier>) -> Self {
         self.reminder = Some(notifier);
         self
+    }
+
+    /// Wire the durable reminder outbox and its delivery sink.
+    pub fn with_outbox(
+        mut self,
+        outbox: Arc<liberado_outbox::Outbox>,
+        config: liberado_config::RemindersConfig,
+        delivery: Arc<crate::reminders::OutboxDelivery>,
+    ) -> Self {
+        self.outbox = Some(outbox);
+        self.reminders_config = config;
+        self.outbox_delivery = Some(delivery);
+        self
+    }
+
+    /// Shared outbox handle for the HTTP control plane.
+    pub fn outbox(&self) -> Option<Arc<liberado_outbox::Outbox>> {
+        self.outbox.clone()
+    }
+
+    /// Delivery sink metadata (VAPID public key, etc.).
+    pub fn outbox_delivery(&self) -> Option<Arc<crate::reminders::OutboxDelivery>> {
+        self.outbox_delivery.clone()
     }
 
     /// Turn the minute tick on and choose where fired minutes are recorded.

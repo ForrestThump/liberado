@@ -14,6 +14,7 @@ liberado-common = { workspace = true }
 glob = { workspace = true }
 liberado-config = { workspace = true }
 liberado-notify = { workspace = true }
+liberado-outbox = { workspace = true }
 liberado-vault = { workspace = true }
 turbovault-core = { workspace = true }
 turbovault-parser = { workspace = true }
@@ -25,6 +26,7 @@ liberado-session = { workspace = true }
 # to the proposal's originating correlation, or the cost journal records `"-"`.
 liberado-provider = { workspace = true }
 chrono = { workspace = true }
+reqwest = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
