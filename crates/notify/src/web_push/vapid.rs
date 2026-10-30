@@ -34,10 +34,6 @@ impl VapidMaterial {
         &self.public_b64
     }
 
-    pub(crate) fn public_b64(&self) -> &str {
-        &self.public_b64
-    }
-
     pub(crate) fn private_scalar(&self) -> &[u8] {
         &self.private
     }
@@ -63,14 +59,6 @@ pub(crate) fn from_parts(
         private,
         subject,
     })
-}
-
-pub(crate) fn from_env() -> Result<VapidMaterial, String> {
-    from_values(
-        std::env::var("LIBERADO_VAPID_PUBLIC_KEY").ok(),
-        std::env::var("LIBERADO_VAPID_PRIVATE_KEY").ok(),
-        std::env::var("LIBERADO_VAPID_SUBJECT").ok(),
-    )
 }
 
 /// `Ok(None)` when all three variables are unset. A partial set is an error that names them.
