@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::surface_mode::SurfaceMode;
 pub use crate::wire_mcp_status::McpPeerStatus;
+use crate::wire_outbox_status::DaemonOutboxStatus;
 
 // ──────────────────────────────────────────────────────────────
 // Chat streaming types
@@ -236,23 +237,13 @@ pub struct DaemonStatus {
     /// which drags tokio and chrono-tz into a browser bundle to carry two states.
     ///
     /// Defaults to `true` so a daemon predating this field keeps the behaviour it already had.
-    #[serde(default = "default_enter_sends")]
+    #[serde(default = "crate::wire_mcp_status::default_enter_sends")]
     pub enter_sends: bool,
     /// Live MCP reconnect rows. Empty when the chat supervisor has not started.
     #[serde(default)]
     pub mcp: Vec<McpPeerStatus>,
-    #[serde(default)]
-    pub outbox_pending: u64,
-    #[serde(default)]
-    pub outbox_failed: u64,
-    #[serde(default)]
-    pub outbox_dead: u64,
-    #[serde(default)]
-    pub outbox_oldest_pending_secs: Option<u64>,
-}
-
-fn default_enter_sends() -> bool {
-    true
+    #[serde(flatten, default)]
+    pub outbox: DaemonOutboxStatus,
 }
 
 /// Response shape from `GET /api/models` — live catalog from the provider's

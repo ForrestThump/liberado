@@ -37,6 +37,7 @@ use liberado_config::{ProviderProfile, RoleOverride};
 mod coder_provider_factory;
 mod fallback_builder;
 mod profile_providers;
+mod reminders_outbox;
 
 pub use profile_providers::{ProfileProviderWiring, profile_providers_from_config};
 
@@ -45,7 +46,6 @@ pub use profile_providers::{ProfileProviderWiring, profile_providers_from_config
 // the ratchet boundary.
 pub use coder_provider_factory::ProfileProviderFactory;
 use liberado_daemon::Daemon;
-use liberado_daemon::reminders::OutboxScheduleCursor;
 use liberado_dispatch_pack::DispatchPack;
 use liberado_dispatcher::Dispatcher;
 use liberado_mcp::{McpPoolSettings, McpRegistry};
@@ -613,7 +613,7 @@ fn wire_dispatch_stack(
         ));
     let daemon = attach_notifier(daemon, &notifier);
     let daemon = attach_reminder(daemon);
-    let daemon = attach_outbox(daemon, config);
+    let daemon = reminders_outbox::attach_outbox(daemon, config);
     let daemon = daemon.with_vault_reminders(
         config.topology.vault_reminders.clone(),
         liberado_config::data_dir().join("vault-reminder-fires.json"),
@@ -695,34 +695,6 @@ fn attach_reminder(daemon: Daemon) -> Daemon {
     }
 }
 
-fn attach_outbox(daemon: Daemon, config: &Config) -> Daemon {
-    use liberado_daemon::reminders::OutboxDelivery;
-    use liberado_outbox::Outbox;
-
-    let path = liberado_config::data_dir().join(liberado_outbox::DB_FILE);
-    let Ok(store) = Outbox::open(&path) else {
-        tracing::error!(path = %path.display(), "reminder outbox failed to open");
-        return daemon;
-    };
-    let outbox = Arc::new(store);
-    let vapid = match liberado_notify::web_push::load_vapid() {
-        Ok(keys) => keys,
-        Err(err) => {
-            tracing::warn!(error = %err, "VAPID keys could not be read");
-            None
-        }
-    };
-    if vapid.is_none() {
-        tracing::info!(
-            "Web Push off — set LIBERADO_VAPID_PUBLIC_KEY, LIBERADO_VAPID_PRIVATE_KEY, LIBERADO_VAPID_SUBJECT"
-        );
-    }
-    let telegram = liberado_daemon::reminders::TelegramReminderSender::from_env();
-    let delivery = Arc::new(OutboxDelivery::new(Arc::clone(&outbox), vapid, telegram));
-    let reminders = config.tuning.reminders.clone();
-    daemon.with_outbox(outbox, reminders, delivery)
-}
-
 fn startup_snapshots(config: &Config) -> Vec<liberado_daemon::JobRequest> {
     config
         .topology
@@ -754,21 +726,7 @@ fn startup_snapshots(config: &Config) -> Vec<liberado_daemon::JobRequest> {
 fn attach_cron(daemon: Daemon, config: &Config) -> Daemon {
     match cron_source_from_config(config) {
         Ok(Some(mut cron_source)) => {
-            if let Some(outbox) = daemon.outbox() {
-                let secs = config
-                    .tuning
-                    .reminders
-                    .once_within_secs()
-                    .unwrap_or(6 * 3600);
-                let window = chrono::Duration::seconds(i64::try_from(secs).unwrap_or(21_600));
-                let store = Arc::new(OutboxScheduleCursor::new(outbox));
-                let floor = Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
-                cron_source = cron_source.with_catch_up(liberado_cron::CatchUpSettings {
-                    window,
-                    store,
-                    floor,
-                });
-            }
+            cron_source = reminders_outbox::cron_source_with_catch_up(cron_source, &daemon, config);
             tracing::info!(
                 schedules = config.topology.schedules.len(),
                 "cron event source attached"

@@ -9,7 +9,7 @@ use axum::{
 };
 use serde::Deserialize;
 
-use chat_client_contract::{CatalogResponse, DaemonStatus, McpInfo, VaultInfo};
+use chat_client_contract::{CatalogResponse, DaemonOutboxStatus, DaemonStatus, McpInfo, VaultInfo};
 
 use crate::state::AppState;
 #[derive(Deserialize)]
@@ -55,10 +55,12 @@ pub async fn status(State(state): State<Arc<AppState>>) -> impl IntoResponse {
         // with what the browser does.
         enter_sends: state.config.topology.webui.enter_sends(),
         mcp: crate::api::mcp_status::from_state(&state),
-        outbox_pending: outbox_counts.as_ref().map(|c| c.pending).unwrap_or(0),
-        outbox_failed: outbox_counts.as_ref().map(|c| c.failed).unwrap_or(0),
-        outbox_dead: outbox_counts.as_ref().map(|c| c.dead).unwrap_or(0),
-        outbox_oldest_pending_secs: outbox_counts.and_then(|c| c.oldest_pending_secs),
+        outbox: DaemonOutboxStatus {
+            outbox_pending: outbox_counts.as_ref().map(|c| c.pending).unwrap_or(0),
+            outbox_failed: outbox_counts.as_ref().map(|c| c.failed).unwrap_or(0),
+            outbox_dead: outbox_counts.as_ref().map(|c| c.dead).unwrap_or(0),
+            outbox_oldest_pending_secs: outbox_counts.and_then(|c| c.oldest_pending_secs),
+        },
     })
 }
 
