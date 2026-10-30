@@ -191,6 +191,7 @@ fn css_rule<'a>(text: &'a str, selector: &str) -> &'a str {
 }
 
 #[cfg(test)]
+#[path = "pwa_sw_checks.rs"]
 mod pwa_sw_checks;
 
 #[cfg(test)]
