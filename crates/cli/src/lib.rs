@@ -277,7 +277,14 @@ fn cmd_config(args: &mut impl Iterator<Item = String>) -> Result<(), Box<dyn std
                 ),
             }
         }
-        _ => Err("usage: liberado config <check|explain>".into()),
+        Some("vapid-keys") => match liberado_notify::web_push::vapid_env_lines() {
+            Ok(lines) => {
+                print!("{lines}");
+                Ok(())
+            }
+            Err(err) => Err(err.into()),
+        },
+        _ => Err("usage: liberado config <check|explain|vapid-keys>".into()),
     }
 }
 

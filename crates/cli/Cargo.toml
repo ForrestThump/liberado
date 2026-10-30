@@ -26,6 +26,7 @@ liberado-common = { workspace = true }
 liberado-config = { workspace = true }
 liberado-config-loader = { workspace = true }
 liberado-server = { workspace = true }
+liberado-notify = { workspace = true }
 liberado-coder-core = { workspace = true }
 liberado-harness-eval = { workspace = true }
 liberado-ops = { workspace = true }

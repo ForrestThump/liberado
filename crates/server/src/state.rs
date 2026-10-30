@@ -98,6 +98,9 @@ pub struct AppState {
     /// Shared permission resolver and the sticky session cards join onto.
     /// `None` in tests that do not exercise approvals. Production always sets it.
     pub approval_hub: Option<Arc<crate::approvals::ApprovalHub>>,
+    /// Durable reminder store (`<data_dir>/liberado.db`).
+    pub outbox: Option<Arc<liberado_outbox::Outbox>>,
+    pub outbox_delivery: Option<Arc<liberado_daemon::reminders::OutboxDelivery>>,
 }
 
 /// Build the kernel [`liberado_main_agent::CompactionConfig`] from topology: absolute triggers
@@ -277,6 +280,8 @@ impl AppState {
             live_mcp: LiveMcpController::empty(),
             drain: DrainGate::default(),
             approval_hub: None,
+            outbox: None,
+            outbox_delivery: None,
         }
     }
 }

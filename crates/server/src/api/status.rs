@@ -28,6 +28,10 @@ fn active_model(state: &AppState) -> Option<String> {
 
 pub async fn status(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let reactions_len = state.reactions.lock().await.len();
+    let outbox_counts = state
+        .outbox
+        .as_ref()
+        .and_then(|outbox| outbox.counts(chrono::Utc::now()).ok());
 
     Json(DaemonStatus {
         running: true,
@@ -51,6 +55,10 @@ pub async fn status(State(state): State<Arc<AppState>>) -> impl IntoResponse {
         // with what the browser does.
         enter_sends: state.config.topology.webui.enter_sends(),
         mcp: crate::api::mcp_status::from_state(&state),
+        outbox_pending: outbox_counts.as_ref().map(|c| c.pending).unwrap_or(0),
+        outbox_failed: outbox_counts.as_ref().map(|c| c.failed).unwrap_or(0),
+        outbox_dead: outbox_counts.as_ref().map(|c| c.dead).unwrap_or(0),
+        outbox_oldest_pending_secs: outbox_counts.and_then(|c| c.oldest_pending_secs),
     })
 }
 

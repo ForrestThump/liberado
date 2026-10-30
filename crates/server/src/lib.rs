@@ -220,6 +220,13 @@ async fn assemble_daemon(
     )
     // Every reaction is a hosted background session on the hub (E3) — joinable, cancellable.
     .with_goal_hub(goals.clone());
+    if let (Some(outbox), Some(delivery)) = (daemon.outbox(), daemon.outbox_delivery()) {
+        liberado_daemon::reminders::spawn_worker(
+            outbox,
+            delivery,
+            config.tuning.reminders.clone(),
+        );
+    }
 
     // One binding map for cron delivery, the text bridge, and approval routing. Telegram is
     // one peer. A legacy `<data_dir>/telegram-sticky-session` file is adopted on first load
@@ -252,6 +259,9 @@ async fn assemble_daemon(
     let main_agent_capabilities = config.policy.capabilities_for("main-agent");
     let dispatcher_capabilities = config.policy.capabilities_for("dispatcher");
 
+    let outbox = daemon.outbox();
+    let outbox_delivery = daemon.outbox_delivery();
+
     let state = Arc::new(AppState {
         start_time: Instant::now(),
         reactions: Arc::new(Mutex::new(Vec::new())),
@@ -283,6 +293,8 @@ async fn assemble_daemon(
         live_mcp: live_mcp.clone(),
         drain: crate::shutdown::DrainGate::default(),
         approval_hub,
+        outbox,
+        outbox_delivery,
     });
 
     channels::spawn_configured_channels(

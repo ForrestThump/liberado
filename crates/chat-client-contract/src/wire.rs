@@ -241,6 +241,14 @@ pub struct DaemonStatus {
     /// Live MCP reconnect rows. Empty when the chat supervisor has not started.
     #[serde(default)]
     pub mcp: Vec<McpPeerStatus>,
+    #[serde(default)]
+    pub outbox_pending: u64,
+    #[serde(default)]
+    pub outbox_failed: u64,
+    #[serde(default)]
+    pub outbox_dead: u64,
+    #[serde(default)]
+    pub outbox_oldest_pending_secs: Option<u64>,
 }
 
 fn default_enter_sends() -> bool {

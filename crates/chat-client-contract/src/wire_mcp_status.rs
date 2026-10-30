@@ -38,6 +38,10 @@ impl Default for DaemonStatus {
             chat_tool_names: Vec::new(),
             enter_sends: true,
             mcp: Vec::new(),
+            outbox_pending: 0,
+            outbox_failed: 0,
+            outbox_dead: 0,
+            outbox_oldest_pending_secs: None,
         }
     }
 }

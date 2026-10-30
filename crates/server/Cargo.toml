@@ -32,6 +32,7 @@ liberado-session-store = { workspace = true }
 liberado-coder-agent = { workspace = true }
 liberado-coder-core = { workspace = true }
 liberado-notify = { workspace = true }
+liberado-outbox = { workspace = true }
 liberado-messaging = { workspace = true }
 liberado-matrix = { workspace = true }
 turbovault-vector = { workspace = true, optional = true }
