@@ -360,3 +360,47 @@ async fn a_snapshot_runs_without_a_dispatcher_and_a_habit_uses_the_reminder_chan
     let messages = sent.lock().unwrap().clone();
     assert_eq!(messages, vec!["Plan the day.".to_string()]);
 }
+
+#[tokio::test]
+async fn startup_jobs_cover_quiet_remind_continue_and_outbox_rows() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path());
+    std::fs::write(dir.path().join("dirty.md"), "uncommitted\n").unwrap();
+    std::fs::create_dir_all(dir.path().join("Inbox")).unwrap();
+    std::fs::write(dir.path().join("Inbox/Capture.md"), "capture\n").unwrap();
+
+    let outbox_path = tempfile::NamedTempFile::new()
+        .unwrap()
+        .into_temp_path()
+        .keep()
+        .unwrap();
+    let outbox = Arc::new(liberado_outbox::Outbox::open(&outbox_path).unwrap());
+    let delivery = Arc::new(crate::reminders::OutboxDelivery::new(
+        Arc::clone(&outbox),
+        None,
+        None,
+    ));
+
+    let daemon = Daemon::open("vault", dir.path())
+        .await
+        .unwrap()
+        .with_startup_jobs(vec![
+            job("git-snapshot"),
+            job("task-ping"),
+            job("inbox-if-present"),
+        ])
+        .with_outbox(
+            outbox.clone(),
+            liberado_config::RemindersConfig::default(),
+            delivery,
+        );
+
+    daemon.run_startup_jobs();
+
+    let now = chrono::Utc::now();
+    let counts = outbox.counts(now).expect("counts");
+    assert!(
+        counts.pending >= 1,
+        "task-ping startup should enqueue at least one outbox row"
+    );
+}

@@ -1050,6 +1050,10 @@ pub fn compose_chat_prompt(
 }
 
 #[cfg(test)]
+#[path = "lib_assemble_daemon_tests.rs"]
+mod assemble_daemon_tests;
+
+#[cfg(test)]
 #[path = "lib_prompt_preview_tests.rs"]
 mod prompt_preview_tests;
 

@@ -1,4 +1,4 @@
-//! Tuning bound checks kept off `config.rs` so that file stays at its cyclomatic baseline.
+//! `[reminders]` tuning bound checks (dispatch concurrency and reminder channel settings).
 
 use liberado_common::{Error, Result};
 

@@ -87,10 +87,6 @@ fn icons_claim_size(icons: &[Value], size: &str) -> bool {
 }
 
 /// The worker must own `/` (not `/assets/`) and must not intercept `/api/`.
-fn service_worker_errors(text: &str) -> Vec<String> {
-    pwa_sw_checks::service_worker_errors(text)
-}
-
 fn index_html_errors(text: &str) -> Vec<String> {
     let mut errors = Vec::new();
     if !text.contains("rel=\"manifest\"") {
@@ -206,7 +202,7 @@ mod tests {
 
     #[test]
     fn shipped_service_worker_bypasses_the_daemon_api() {
-        let errors = service_worker_errors(&read_crate_file("public/sw.js"));
+        let errors = super::pwa_sw_checks::service_worker_errors(&read_crate_file("public/sw.js"));
         assert!(errors.is_empty(), "{errors:?}");
     }
 
@@ -332,7 +328,9 @@ mod tests {
 
     #[test]
     fn service_worker_without_fetch_handler_fails() {
-        let errors = service_worker_errors("self.addEventListener('install', function () {});");
+        let errors = super::pwa_sw_checks::service_worker_errors(
+            "self.addEventListener('install', function () {});",
+        );
         assert!(
             errors.iter().any(|e| e.contains("fetch handler")),
             "{errors:?}"
@@ -344,14 +342,14 @@ mod tests {
         let no_bypass = r#"self.addEventListener("fetch", function (event) {
             event.respondWith(fetch(event.request));
         });"#;
-        let errors = service_worker_errors(no_bypass);
+        let errors = super::pwa_sw_checks::service_worker_errors(no_bypass);
         assert!(errors.iter().any(|e| e.contains("/api/")), "{errors:?}");
 
         let caches = r#"self.addEventListener("fetch", function (event) {
             if (new URL(event.request.url).pathname.startsWith("/api/")) { return; }
             caches.open("v1");
         });"#;
-        let errors = service_worker_errors(caches);
+        let errors = super::pwa_sw_checks::service_worker_errors(caches);
         assert!(errors.iter().any(|e| e.contains("caches")), "{errors:?}");
     }
 

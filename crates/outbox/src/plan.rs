@@ -220,6 +220,18 @@ mod tests {
     }
 
     #[test]
+    fn telegram_mode_parse_accepts_known_values() {
+        assert_eq!(
+            TelegramMode::parse("fallback"),
+            Some(TelegramMode::Fallback)
+        );
+        assert_eq!(TelegramMode::parse("always"), Some(TelegramMode::Always));
+        assert_eq!(TelegramMode::parse("off"), Some(TelegramMode::Off));
+        assert_eq!(TelegramMode::parse("dual"), None);
+        assert_eq!(TelegramMode::parse(""), None);
+    }
+
+    #[test]
     fn fallback_uses_telegram_only_when_web_push_cannot_carry() {
         let (rows, reason) = plan_targets(input(TelegramMode::Fallback, false, &[], true));
         assert_eq!(rows.len(), 1);

@@ -1,4 +1,4 @@
-//! Service worker static checks — split from `pwa.rs` for function-complexity limits.
+//! Static checks for the PWA service worker (fetch bypass, push, notification ack).
 
 pub fn service_worker_errors(text: &str) -> Vec<String> {
     let mut errors = Vec::new();

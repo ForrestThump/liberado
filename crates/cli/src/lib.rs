@@ -254,6 +254,8 @@ fn cmd_docs_auxiliary(
     }
 }
 
+/// `liberado serve [<vault>]` — run the daemon in the foreground, or fall back to the
+/// `LIBERADO_VAULT` environment variable.
 async fn run_serve(vault: Option<String>) -> Result<(), Box<dyn std::error::Error>> {
     let vault = vault
         .or_else(|| std::env::var("LIBERADO_VAULT").ok())

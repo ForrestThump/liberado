@@ -2,7 +2,13 @@
 
 mod cursor;
 mod delivery;
+#[cfg(test)]
+#[path = "delivery_tests.rs"]
+mod delivery_tests;
 mod enqueue;
+#[cfg(test)]
+#[path = "enqueue_tests.rs"]
+mod enqueue_tests;
 
 pub use cursor::OutboxScheduleCursor;
 pub use delivery::{OutboxDelivery, TelegramReminderSender};

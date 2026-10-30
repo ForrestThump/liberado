@@ -1,4 +1,4 @@
-//! Mechanical job outcome handling — kept off `jobs.rs` for the module-health function count.
+//! Mechanical cron job outcomes: quiet, legacy remind, and outbox row delivery.
 
 use liberado_common::Event;
 

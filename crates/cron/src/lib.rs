@@ -238,6 +238,8 @@ impl EventSource for CronEventSource {
         let now = Utc::now();
         self.seed_mechanical_cursors(now);
 
+        // One next-fire time per schedule, kept in a min-heap (via `Reverse`) so the loop always
+        // sleeps exactly until the earliest one, regardless of how many schedules are attached.
         let heap: BinaryHeap<Reverse<(DateTime<Utc>, usize)>> = self
             .schedules
             .iter()

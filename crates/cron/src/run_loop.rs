@@ -1,4 +1,4 @@
-//! Cron heap loop — kept out of `lib.rs` so `CronEventSource::run` stays under complexity limits.
+//! Cron heap loop: sleep until the next schedule fire, apply catch-up, emit events.
 
 use chrono::{DateTime, Utc};
 use liberado_common::Event;
