@@ -18,7 +18,6 @@ pub struct DaemonOutboxStatus {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use crate::wire::DaemonStatus;
 
     #[test]
