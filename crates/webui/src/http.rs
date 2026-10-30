@@ -100,6 +100,19 @@ pub async fn put_json(url: &str, body: &impl Serialize) -> Result<Response, reqw
     .await
 }
 
+/// `DELETE` with JSON body (push subscription removal).
+pub async fn delete_json(url: &str, body: &impl Serialize) -> Result<Response, reqwest::Error> {
+    prepare(
+        shared_client()
+            .delete(url)
+            .header("content-type", "application/json"),
+        true,
+    )
+    .json(body)
+    .send()
+    .await
+}
+
 /// `DELETE` (profile removal, …).
 pub async fn delete(url: &str) -> Result<Response, reqwest::Error> {
     prepare(shared_client().delete(url), true).send().await

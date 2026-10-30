@@ -377,6 +377,36 @@ as tuesday-trash can retire once that task carries `#remind`.
 Creating or editing a task or event is a vault markdown edit. TurboVault already writes
 those notes. This path has no separate notification record.
 
+### Durable delivery — `[reminders]`
+
+Mechanical reminders enqueue into `<data_dir>/liberado.db` (same file as the outbox). Missing
+`[reminders]` uses defaults: Web Push when VAPID keys and at least one subscription exist;
+otherwise Telegram fallback (`channels.telegram.mode = "fallback"`). See `docs/spec/reference/tuning.md`.
+
+```toml
+[reminders]
+once_within = "6h"          # cron catch-up window for mechanical jobs
+max_attempts = 8
+max_catchup_per_boot = 20
+
+[reminders.channels.telegram]
+mode = "fallback"           # fallback | always | off
+
+[reminders.channels.matrix]
+enabled = false
+```
+
+Vault `#remind` idempotency keys are `remind/{task|event}/{path}/{anchor}/{local-minute}/{id}`
+with fan-out suffix `/{channel}/{target}`. Schedule cursors live in `schedule_cursor` and advance
+only after enqueue commits. First boot anchors at `now` without backfill.
+
+**Operator setup:** generate keys with `liberado config vapid-keys`, install them only in the
+homelab environment (never GitHub), expose the WebUI with Tailscale serve (e.g.
+`tailscale serve --bg --https=8444 http://127.0.0.1:4201` — needs operator approval), install the
+PWA (Android Chrome install; iPhone Share → Add to Home Screen, iOS 16.4+, open from the icon),
+owner sign-in → Notifications → enable push, send test. Persist `<data_dir>` across container
+recreates so `liberado.db` survives.
+
 See ADR-0020.
 
 ## 9a. Direct cron dispatch (`direct = true`)

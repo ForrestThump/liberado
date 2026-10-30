@@ -97,6 +97,15 @@ fn service_worker_errors(text: &str) -> Vec<String> {
     {
         errors.push("service worker does not bypass /api/".into());
     }
+    if !text.contains("addEventListener(\"push\"") && !text.contains("addEventListener('push'") {
+        errors.push("service worker must handle push".into());
+    }
+    if !text.contains("notificationclick") {
+        errors.push("service worker must ack on notificationclick".into());
+    }
+    if !text.contains("showNotification") {
+        errors.push("service worker must showNotification on push".into());
+    }
     if text.contains("caches.") {
         errors.push("service worker caches responses; that can pin a stale WASM".into());
     }

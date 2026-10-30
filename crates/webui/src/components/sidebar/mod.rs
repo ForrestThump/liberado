@@ -50,6 +50,7 @@ pub enum Route {
     Chat,
     Library,
     Automations,
+    Notifications,
     Agents,
     Projects,
     Plugins,
@@ -493,6 +494,7 @@ pub fn Sidebar(
                 PrimaryNavRow { route: route, collapsed: collapsed, target: Route::Chat, label: "Chat", icon: rsx! { ChatBubble {} } }
                 PrimaryNavRow { route: route, collapsed: collapsed, target: Route::Library, label: "Library", icon: rsx! { LibraryGlyph {} } }
                 PrimaryNavRow { route: route, collapsed: collapsed, target: Route::Automations, label: "Automations", icon: rsx! { ClockGlyph {} } }
+                PrimaryNavRow { route: route, collapsed: collapsed, target: Route::Notifications, label: "Notifications", icon: rsx! { ClockGlyph {} } }
             }
 
             div {

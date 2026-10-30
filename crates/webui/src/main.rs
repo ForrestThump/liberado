@@ -399,6 +399,27 @@ fn App() -> Element {
                                 }
                             }
                         },
+                        Route::Notifications => rsx! {
+                            div { class: "grok-main-phone-scroll",
+                                if is_narrow() {
+                                    GrokAppHeader {
+                                        shell_class: PHONE_SCROLL_APP_HEADER_CLASS,
+                                        bar_title: shell_route_title(route()),
+                                        drawer_open: drawer_open(),
+                                        sidebar_collapsed,
+                                        active_project,
+                                        active_profile,
+                                        active_surface,
+                                        on_profile_open: open_profile_picker,
+                                        incognito,
+                                        api_base: base.clone(),
+                                        active_conv_id,
+                                        tools_open,
+                                    }
+                                }
+                                crate::components::notifications::Notifications { api_base: base.clone() }
+                            }
+                        },
                         Route::Projects => rsx! {
                             div { class: "grok-main-phone-scroll",
                                 if is_narrow() {
