@@ -73,7 +73,13 @@ fn db() -> (Outbox, std::path::PathBuf) {
 }
 
 #[cfg(test)]
-fn reminder(key: &str, channel: &str, target: &str, catch_up: bool, due: DateTime<Utc>) -> NewReminder {
+fn reminder(
+    key: &str,
+    channel: &str,
+    target: &str,
+    catch_up: bool,
+    due: DateTime<Utc>,
+) -> NewReminder {
     NewReminder {
         idempotency_key: key.into(),
         channel: channel.into(),
@@ -107,11 +113,15 @@ async fn telegram_failures_then_one_accepted_send() {
     ]);
     let mut at = at;
     for _ in 0..3 {
-        run_pass(&outbox, &sink, at, PassLimits::default()).await.unwrap();
+        run_pass(&outbox, &sink, at, PassLimits::default())
+            .await
+            .unwrap();
         at += Duration::hours(2);
     }
     assert_eq!(outbox.state_of(1).unwrap(), "failed");
-    run_pass(&outbox, &sink, at, PassLimits::default()).await.unwrap();
+    run_pass(&outbox, &sink, at, PassLimits::default())
+        .await
+        .unwrap();
     assert_eq!(outbox.state_of(1).unwrap(), "delivered");
     assert_eq!(sink.calls(), 4);
 }
@@ -126,7 +136,9 @@ async fn a_reopened_pending_row_and_an_expired_lease_each_send_once() {
     drop(outbox);
     let outbox = Outbox::open(&path).unwrap();
     let sink = Script::ready(vec![DeliveryOutcome::Accepted]);
-    run_pass(&outbox, &sink, at, PassLimits::default()).await.unwrap();
+    run_pass(&outbox, &sink, at, PassLimits::default())
+        .await
+        .unwrap();
     assert_eq!(sink.calls(), 1);
     assert_eq!(outbox.state_of(1).unwrap(), "delivered");
 
@@ -138,7 +150,9 @@ async fn a_reopened_pending_row_and_an_expired_lease_each_send_once() {
     drop(outbox);
     let outbox = Outbox::open(&path).unwrap();
     let sink = Script::ready(vec![DeliveryOutcome::Accepted]);
-    run_pass(&outbox, &sink, at, PassLimits::default()).await.unwrap();
+    run_pass(&outbox, &sink, at, PassLimits::default())
+        .await
+        .unwrap();
     assert_eq!(sink.calls(), 1);
     assert_eq!(outbox.state_of(1).unwrap(), "delivered");
 }
@@ -150,8 +164,12 @@ async fn a_missing_channel_stays_pending_and_visible() {
     outbox
         .enqueue(&reminder("held", "webpush", "", false, at), at)
         .unwrap();
-    let sink = Script::held("set LIBERADO_VAPID_PUBLIC_KEY, LIBERADO_VAPID_PRIVATE_KEY, LIBERADO_VAPID_SUBJECT");
-    run_pass(&outbox, &sink, at, PassLimits::default()).await.unwrap();
+    let sink = Script::held(
+        "set LIBERADO_VAPID_PUBLIC_KEY, LIBERADO_VAPID_PRIVATE_KEY, LIBERADO_VAPID_SUBJECT",
+    );
+    run_pass(&outbox, &sink, at, PassLimits::default())
+        .await
+        .unwrap();
     assert_eq!(outbox.state_of(1).unwrap(), "pending");
     assert_eq!(outbox.attempts_of(1).unwrap(), 0);
     let visible = outbox.list_visible(20).unwrap();
@@ -179,10 +197,15 @@ async fn a_410_removes_the_subscription_and_a_digest_accepts_together() {
         .unwrap();
     assert_eq!(outbox.list_subscriptions().unwrap()[0].label, "phone");
     outbox
-        .enqueue(&reminder("gone", "webpush", &format!("sub:{id}"), false, at), at)
+        .enqueue(
+            &reminder("gone", "webpush", &format!("sub:{id}"), false, at),
+            at,
+        )
         .unwrap();
     let sink = Script::ready(vec![DeliveryOutcome::Gone]);
-    run_pass(&outbox, &sink, at, PassLimits::default()).await.unwrap();
+    run_pass(&outbox, &sink, at, PassLimits::default())
+        .await
+        .unwrap();
     assert_eq!(outbox.subscription_count().unwrap(), 0);
     assert_eq!(outbox.state_of(1).unwrap(), "dead");
 
@@ -195,7 +218,9 @@ async fn a_410_removes_the_subscription_and_a_digest_accepts_together() {
             .unwrap();
     }
     let sink = Script::ready(vec![DeliveryOutcome::Accepted]);
-    run_pass(&outbox, &sink, at, PassLimits::default()).await.unwrap();
+    run_pass(&outbox, &sink, at, PassLimits::default())
+        .await
+        .unwrap();
     assert_eq!(sink.calls(), 1);
     for id in 2..=5 {
         assert_eq!(outbox.state_of(id).unwrap(), "delivered");
@@ -208,7 +233,9 @@ fn the_first_cursor_is_now_and_a_duplicate_insert_does_not_block_it() {
     let at = now();
     assert_eq!(outbox.ensure_cursor("vault", at).unwrap(), at);
     assert_eq!(
-        outbox.ensure_cursor("vault", at + Duration::hours(6)).unwrap(),
+        outbox
+            .ensure_cursor("vault", at + Duration::hours(6))
+            .unwrap(),
         at
     );
     let row = reminder("once", "telegram", "reminder", false, at);
@@ -217,7 +244,9 @@ fn the_first_cursor_is_now_and_a_duplicate_insert_does_not_block_it() {
         EnqueueOutcome::Inserted(_)
     ));
     assert_eq!(outbox.enqueue(&row, at).unwrap(), EnqueueOutcome::Duplicate);
-    outbox.record_cursor("vault", at + Duration::minutes(1)).unwrap();
+    outbox
+        .record_cursor("vault", at + Duration::minutes(1))
+        .unwrap();
     outbox.record_cursor("vault", at).unwrap();
     assert_eq!(
         outbox.cursor("vault").unwrap(),

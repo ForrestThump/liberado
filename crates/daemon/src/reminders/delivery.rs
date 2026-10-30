@@ -34,7 +34,9 @@ impl OutboxDelivery {
     }
 
     pub fn vapid_public_key(&self) -> Option<String> {
-        self.vapid.as_ref().map(|keys| keys.public_key().to_string())
+        self.vapid
+            .as_ref()
+            .map(|keys| keys.public_key().to_string())
     }
 
     pub fn vapid_configured(&self) -> bool {
@@ -140,15 +142,9 @@ impl OutboxDelivery {
         let Ok(Some(sub)) = self.outbox.subscription_keys(id) else {
             return DeliveryOutcome::Gone;
         };
-        let rows_json =
-            serde_json::to_string(&batch.rows).unwrap_or_else(|_| "[]".to_string());
-        let payload = web_push::reminder_payload(
-            &batch.title,
-            &batch.body,
-            &batch.tag,
-            &rows_json,
-            "/",
-        );
+        let rows_json = serde_json::to_string(&batch.rows).unwrap_or_else(|_| "[]".to_string());
+        let payload =
+            web_push::reminder_payload(&batch.title, &batch.body, &batch.tag, &rows_json, "/");
         let delivery = web_push::post_push(
             keys,
             web_push::PushRequest {

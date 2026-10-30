@@ -155,10 +155,7 @@ pub async fn list_outbox(State(state): State<Arc<AppState>>) -> Response {
     }
 }
 
-pub async fn retry_outbox(
-    State(state): State<Arc<AppState>>,
-    Path(id): Path<i64>,
-) -> Response {
+pub async fn retry_outbox(State(state): State<Arc<AppState>>, Path(id): Path<i64>) -> Response {
     let Some(outbox) = state.outbox.as_ref() else {
         return fail(StatusCode::SERVICE_UNAVAILABLE, "outbox is not available");
     };
@@ -180,17 +177,13 @@ pub async fn outbox_ack_with_state(
 }
 
 fn fail(status: StatusCode, message: &str) -> Response {
-    (
-        status,
-        Json(serde_json::json!({ "error": message })),
-    )
-        .into_response()
+    (status, Json(serde_json::json!({ "error": message }))).into_response()
 }
 
 #[cfg(test)]
 mod tests {
-    use liberado_outbox::VisibleReminder;
     use super::*;
+    use liberado_outbox::VisibleReminder;
 
     #[test]
     fn visible_row_shape_matches_contract() {

@@ -253,9 +253,7 @@ mod tests {
         let now = DateTime::parse_from_rfc3339("2026-10-29T15:00:00Z")
             .unwrap()
             .with_timezone(&Utc);
-        let fresh = (1..=4)
-            .map(|id| sample(id, false, now))
-            .collect::<Vec<_>>();
+        let fresh = (1..=4).map(|id| sample(id, false, now)).collect::<Vec<_>>();
         let batches = coalesce(fresh, now);
         assert_eq!(batches.len(), 4);
         assert!(batches.iter().all(|batch| batch.rows.len() == 1));

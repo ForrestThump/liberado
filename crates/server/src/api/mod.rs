@@ -35,8 +35,8 @@ pub use library::list_library;
 pub use plugins::set_plugin_enabled;
 pub use profiles::{delete_profile, rename_profile};
 pub use reminders::{
-    delete_subscription, list_outbox, outbox_ack_with_state, push_status, push_test,
-    retry_outbox, upsert_subscription, vapid_public_key,
+    delete_subscription, list_outbox, outbox_ack_with_state, push_status, push_test, retry_outbox,
+    upsert_subscription, vapid_public_key,
 };
 pub use search::search_conversations;
 pub use sessions::{session_fork, sessions_list};

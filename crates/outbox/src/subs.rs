@@ -37,17 +37,14 @@ pub struct SubscriptionKeys {
 }
 
 impl Outbox {
-    pub fn upsert_subscription(
-        &self,
-        sub: &NewSubscription,
-        now: DateTime<Utc>,
-    ) -> Result<i64> {
+    pub fn upsert_subscription(&self, sub: &NewSubscription, now: DateTime<Utc>) -> Result<i64> {
         check_subscription(sub)?;
         let label = label_of(&sub.label);
         let conn = self.lock();
-        let existing: i64 = conn.query_row("SELECT COUNT(*) FROM push_subscriptions", [], |row| {
-            row.get(0)
-        })?;
+        let existing: i64 =
+            conn.query_row("SELECT COUNT(*) FROM push_subscriptions", [], |row| {
+                row.get(0)
+            })?;
         let already: Option<i64> = conn
             .query_row(
                 "SELECT id FROM push_subscriptions WHERE endpoint = ?1",
@@ -83,9 +80,10 @@ impl Outbox {
     }
 
     pub fn delete_subscription_endpoint(&self, endpoint: &str) -> Result<bool> {
-        let changed = self
-            .lock()
-            .execute("DELETE FROM push_subscriptions WHERE endpoint = ?1", [endpoint])?;
+        let changed = self.lock().execute(
+            "DELETE FROM push_subscriptions WHERE endpoint = ?1",
+            [endpoint],
+        )?;
         Ok(changed == 1)
     }
 
@@ -132,11 +130,11 @@ impl Outbox {
     }
 
     pub fn subscription_count(&self) -> Result<u32> {
-        let count: i64 = self.lock().query_row(
-            "SELECT COUNT(*) FROM push_subscriptions",
-            [],
-            |row| row.get(0),
-        )?;
+        let count: i64 =
+            self.lock()
+                .query_row("SELECT COUNT(*) FROM push_subscriptions", [], |row| {
+                    row.get(0)
+                })?;
         Ok(u32::try_from(count).unwrap_or(0))
     }
 }

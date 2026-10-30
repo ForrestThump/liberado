@@ -72,7 +72,10 @@ struct Prepared {
     urgency: String,
 }
 
-async fn post(keys: &VapidMaterial, request: &PushRequest<'_>) -> Result<reqwest::StatusCode, String> {
+async fn post(
+    keys: &VapidMaterial,
+    request: &PushRequest<'_>,
+) -> Result<reqwest::StatusCode, String> {
     let prepared = prepare(keys, request)?;
     let client = http_client()?;
     let response = client
@@ -90,7 +93,8 @@ async fn post(keys: &VapidMaterial, request: &PushRequest<'_>) -> Result<reqwest
 }
 
 fn prepare(keys: &VapidMaterial, request: &PushRequest<'_>) -> Result<Prepared, String> {
-    let ua_public = super::b64::decode(request.p256dh).map_err(|_| "subscription key".to_string())?;
+    let ua_public =
+        super::b64::decode(request.p256dh).map_err(|_| "subscription key".to_string())?;
     let auth = super::b64::decode(request.auth).map_err(|_| "subscription auth".to_string())?;
     let salt = fresh_salt()?;
     let sealed = aesgcm::seal(SealParts {
@@ -217,7 +221,13 @@ mod tests {
 
     #[test]
     fn the_payload_keeps_only_the_reminder_fields() {
-        let body = reminder_payload("Reminder", "due 09:00 — notes/a.md", "row-1", r#"[{"id":1,"token":"ab"}]"#, "/");
+        let body = reminder_payload(
+            "Reminder",
+            "due 09:00 — notes/a.md",
+            "row-1",
+            r#"[{"id":1,"token":"ab"}]"#,
+            "/",
+        );
         let value: serde_json::Value = serde_json::from_str(&body).expect("json");
         let keys: Vec<_> = value.as_object().expect("object").keys().cloned().collect();
         assert_eq!(keys, ["title", "body", "tag", "rows", "url"]);

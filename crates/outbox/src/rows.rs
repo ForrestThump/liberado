@@ -164,7 +164,13 @@ impl Outbox {
         Ok(())
     }
 
-    pub fn mark_retry(&self, ids: &[i64], message: &str, now: DateTime<Utc>, max_attempts: i64) -> Result<()> {
+    pub fn mark_retry(
+        &self,
+        ids: &[i64],
+        message: &str,
+        now: DateTime<Utc>,
+        max_attempts: i64,
+    ) -> Result<()> {
         let conn = self.lock();
         let tx = conn.unchecked_transaction()?;
         for id in ids {

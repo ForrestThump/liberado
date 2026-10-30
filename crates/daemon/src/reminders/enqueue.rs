@@ -31,9 +31,7 @@ pub fn enqueue_mechanical(
     now: DateTime<Utc>,
 ) -> Result<(), String> {
     let vapid_ok = delivery.vapid_configured();
-    let sub_ids = outbox
-        .subscription_ids()
-        .map_err(|err| err.to_string())?;
+    let sub_ids = outbox.subscription_ids().map_err(|err| err.to_string())?;
     let mode = telegram_mode(&config.channels.telegram.mode);
     let matrix_room = matrix_room(config);
     let (targets, fallback) = plan_targets(FanoutInput {
@@ -48,11 +46,7 @@ pub fn enqueue_mechanical(
     }
     for item in items {
         for target in &targets {
-            let key = fanout_key(
-                &item.idempotency_key,
-                target.channel,
-                &target.target,
-            );
+            let key = fanout_key(&item.idempotency_key, target.channel, &target.target);
             let row = NewReminder {
                 idempotency_key: key,
                 channel: target.channel.into(),
@@ -62,9 +56,7 @@ pub fn enqueue_mechanical(
                 due_at: item.due_at,
                 catch_up: item.catch_up,
             };
-            outbox
-                .enqueue(&row, now)
-                .map_err(|err| err.to_string())?;
+            outbox.enqueue(&row, now).map_err(|err| err.to_string())?;
         }
     }
     Ok(())
@@ -108,10 +100,7 @@ fn log_fallback_once(reason: &str) {
     if FALLBACK_LOGGED.swap(true, Ordering::Relaxed) {
         return;
     }
-    info!(
-        reason,
-        "Telegram carries reminders because Web Push cannot"
-    );
+    info!(reason, "Telegram carries reminders because Web Push cannot");
 }
 
 /// Record the schedule cursor after a mechanical enqueue commits.

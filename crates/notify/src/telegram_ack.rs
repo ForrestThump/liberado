@@ -20,7 +20,10 @@ mod tests {
 
     #[test]
     fn http_200_with_ok_false_is_a_failure() {
-        assert!(!telegram_send_accepted(200, r#"{"ok":false,"description":"no"}"#));
+        assert!(!telegram_send_accepted(
+            200,
+            r#"{"ok":false,"description":"no"}"#
+        ));
         assert!(!telegram_send_accepted(200, "not-json"));
         assert!(!telegram_send_accepted(500, r#"{"ok":true}"#));
         assert!(telegram_send_accepted(

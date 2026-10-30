@@ -717,11 +717,7 @@ fn attach_outbox(daemon: Daemon, config: &Config) -> Daemon {
         );
     }
     let telegram = liberado_daemon::reminders::TelegramReminderSender::from_env();
-    let delivery = Arc::new(OutboxDelivery::new(
-        Arc::clone(&outbox),
-        vapid,
-        telegram,
-    ));
+    let delivery = Arc::new(OutboxDelivery::new(Arc::clone(&outbox), vapid, telegram));
     let reminders = config.tuning.reminders.clone();
     daemon.with_outbox(outbox, reminders, delivery)
 }

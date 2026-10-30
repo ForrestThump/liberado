@@ -153,9 +153,10 @@ mod tests {
     fn invalid_telegram_mode_is_reported() {
         let mut cfg = RemindersConfig::default();
         cfg.channels.telegram.mode = "dual".into();
-        assert!(cfg
-            .problems()
-            .iter()
-            .any(|line| line.contains("telegram.mode")));
+        assert!(
+            cfg.problems()
+                .iter()
+                .any(|line| line.contains("telegram.mode"))
+        );
     }
 }

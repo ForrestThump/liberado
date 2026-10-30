@@ -50,7 +50,13 @@ mod tests {
     #[test]
     fn a_task_inserted_above_does_not_change_the_key() {
         let line = "- [ ] call home 📅 2026-10-29 09:00 ^callhome";
-        let key = task_key("task", "Life/a.md", "due", "2026-10-29T09:00", &content_id(line));
+        let key = task_key(
+            "task",
+            "Life/a.md",
+            "due",
+            "2026-10-29T09:00",
+            &content_id(line),
+        );
         let again = task_key(
             "task",
             "Life/a.md",

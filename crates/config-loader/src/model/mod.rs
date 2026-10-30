@@ -15,12 +15,12 @@ mod config_profile_provider;
 mod config_readonly_delegation;
 mod config_turn_budgets;
 mod policy;
+mod reminders;
 mod schedule_form;
 mod shepherd;
 mod topology;
 mod topology_default;
 mod tuning;
-mod reminders;
 mod vault_reminders;
 
 pub use api::{ApiClientConfig, ApiConfig, CredentialRef, DEFAULT_BIND};
@@ -28,6 +28,7 @@ pub use builder::ConfigBuilder;
 pub use config::{CodingAuthError, CodingWorkspaceAuth, Config, GrantParts, ResolvedProfile};
 pub use config_builtin_editor::BUILTIN_AUTOMATION_EDITOR_PROFILE;
 pub use policy::{Grant, Policy, ZonePolicy};
+pub use reminders::{CatchUpPolicy, ReminderChannelsConfig, RemindersConfig};
 pub use schedule_form::ScheduleTiming;
 pub use shepherd::{
     ShepherdAuthConfig, ShepherdConfig, ShepherdProjectConfig, ShepherdReviewConfig,
@@ -45,5 +46,4 @@ pub use tuning::{
     ContextTuning, CronDeliveryTuning, DispatchTuning, MaintenanceTuning, McpPoolingTuning,
     ProposalTuning, SubagentIsolation, TelegramApprovalsTuning, Tuning,
 };
-pub use reminders::{CatchUpPolicy, ReminderChannelsConfig, RemindersConfig};
 pub use vault_reminders::VaultRemindersConfig;
