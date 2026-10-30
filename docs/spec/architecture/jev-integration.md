@@ -68,8 +68,9 @@ Already reflected in backlog CAS1–CAS4 + TUI deferral:
    [`../../future-work/tui-maturity-roadmap.md`](../../future-work/tui-maturity-roadmap.md).
 7. **Jev** — only after structure is solid and CAS4 dogfood has run — **JEV1 / CAS5**
 
-One PR under active review at a time. No CRAP/MH baseline raises — split functions
-or extract tests instead.
+One PR under active review at a time. Do not raise a module-health score past its
+review boundary. A touched function over a CRAP or cyclomatic limit must not get
+worse — split the function or add tests.
 
 ## 4. Reading B reminder
 

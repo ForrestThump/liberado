@@ -27,7 +27,7 @@ name = "local readiness"
 source = "code-metrics/function-complexity.toml"
 document = "docs/spec/reference/local-readiness.md"
 source_terms = ["new_function_ceiling"]
-document_terms = ["just ready", "code-metrics/function-complexity-baseline.json"]
+document_terms = ["just ready", "diff gate"]
 
 [[impact]]
 name = "documentation policy"

@@ -43,6 +43,7 @@ fn run_from_windows(root: &Path) -> Result<(), Box<dyn std::error::Error>> {
         &context.layout.driver_target,
         &context.layout.coverage_target,
         &context.layout.temp_dir,
+        &context.base,
     )
 }
 
@@ -52,23 +53,23 @@ struct WindowsRunContext {
     head: String,
     linux_bundle: String,
     layout: CacheLayout,
+    base: String,
 }
 
+#[path = "windows_pin.rs"]
+mod windows_pin;
+
 fn windows_run_context(root: &Path) -> Result<WindowsRunContext, Box<dyn std::error::Error>> {
-    let distro =
-        std::env::var("LIBERADO_DEBIAN_WSL_DISTRO").unwrap_or_else(|_| DEFAULT_DISTRO.into());
+    let distro = windows_pin::distro_name(std::env::var("LIBERADO_DEBIAN_WSL_DISTRO").ok());
     let account = wsl_account(&distro)?;
-    let head = super::git_text(root, &["rev-parse", "HEAD"])?;
-    let bundle = create_bundle(root)?;
-    let linux_bundle = wsl_path(&bundle, &distro)?;
-    let cache_key = cache_key(root)?;
-    let layout = cache_layout(&account.home, &cache_key);
+    let pinned = windows_pin::pin_checkout(root, &distro, &account.home)?;
     Ok(WindowsRunContext {
         distro,
         account,
-        head,
-        linux_bundle,
-        layout,
+        head: pinned.head,
+        linux_bundle: pinned.linux_bundle,
+        layout: pinned.layout,
+        base: pinned.base,
     })
 }
 
@@ -230,6 +231,7 @@ fn run_driver(
     driver_target: &str,
     coverage_target: &str,
     temp_dir: &str,
+    base: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let path_env = format!("PATH={}", cargo_path(&account.home));
     let coverage_env = format!("CARGO_TARGET_DIR={coverage_target}");
@@ -247,6 +249,8 @@ fn run_driver(
             &executable,
             "ci",
             "crap",
+            "--base",
+            base,
         ],
     )?;
     Ok(())

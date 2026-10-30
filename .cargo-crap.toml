@@ -6,30 +6,20 @@
 # `.cargo-crap.toml` via upward search. Keep in sync with
 # `code-metrics/cargo-crap.toml` (same body; documented twin).
 #
-# The committed ratchet lives in `crap-baseline.json`. GitHub only compares
-# against that file (`--fail-regression`). Coverage is host-sensitive: the
-# committed scores are Ubuntu's (the CRAP job's host). A green Linux
-# `just ci` rewrites the file. Windows checks the 29.9 new-function ceiling
-# only and does not write: a Windows `--fail-regression` false-fails
-# (explain_write moved +127). Never write the baseline from GitHub Actions:
-# a bot commit races every open PR.
+# Liberado does not commit a per-function CRAP baseline. `liberado ci crap`
+# owns pass/fail: a new function must land at or under `threshold` (29.9), and
+# a function that already exists on the merge-base must not get worse than the
+# score measured on that commit. The diff gate's CRAP epsilon is 0.001.
+# `epsilon` below is cargo-crap's own compare epsilon for a manual run.
 #
-# `threshold` is the hard ceiling for *new* functions. Existing baseline
-# entries may sit above 30, so `fail-above` is off here: a bare `cargo crap
-# --fail-above` would fail the tail. `liberado ci crap` applies this ceiling
-# to entries cargo-crap's move-aware delta matcher classifies as new. The
-# per-function ratchet is `--fail-regression` against the baseline.
-# Do not set `min` here. `liberado ci crap` passes `--min 10` only on the
-# Linux regression compare; a config `min` would also strip low scores from
-# baseline writes and hide a 4→50 jump as a new function under the ceiling.
+# `fail-above` stays off. A bare `cargo crap` must not fail a function the
+# diff did not touch. Do not set `min`. Scores at or under the limit pass,
+# so a 4→5 move is not a failure.
 #
 # `missing = skip`: a function llvm-cov did not instrument (typically a
-# `#[cfg]` that is off on this OS) is omitted instead of scored at 0%. That
-# keeps a Windows `just ci` and the Ubuntu check job from treating each
-# other's cfg-gated functions as regressions. Shared functions still compare.
+# `#[cfg]` that is off on this OS) is omitted instead of scored at 0%.
 #
-# `sort = file` keeps baseline diffs reviewable: a score change touches one
-# entry instead of reshuffling the whole file.
+# `sort = file` keeps a hand-run report stable.
 threshold = 29.9
 fail-above = false
 missing = "skip"
