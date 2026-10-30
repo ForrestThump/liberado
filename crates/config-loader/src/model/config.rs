@@ -377,6 +377,9 @@ impl Config {
                 "tuning.concurrency.max_reaction_depth must be >= 1".into(),
             ));
         }
+        for problem in self.tuning.reminders.problems() {
+            return Err(Error::Config(problem));
+        }
         self.validate_turn_budgets()
     }
 

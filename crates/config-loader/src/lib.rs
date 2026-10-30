@@ -46,7 +46,7 @@ pub use model::{
     ModelCompactionSettings, Policy, PoolConfig, ProjectConfig, ProviderFallback, ProviderProfile,
     ResolvedProfile, RoleOverride, ScheduleTiming, SessionProfile, ShepherdAuthConfig,
     ShepherdConfig, ShepherdProjectConfig, ShepherdReviewConfig, SubagentIsolation,
-    TelegramApprovalsTuning, ToolImpact, Topology, Tuning, VaultRemindersConfig, WebUiConfig,
+    TelegramApprovalsTuning, ToolImpact, Topology, Tuning, RemindersConfig, VaultRemindersConfig, WebUiConfig,
     ZonePolicy, managed_binary_path, resolve_declared_zone,
 };
 pub use source::{ConfigLoadError, ConfigSource};

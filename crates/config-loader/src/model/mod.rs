@@ -20,6 +20,7 @@ mod shepherd;
 mod topology;
 mod topology_default;
 mod tuning;
+mod reminders;
 mod vault_reminders;
 
 pub use api::{ApiClientConfig, ApiConfig, CredentialRef, DEFAULT_BIND};
@@ -44,4 +45,5 @@ pub use tuning::{
     ContextTuning, CronDeliveryTuning, DispatchTuning, MaintenanceTuning, McpPoolingTuning,
     ProposalTuning, SubagentIsolation, TelegramApprovalsTuning, Tuning,
 };
+pub use reminders::{CatchUpPolicy, ReminderChannelsConfig, RemindersConfig};
 pub use vault_reminders::VaultRemindersConfig;
