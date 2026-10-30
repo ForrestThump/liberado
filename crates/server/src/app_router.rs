@@ -41,6 +41,23 @@ pub(crate) fn owner_only_routes(state: &Arc<AppState>) -> Router {
             "/api/mcp/reload",
             axum::routing::post(api::reload_mcp_peers),
         )
+        .route("/api/push/status", axum::routing::get(api::push_status))
+        .route(
+            "/api/push/vapid-public-key",
+            axum::routing::get(api::vapid_public_key),
+        )
+        .route(
+            "/api/push/subscriptions",
+            axum::routing::get(api::list_subscriptions)
+                .post(api::upsert_subscription)
+                .delete(api::delete_subscription),
+        )
+        .route("/api/push/test", axum::routing::post(api::push_test))
+        .route("/api/outbox", axum::routing::get(api::list_outbox))
+        .route(
+            "/api/outbox/{id}/retry",
+            axum::routing::post(api::retry_outbox),
+        )
         .route_layer(axum::middleware::from_fn(auth::require_owner))
         .with_state(state.clone())
 }
@@ -64,7 +81,13 @@ pub(crate) fn unauthenticated_routes(state: &Arc<AppState>, guard: &Arc<auth::Ap
         .route("/api/auth/logout", axum::routing::post(api::auth_logout))
         .route("/api/auth/session", axum::routing::get(api::auth_session))
         .with_state(guard.clone());
-    hooks.merge(sign_in)
+    let ack = Router::new()
+        .route(
+            "/api/outbox/ack",
+            axum::routing::post(api::outbox_ack_with_state),
+        )
+        .with_state(state.clone());
+    hooks.merge(sign_in).merge(ack)
 }
 
 /// The full HTTP/SSE API router plus the static frontend fallback. Work-starting routes are

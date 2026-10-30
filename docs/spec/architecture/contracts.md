@@ -138,6 +138,8 @@ not an accident of history; it is a layer rule doing its job. See [`sessions.md`
   choice words are a text list, and the owner replies with one word.
 - **Promise**: trait-only coupling from the engine side (`executor`'s risk gate holds a
   `dyn Notifier`); concrete channels appear only in composition roots and `#[ignore]`d live tests.
+  Mechanical reminders also use the durable outbox (`liberado-outbox`) and `OutboxDelivery`
+  (`liberado-daemon::reminders`): Web Push when configured, Telegram per `[reminders]` mode.
 - **Blast radius**: small; add channels freely.
 
 ## Vault-zone permission approvals

@@ -496,6 +496,7 @@ mod tests {
             chat_tool_names: Vec::new(),
             enter_sends: true,
             mcp: Vec::new(),
+            outbox: Default::default(),
         };
         let mut ctx = ctx_with(Vec::new());
         ctx.status = Some(status);

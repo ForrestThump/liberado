@@ -208,17 +208,10 @@ mod tests {
             running: true,
             vault_path: "/v".into(),
             uptime_seconds: 9,
-            watcher_active: false,
-            dispatcher_attached: false,
-            orchestrator_attached: false,
-            reactions_seen: 0,
             model_name: Some("m".into()),
             token_usage_total: Some(10),
             context_window: Some(100),
-            chat_tools: 0,
-            chat_tool_names: Vec::new(),
-            enter_sends: true,
-            mcp: Vec::new(),
+            ..Default::default()
         });
         let info = app.status_info().unwrap();
         assert!(info.running);

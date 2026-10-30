@@ -1,0 +1,26 @@
+[package]
+name = "liberado-outbox"
+version = "0.1.0"
+description = "Durable reminder outbox. One SQLite file under the data dir, shared later with the operator mailbox."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+async-trait = { workspace = true }
+base64 = { workspace = true }
+chrono = { workspace = true }
+rand = { workspace = true }
+rusqlite = { workspace = true }
+serde = { workspace = true }
+sha2 = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+tokio = { workspace = true }
+
+[package.metadata.liberado]
+role = "store"

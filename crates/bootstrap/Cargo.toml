@@ -26,11 +26,13 @@ liberado-daemon = { workspace = true }
 liberado-dispatcher = { workspace = true }
 liberado-dispatch-pack = { workspace = true }
 liberado-notify = { workspace = true }
+liberado-outbox = { workspace = true }
 liberado-orchestrator = { workspace = true }
 liberado-executor = { workspace = true }
 liberado-mcp = { workspace = true }
 liberado-provider = { workspace = true }
 liberado-provider-openai-compat = { workspace = true }
+chrono = { workspace = true }
 tracing = { workspace = true }
 
 [dev-dependencies]

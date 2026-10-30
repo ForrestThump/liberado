@@ -106,13 +106,9 @@ mod tests {
             dispatcher_attached: true,
             orchestrator_attached: true,
             reactions_seen: 0,
-            model_name: None,
-            token_usage_total: None,
-            context_window: None,
             chat_tools: 3,
             chat_tool_names: vec!["a".into(), "b".into(), "c".into()],
-            enter_sends: true,
-            mcp: Vec::new(),
+            ..Default::default()
         }
     }
 

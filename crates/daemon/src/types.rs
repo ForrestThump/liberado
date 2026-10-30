@@ -253,6 +253,10 @@ pub struct Daemon {
     /// `hold_flag` parks a note for both the watcher and the schedule.
     /// Populated from `[tuning.capture]`.
     pub(crate) capture_scope: crate::vault_source::CaptureScope,
+    /// Durable reminder outbox. `None` in tests that never wire it.
+    pub(crate) outbox: Option<std::sync::Arc<liberado_outbox::Outbox>>,
+    pub(crate) reminders_config: liberado_config::RemindersConfig,
+    pub(crate) outbox_delivery: Option<std::sync::Arc<crate::reminders::OutboxDelivery>>,
 }
 
 #[cfg(test)]

@@ -37,6 +37,7 @@ use liberado_config::{ProviderProfile, RoleOverride};
 mod coder_provider_factory;
 mod fallback_builder;
 mod profile_providers;
+mod reminders_outbox;
 
 pub use profile_providers::{ProfileProviderWiring, profile_providers_from_config};
 
@@ -494,7 +495,8 @@ pub fn configure_daemon(
 
     // Provider-independent knobs: proposal reaper and session-profile grants still matter in
     // watch-only mode (leftover proposals in the vault; fail-closed profile map if a source
-    // injects events without a full dispatcher stack). Apply before the provider early-return so
+    // injects events without a full dispatcher stack). Mechanical reminders (cron, vault pings,
+    // durable outbox) use the same rule. Apply before the provider early-return so
     // `reap_interval_secs = 0` actually disables the reaper when no API key is set.
     let daemon = daemon
         .with_proposal_reap_interval(config.tuning.proposals.reap_interval_secs)
@@ -516,7 +518,7 @@ pub fn configure_daemon(
         tracing::warn!(
             "provider not configured (API key unset) — running watch-only (no dispatch)"
         );
-        return daemon;
+        return attach_mechanical_reminders(daemon, config);
     };
     wire_dispatch_stack(
         daemon,
@@ -612,13 +614,7 @@ fn wire_dispatch_stack(
             liberado_config::data_dir(),
         ));
     let daemon = attach_notifier(daemon, &notifier);
-    let daemon = attach_reminder(daemon);
-    let daemon = daemon.with_vault_reminders(
-        config.topology.vault_reminders.clone(),
-        liberado_config::data_dir().join("vault-reminder-fires.json"),
-    );
-    let daemon = attach_cron(daemon, config);
-    let daemon = daemon.with_startup_jobs(startup_snapshots(config));
+    let daemon = attach_mechanical_reminders(daemon, config);
     // Always wire the shared live registry (even when empty) so empty→add hot-reload can acquire
     // peers without a process restart. Emptiness only affects acquisition, not composition.
     tracing::info!(
@@ -724,7 +720,8 @@ fn startup_snapshots(config: &Config) -> Vec<liberado_daemon::JobRequest> {
 
 fn attach_cron(daemon: Daemon, config: &Config) -> Daemon {
     match cron_source_from_config(config) {
-        Ok(Some(cron_source)) => {
+        Ok(Some(mut cron_source)) => {
+            cron_source = reminders_outbox::cron_source_with_catch_up(cron_source, &daemon, config);
             tracing::info!(
                 schedules = config.topology.schedules.len(),
                 "cron event source attached"
@@ -737,6 +734,18 @@ fn attach_cron(daemon: Daemon, config: &Config) -> Daemon {
             daemon
         }
     }
+}
+
+/// Cron, vault pings, and the durable reminder outbox — independent of inference providers.
+fn attach_mechanical_reminders(daemon: Daemon, config: &Config) -> Daemon {
+    let daemon = attach_reminder(daemon);
+    let daemon = reminders_outbox::attach_outbox(daemon, config);
+    let daemon = daemon.with_vault_reminders(
+        config.topology.vault_reminders.clone(),
+        liberado_config::data_dir().join("vault-reminder-fires.json"),
+    );
+    let daemon = attach_cron(daemon, config);
+    daemon.with_startup_jobs(startup_snapshots(config))
 }
 
 /// Build the orchestrator infrastructure shared by every pool (and the dispatch pack): the worker

@@ -422,3 +422,18 @@ about reachability. Two rules follow:
 
 Until then, treat any capability reachable over `GET` as readable by any session granted a
 web-fetching MCP.
+
+## Reminders and Web Push (owner + device)
+
+| Endpoint | Auth | Role |
+|---|---|---|
+| `GET /api/push/status` | owner | VAPID configured, subscription count, public key |
+| `GET /api/push/vapid-public-key` | owner | Application server key for `pushManager.subscribe` |
+| `GET/POST/DELETE /api/push/subscriptions` | owner | List, upsert, remove device subscriptions |
+| `POST /api/push/test` | owner | Enqueue a test Web Push row |
+| `GET /api/outbox` | owner | Visible pending/failed reminder rows |
+| `POST /api/outbox/{id}/retry` | owner | Retry a failed row |
+| `POST /api/outbox/ack` | none | `{id, token}` from the push payload; sets `acked_at` only |
+
+Click-ack is intentionally unauthenticated so an installed PWA can ack after the owner signs out.
+Subscription management stays owner-only.

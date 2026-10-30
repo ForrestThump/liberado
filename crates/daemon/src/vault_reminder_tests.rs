@@ -38,6 +38,7 @@ fn run(
             now,
             settings,
             state_path: state.to_path_buf(),
+            zone: "UTC".into(),
         },
     )
 }

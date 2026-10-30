@@ -277,6 +277,11 @@ Task reminders use the same TurboVault `parse_tasks` + Obsidian Tasks global fil
 path as `task-ping`, so a remind-marked line without the required global-filter tag
 does not fire.
 
+`[reminders]` in `tuning.toml` controls the outbox worker: `once_within` (default `6h`) for cron
+catch-up on mechanical jobs, `max_attempts`, `max_catchup_per_boot`, and `channels.telegram.mode`
+(`fallback` | `always` | `off`, default `fallback`). Web Push is preferred when VAPID keys and at
+least one subscription exist at enqueue time.
+
 The vault is the list. Add a task by writing an Obsidian Tasks line in a note:
 
 ```markdown

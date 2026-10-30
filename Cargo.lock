@@ -5483,6 +5483,7 @@ name = "liberado-bootstrap"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "chrono",
  "liberado-coder-agent",
  "liberado-coder-core",
  "liberado-common",
@@ -5495,6 +5496,7 @@ dependencies = [
  "liberado-mcp",
  "liberado-notify",
  "liberado-orchestrator",
+ "liberado-outbox",
  "liberado-provider",
  "liberado-provider-openai-compat",
  "liberado-vault",
@@ -5549,6 +5551,7 @@ dependencies = [
  "liberado-config",
  "liberado-config-loader",
  "liberado-harness-eval",
+ "liberado-notify",
  "liberado-ops",
  "liberado-server",
  "regex",
@@ -5806,6 +5809,7 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "chrono",
+ "chrono-tz",
  "glob",
  "liberado-common",
  "liberado-config",
@@ -5816,10 +5820,12 @@ dependencies = [
  "liberado-executor",
  "liberado-notify",
  "liberado-orchestrator",
+ "liberado-outbox",
  "liberado-provider",
  "liberado-session",
  "liberado-test-support",
  "liberado-vault",
+ "reqwest 0.12.28",
  "serde_json",
  "tempfile",
  "thiserror 2.0.18",
@@ -6082,6 +6088,8 @@ name = "liberado-notify"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "aws-lc-rs",
+ "base64 0.22.1",
  "liberado-common",
  "liberado-messaging",
  "reqwest 0.12.28",
@@ -6142,6 +6150,22 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "liberado-outbox"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "base64 0.22.1",
+ "chrono",
+ "rand 0.8.6",
+ "rusqlite",
+ "serde",
+ "sha2 0.10.9",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
 ]
 
 [[package]]
@@ -6243,6 +6267,7 @@ dependencies = [
  "liberado-memory-store",
  "liberado-messaging",
  "liberado-notify",
+ "liberado-outbox",
  "liberado-provider",
  "liberado-session",
  "liberado-session-store",

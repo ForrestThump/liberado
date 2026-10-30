@@ -48,7 +48,7 @@ replaced.
 
 | Crate | Was | Now | Advisory |
 |---|---|---|---|
-| `libz-sys` | 1.1.29 | 1.1.31 | build-script env leak in `target/` (fixed in 1.1.31) |
+| `libz-sys` | 1.1.29 | 1.1.31 | RUSTSEC-2026-0418, build script printed probe command into build output; 1.1.30 also narrows wasm32 `Z_SOLO` and adds optional aarch64 CRC `-march` forwarding |
 | `rustls-webpki` | 0.103.15 | 0.103.16 | RUSTSEC-2026-0382, distrusted intermediates accepted |
 | `webpki-roots` | 1.0.8 | 1.0.11 | RUSTSEC-2026-0381, bundled emSign roots |
 | `webpki-root-certs` | 1.0.8 | 1.0.11 | RUSTSEC-2026-0383, bundled emSign roots |

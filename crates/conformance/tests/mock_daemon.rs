@@ -177,8 +177,7 @@ async fn status_h(AxumState(s): AxumState<Shared>) -> Json<DaemonStatus> {
         context_window: None,
         chat_tools: 0,
         chat_tool_names: vec![],
-        enter_sends: true,
-        mcp: Vec::new(),
+        ..Default::default()
     })
 }
 
