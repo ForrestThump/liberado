@@ -437,7 +437,7 @@ web-fetching MCP.
 | `GET /api/push/status` | owner | VAPID configured, subscription count, public key |
 | `GET /api/push/vapid-public-key` | owner | Application server key for `pushManager.subscribe` |
 | `GET/POST/DELETE /api/push/subscriptions` | owner | List, upsert, remove device subscriptions |
-| `POST /api/push/test` | owner | Enqueue a test Web Push row |
+| `POST /api/push/test` | owner | Enqueue a test Web Push row for one subscription (`endpoint` or `id` in the JSON body; must match a registered device) |
 | `POST /api/client-errors` | owner | Truncated WebUI panic/client error text at WARN (no secrets) |
 | `GET /api/outbox` | owner | Visible pending/failed reminder rows |
 | `POST /api/outbox/{id}/retry` | owner | Retry a failed row |

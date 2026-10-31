@@ -38,6 +38,8 @@ pub struct EndpointBody {
 pub struct TestBody {
     #[serde(default)]
     endpoint: Option<String>,
+    #[serde(default)]
+    id: Option<i64>,
 }
 
 #[derive(Deserialize)]
@@ -159,21 +161,29 @@ pub async fn push_test(State(state): State<Arc<AppState>>, Json(body): Json<Test
     let Some(outbox) = state.outbox.as_ref() else {
         return fail(StatusCode::SERVICE_UNAVAILABLE, "outbox is not available");
     };
-    let now = Utc::now();
-    let target = match body.endpoint.as_deref() {
-        Some(endpoint) => {
-            let subs = outbox.list_subscriptions().ok().unwrap_or_default();
-            subs.iter()
-                .find(|sub| endpoint.contains(&sub.host))
-                .map(|sub| format!("sub:{}", sub.id))
-                .unwrap_or_else(|| "sub:0".into())
-        }
-        None => outbox
-            .subscription_ids()
-            .ok()
-            .and_then(|ids| ids.first().map(|id| format!("sub:{id}")))
-            .unwrap_or_else(|| "sub:0".into()),
+    let subs = match outbox.list_subscriptions() {
+        Ok(rows) => rows,
+        Err(err) => return fail(StatusCode::INTERNAL_SERVER_ERROR, &err.to_string()),
     };
+    if subs.is_empty() {
+        return fail(
+            StatusCode::CONFLICT,
+            "no subscribed device — enable push on a device first",
+        );
+    }
+    let matched = match (body.id, body.endpoint.as_deref()) {
+        (Some(id), _) => subs.iter().find(|sub| sub.id == id),
+        (None, Some(endpoint)) => subs.iter().find(|sub| sub.endpoint == endpoint),
+        (None, None) => None,
+    };
+    let Some(sub) = matched else {
+        return fail(
+            StatusCode::NOT_FOUND,
+            "this device is not subscribed — turn push on for this browser",
+        );
+    };
+    let now = Utc::now();
+    let target = format!("sub:{}", sub.id);
     let key = format!("test/{}", now.timestamp());
     if let Err(err) = outbox.enqueue(
         &liberado_outbox::NewReminder {
@@ -190,15 +200,9 @@ pub async fn push_test(State(state): State<Arc<AppState>>, Json(body): Json<Test
         warn!(error = %err, "push test enqueue failed");
         return fail(StatusCode::BAD_REQUEST, &err.to_string());
     }
-    let count = outbox.subscription_count().unwrap_or(0);
-    let push_host = outbox
-        .list_subscriptions()
-        .ok()
-        .and_then(|subs| subs.first().map(|row| row.host.clone()))
-        .unwrap_or_else(|| "none".into());
     info!(
-        subscription_count = count,
-        push_host = %push_host,
+        subscription_id = sub.id,
+        push_host = %sub.host,
         "push test notification enqueued"
     );
     Json(serde_json::json!({ "ok": true })).into_response()
