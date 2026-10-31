@@ -7,6 +7,8 @@ mod back_nav;
 mod components;
 mod http;
 mod icons;
+mod panic_hook;
+mod push;
 #[cfg(test)]
 mod pwa;
 mod shell;
@@ -62,7 +64,10 @@ fn api_base() -> String {
 
 fn main() {
     #[cfg(target_arch = "wasm32")]
-    dioxus::launch(App);
+    {
+        panic_hook::install();
+        dioxus::launch(App);
+    }
 
     #[cfg(not(target_arch = "wasm32"))]
     {
