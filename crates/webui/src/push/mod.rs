@@ -6,7 +6,20 @@ mod errors;
 mod bindgen;
 
 #[cfg(target_arch = "wasm32")]
-pub use bindgen::{enable_push_subscribe, fetch_push_device_state_json};
+pub use bindgen::enable_push_subscribe;
+
+#[cfg(target_arch = "wasm32")]
+pub async fn fetch_push_device_state_json() -> Result<String, wasm_bindgen::JsValue> {
+    bindgen::fetch_push_device_state_json_raw()
+        .await
+        .and_then(|value| {
+            value.as_string().ok_or_else(|| {
+                wasm_bindgen::JsValue::from_str(
+                    "fetchPushDeviceStateJson did not return a JSON string",
+                )
+            })
+        })
+}
 
 #[cfg(target_arch = "wasm32")]
 pub fn js_value_to_error_text(value: &wasm_bindgen::JsValue) -> String {

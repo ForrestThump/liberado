@@ -13,5 +13,5 @@ extern "C" {
     ) -> Result<JsValue, JsValue>;
 
     #[wasm_bindgen(catch, js_name = fetchPushDeviceStateJson)]
-    pub async fn fetch_push_device_state_json() -> Result<String, JsValue>;
+    pub async fn fetch_push_device_state_json_raw() -> Result<JsValue, JsValue>;
 }

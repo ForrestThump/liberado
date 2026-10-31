@@ -5,6 +5,7 @@ use dioxus::prelude::*;
 
 mod back_nav;
 mod components;
+mod fatal_classifier;
 mod http;
 mod icons;
 mod panic_hook;

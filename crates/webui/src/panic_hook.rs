@@ -1,5 +1,7 @@
 //! Console + on-page banner when the WASM app panics or hits an uncaught wasm-bindgen error.
 
+pub use crate::fatal_classifier::wasm_bindgen_fatal_signal;
+
 #[cfg(target_arch = "wasm32")]
 pub fn install() {
     install_global_wasm_error_banner();
@@ -33,7 +35,7 @@ fn install_global_wasm_error_banner() {
         };
         let message = error.message();
         let file = error.filename();
-        if is_wasm_bindgen_fatal(&message, &file) {
+        if wasm_bindgen_fatal_signal(&message, &file, None) {
             web_sys::console::error_1(&format!("liberado-webui error: {message}").into());
             show_reload_banner(&format!("{message} ({file})"));
             report_client_error(&message);
@@ -41,15 +43,50 @@ fn install_global_wasm_error_banner() {
     });
     let _ = window.add_event_listener_with_callback("error", handler.as_ref().unchecked_ref());
     handler.forget();
+
+    let rejection = Closure::<dyn FnMut(web_sys::Event)>::new(move |event: web_sys::Event| {
+        let Some(promise_event) = event.dyn_ref::<web_sys::PromiseRejectionEvent>() else {
+            return;
+        };
+        let reason = promise_event.reason();
+        let message = js_reason_message(&reason);
+        let stack = js_reason_stack(&reason);
+        let file = js_reason_filename(&reason);
+        if wasm_bindgen_fatal_signal(&message, &file, stack.as_deref()) {
+            web_sys::console::error_1(&format!("liberado-webui rejection: {message}").into());
+            show_reload_banner(&message);
+            report_client_error(&message);
+        }
+    });
+    let _ = window
+        .add_event_listener_with_callback("unhandledrejection", rejection.as_ref().unchecked_ref());
+    rejection.forget();
 }
 
 #[cfg(target_arch = "wasm32")]
-fn is_wasm_bindgen_fatal(message: &str, filename: &str) -> bool {
-    filename.ends_with(".wasm")
-        || filename.contains("wasm-bindgen")
-        || message.contains("wasm-bindgen")
-        || message.contains("RuntimeError")
-        || message.contains("unreachable")
+fn js_reason_message(reason: &wasm_bindgen::JsValue) -> String {
+    if let Some(text) = reason.as_string() {
+        return text;
+    }
+    js_sys::Reflect::get(reason, &wasm_bindgen::JsValue::from_str("message"))
+        .ok()
+        .and_then(|v| v.as_string())
+        .unwrap_or_else(|| "unhandled rejection".into())
+}
+
+#[cfg(target_arch = "wasm32")]
+fn js_reason_stack(reason: &wasm_bindgen::JsValue) -> Option<String> {
+    js_sys::Reflect::get(reason, &wasm_bindgen::JsValue::from_str("stack"))
+        .ok()
+        .and_then(|v| v.as_string())
+}
+
+#[cfg(target_arch = "wasm32")]
+fn js_reason_filename(reason: &wasm_bindgen::JsValue) -> String {
+    js_sys::Reflect::get(reason, &wasm_bindgen::JsValue::from_str("fileName"))
+        .ok()
+        .and_then(|v| v.as_string())
+        .unwrap_or_default()
 }
 
 #[cfg(target_arch = "wasm32")]
