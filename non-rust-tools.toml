@@ -38,6 +38,12 @@ purpose = "Reproduce a Windows child-process hang from the Node runtime."
 justification = "A Rust rewrite would remove the Node and Windows spawn interaction under diagnosis."
 
 [[tool]]
+path = "scripts/webui-smoke.js"
+owner = "web UI"
+purpose = "Drive the release WebUI bundle in headless Chrome with stub API routes."
+justification = "Browser CDP and service-worker timing belong at the JavaScript shell boundary; Rust cannot replace Chrome's push and glue runtime."
+
+[[tool]]
 path = "deploy/homelab/setup.sh"
 owner = "homelab deploy"
 purpose = "Pull the GHCR image for the current checkout and recreate the host Compose service."

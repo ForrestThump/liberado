@@ -159,6 +159,7 @@ fn webui_release_build_covers_the_advertised_contract() {
     assert!(workflow.contains("dx build -r -p liberado-webui --web"));
     assert!(workflow.contains("test -f \"${bundle}/manifest.json\""));
     assert!(workflow.contains("test -f \"${bundle}/sw.js\""));
+    assert!(workflow.contains("node scripts/webui-smoke.js"));
 }
 
 #[test]

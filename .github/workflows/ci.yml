@@ -198,6 +198,9 @@ jobs:
           test -f "${bundle}/sw.js"
           python3 -c 'import json, sys; json.load(open(sys.argv[1], encoding="utf-8"))' "${bundle}/manifest.json"
 
+      - name: Headless WebUI smoke (Notifications)
+        run: node scripts/webui-smoke.js
+
   module-health:
     name: Module health regression (ubuntu-latest)
     needs: dependency-security

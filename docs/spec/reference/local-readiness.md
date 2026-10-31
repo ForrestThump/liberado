@@ -125,6 +125,8 @@ The cross-platform operator recipes call the Rust CLI and read host-specific val
 - `just dev-start`, `just dev-status`, and `just stop-daemon` — manage a local daemon.
 - `just deploy-homelab`, `just deploy-webui-homelab`, `just smoke-homelab`, and
   `just latency-homelab` — run configured remote operations.
+- `just webui-smoke` — headless Chrome smoke against the release WebUI bundle (also runs in CI
+  after the WASM build).
 - `just paseo-install` — install and register the configured ACP bridge.
 - `just branches-clean` — audit merged branches with the standalone Python tool; deletion still
   requires its explicit `--apply` flag.
