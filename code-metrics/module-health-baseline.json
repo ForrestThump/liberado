@@ -6293,6 +6293,12 @@
     "functions": 6,
     "cyclomatic": 10
   },
+  "crates/webui/src/fatal_classifier.rs": {
+    "ploc": 94,
+    "lloc": 19,
+    "functions": 11,
+    "cyclomatic": 28
+  },
   "crates/webui/src/http.rs": {
     "ploc": 100,
     "lloc": 13,
