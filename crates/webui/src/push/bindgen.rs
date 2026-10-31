@@ -14,4 +14,10 @@ extern "C" {
 
     #[wasm_bindgen(catch, js_name = fetchPushDeviceStateJson)]
     pub async fn fetch_push_device_state_json_raw() -> Result<JsValue, JsValue>;
+
+    #[wasm_bindgen(catch, js_name = fetchDeviceLabelHintsJson)]
+    pub async fn fetch_device_label_hints_json_raw() -> Result<JsValue, JsValue>;
+
+    #[wasm_bindgen(catch, js_name = disablePushUnsubscribeJson)]
+    pub async fn disable_push_unsubscribe_json_raw() -> Result<JsValue, JsValue>;
 }

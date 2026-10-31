@@ -1,0 +1,143 @@
+//! HTTP and browser calls for the Notifications page.
+
+use super::model::{
+    DevicePushState, PushStatus, SubscriptionRow, api_error_message, parse_device_state,
+    parse_status, parse_subscriptions,
+};
+use crate::device_label::derive_device_label;
+
+pub(super) async fn fetch_status(api_base: &str) -> Result<PushStatus, String> {
+    let url = format!("{api_base}/api/push/status");
+    let resp = crate::http::get(&url)
+        .await
+        .map_err(|e| format!("Failed to reach daemon: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!("Push status unavailable ({})", resp.status()));
+    }
+    let text = resp
+        .text()
+        .await
+        .map_err(|e| format!("Bad response: {e}"))?;
+    parse_status(&text)
+}
+
+pub(super) async fn fetch_subscriptions(api_base: &str) -> Result<Vec<SubscriptionRow>, String> {
+    let url = format!("{api_base}/api/push/subscriptions");
+    let resp = crate::http::get(&url)
+        .await
+        .map_err(|e| format!("Failed to reach daemon: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!("Subscriptions unavailable ({})", resp.status()));
+    }
+    let text = resp
+        .text()
+        .await
+        .map_err(|e| format!("Bad response: {e}"))?;
+    parse_subscriptions(&text)
+}
+
+#[cfg(target_arch = "wasm32")]
+async fn fetch_device_push_state() -> Result<DevicePushState, String> {
+    use crate::push::{fetch_push_device_state_json, js_value_to_error_text};
+
+    fetch_push_device_state_json()
+        .await
+        .map_err(|e| js_value_to_error_text(&e))
+        .and_then(|json| parse_device_state(&json))
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+async fn fetch_device_push_state() -> Result<DevicePushState, String> {
+    Ok(DevicePushState::default())
+}
+
+pub(super) async fn refresh_all(
+    api_base: &str,
+) -> Result<(PushStatus, Vec<SubscriptionRow>, DevicePushState), String> {
+    let status = fetch_status(api_base).await?;
+    let subs = fetch_subscriptions(api_base).await.unwrap_or_default();
+    let device = fetch_device_push_state().await.unwrap_or_default();
+    Ok((status, subs, device))
+}
+
+#[cfg(target_arch = "wasm32")]
+pub(super) async fn enable_push(api_base: &str) -> Result<(), String> {
+    use crate::push::{enable_push_subscribe, fetch_device_label_hints, js_value_to_error_text};
+
+    let hints = fetch_device_label_hints().await.unwrap_or_default();
+    let label = derive_device_label(&hints);
+
+    let key_url = format!("{api_base}/api/push/vapid-public-key");
+    let resp = crate::http::get(&key_url)
+        .await
+        .map_err(|e| format!("Failed to reach daemon: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!(
+            "Web Push keys are not configured on the daemon (HTTP {}).",
+            resp.status()
+        ));
+    }
+    let body: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| format!("Bad VAPID response: {e}"))?;
+    let Some(public_key) = body.get("public_key").and_then(|v| v.as_str()) else {
+        return Err("Daemon returned no VAPID public key.".into());
+    };
+    enable_push_subscribe(public_key, api_base, &label, "")
+        .await
+        .map_err(|e| js_value_to_error_text(&e))
+        .map(|_| ())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub(super) async fn enable_push(_api_base: &str) -> Result<(), String> {
+    Err("Enable push from the installed WebUI in a browser.".into())
+}
+
+pub(super) async fn send_test(api_base: &str, endpoint: &str) -> Result<(), String> {
+    if endpoint.is_empty() {
+        return Err("this device is not subscribed — turn push on first".into());
+    }
+    let url = format!("{api_base}/api/push/test");
+    let resp = crate::http::post_json(&url, &serde_json::json!({ "endpoint": endpoint }))
+        .await
+        .map_err(|e| format!("Failed to reach daemon: {e}"))?;
+    if resp.status().is_success() {
+        Ok(())
+    } else {
+        let status = resp.status().as_u16();
+        let body = resp.text().await.unwrap_or_default();
+        Err(api_error_message(status, &body))
+    }
+}
+
+pub(super) async fn remove_subscription(api_base: &str, endpoint: &str) -> Result<(), String> {
+    let url = format!("{api_base}/api/push/subscriptions");
+    let resp = crate::http::delete_json(&url, &serde_json::json!({ "endpoint": endpoint }))
+        .await
+        .map_err(|e| format!("Failed to reach daemon: {e}"))?;
+    if resp.status().is_success() {
+        Ok(())
+    } else {
+        let status = resp.status().as_u16();
+        let body = resp.text().await.unwrap_or_default();
+        Err(api_error_message(status, &body))
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+pub(super) async fn turn_off_push(api_base: &str) -> Result<(), String> {
+    use crate::push::disable_push_local;
+
+    let endpoint = disable_push_local().await?;
+    if endpoint.is_empty() {
+        return Ok(());
+    }
+    remove_subscription(api_base, &endpoint).await
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub(super) async fn turn_off_push(_api_base: &str) -> Result<(), String> {
+    Err("Turn off push from the installed WebUI in a browser.".into())
+}

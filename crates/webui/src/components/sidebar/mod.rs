@@ -37,8 +37,8 @@ use self::agents::{
 };
 use self::projects::{PluginList, ProjectList, project_for_open};
 use self::rail::{
-    AgentGlyph, BrandLogo, ChatBubble, ClockGlyph, CollapseGlyph, ExpandGlyph, LibraryGlyph,
-    PluginGlyph, PrimaryNavRow, ThemeSwatch,
+    AgentGlyph, BellGlyph, BrandLogo, ChatBubble, ClockGlyph, CollapseGlyph, ExpandGlyph,
+    LibraryGlyph, PluginGlyph, PrimaryNavRow, ThemeSwatch,
 };
 
 pub(in crate::components) use self::agents::relative_time;
@@ -494,7 +494,7 @@ pub fn Sidebar(
                 PrimaryNavRow { route: route, collapsed: collapsed, target: Route::Chat, label: "Chat", icon: rsx! { ChatBubble {} } }
                 PrimaryNavRow { route: route, collapsed: collapsed, target: Route::Library, label: "Library", icon: rsx! { LibraryGlyph {} } }
                 PrimaryNavRow { route: route, collapsed: collapsed, target: Route::Automations, label: "Automations", icon: rsx! { ClockGlyph {} } }
-                PrimaryNavRow { route: route, collapsed: collapsed, target: Route::Notifications, label: "Notifications", icon: rsx! { ClockGlyph {} } }
+                PrimaryNavRow { route: route, collapsed: collapsed, target: Route::Notifications, label: "Notifications", icon: rsx! { BellGlyph {} } }
             }
 
             div {
