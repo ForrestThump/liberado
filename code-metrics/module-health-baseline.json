@@ -6161,11 +6161,23 @@
     "functions": 48,
     "cyclomatic": 101
   },
-  "crates/webui/src/components/notifications.rs": {
-    "ploc": 254,
-    "lloc": 48,
-    "functions": 28,
-    "cyclomatic": 55
+  "crates/webui/src/components/notifications/api.rs": {
+    "ploc": 126,
+    "lloc": 37,
+    "functions": 24,
+    "cyclomatic": 42
+  },
+  "crates/webui/src/components/notifications/mod.rs": {
+    "ploc": 224,
+    "lloc": 21,
+    "functions": 4,
+    "cyclomatic": 24
+  },
+  "crates/webui/src/components/notifications/model.rs": {
+    "ploc": 213,
+    "lloc": 54,
+    "functions": 22,
+    "cyclomatic": 43
   },
   "crates/webui/src/components/picker.rs": {
     "ploc": 180,
@@ -6292,6 +6304,12 @@
     "lloc": 4,
     "functions": 6,
     "cyclomatic": 10
+  },
+  "crates/webui/src/device_label.rs": {
+    "ploc": 154,
+    "lloc": 51,
+    "functions": 10,
+    "cyclomatic": 43
   },
   "crates/webui/src/fatal_classifier.rs": {
     "ploc": 94,
