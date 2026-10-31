@@ -25,8 +25,15 @@ share everything.
                    └────────────────────┘        └────────────────────┘
 ```
 
-The server wraps the daemon + the conversational agent; clients are thin and stateless. Conversation
-state (history) lives **server-side**, persisted by the `ConversationStore` (Decision 17) and keyed
+The server wraps the daemon + the conversational agent; clients are thin and stateless. Every
+matched `/api/*` request is logged at INFO with `method`, `path` (no query string), `status`, and
+`latency_ms`. These routes log at DEBUG instead so polling and long-lived streams do not flood
+INFO: `GET /api/health`, `GET /api/auth/session`, `GET /api/status` (Status view poll, 10s),
+`GET /api/chat/stream`, `GET /api/conversations/{id}/attach`, `GET /api/conversations/{id}/approvals`
+(approval cards poll, 3s), and `GET /api/goals/{id}/stream`. Bodies, headers, cookies, and query
+strings are never logged. Push subscribe/unsubscribe/test
+handlers log outcome with push service host and subscription id/count only (never endpoint paths or
+keys). Conversation state (history) lives **server-side**, persisted by the `ConversationStore` (Decision 17) and keyed
 by session id — the server rehydrates a conversation per turn from the store, so a client only sends
 the next message (plus the session id) and renders the stream back.
 
@@ -431,6 +438,7 @@ web-fetching MCP.
 | `GET /api/push/vapid-public-key` | owner | Application server key for `pushManager.subscribe` |
 | `GET/POST/DELETE /api/push/subscriptions` | owner | List, upsert, remove device subscriptions |
 | `POST /api/push/test` | owner | Enqueue a test Web Push row |
+| `POST /api/client-errors` | owner | Truncated WebUI panic/client error text at WARN (no secrets) |
 | `GET /api/outbox` | owner | Visible pending/failed reminder rows |
 | `POST /api/outbox/{id}/retry` | owner | Retry a failed row |
 | `POST /api/outbox/ack` | none | `{id, token}` from the push payload; sets `acked_at` only |

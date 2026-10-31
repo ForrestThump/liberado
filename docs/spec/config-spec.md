@@ -404,7 +404,8 @@ only after enqueue commits. First boot anchors at `now` without backfill.
 homelab environment (never GitHub), expose the WebUI with Tailscale serve (e.g.
 `tailscale serve --bg --https=8444 http://127.0.0.1:4201` — needs operator approval), install the
 PWA (Android Chrome install; iPhone Share → Add to Home Screen, iOS 16.4+, open from the icon),
-owner sign-in → Notifications → enable push, send test. Persist `<data_dir>` across container
+owner sign-in → Notifications (check permission, service worker, and local subscription status on
+the page) → enable push, send test. Persist `<data_dir>` across container
 recreates so `liberado.db` survives.
 
 See ADR-0020.

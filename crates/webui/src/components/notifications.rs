@@ -13,6 +13,20 @@ pub(crate) struct PushStatus {
     pub public_key: Option<String>,
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize)]
+pub(crate) struct DevicePushState {
+    #[serde(default)]
+    notification_permission: String,
+    #[serde(default)]
+    service_worker_state: String,
+    #[serde(default)]
+    page_controlled: bool,
+    #[serde(default)]
+    browser_subscribed: bool,
+    #[serde(default)]
+    subscription_host: String,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
 pub(crate) struct SubscriptionRow {
     pub id: i64,
@@ -27,6 +41,10 @@ fn parse_status(body: &str) -> Result<PushStatus, String> {
 
 fn parse_subscriptions(body: &str) -> Result<Vec<SubscriptionRow>, String> {
     serde_json::from_str(body).map_err(|e| format!("Bad subscriptions: {e}"))
+}
+
+fn parse_device_state(body: &str) -> Result<DevicePushState, String> {
+    serde_json::from_str(body).map_err(|e| format!("Bad device push state: {e}"))
 }
 
 async fn fetch_status(api_base: &str) -> Result<PushStatus, String> {
@@ -60,28 +78,42 @@ async fn fetch_subscriptions(api_base: &str) -> Result<Vec<SubscriptionRow>, Str
 }
 
 #[cfg(target_arch = "wasm32")]
-fn js_error_message(value: &wasm_bindgen::JsValue) -> String {
-    if let Some(text) = value.as_string() {
-        return text;
-    }
-    js_sys::JSON::stringify(value)
-        .ok()
-        .and_then(|json| json.as_string())
-        .unwrap_or_else(|| "unknown JavaScript error".into())
+async fn fetch_device_push_state() -> Result<DevicePushState, String> {
+    use crate::push::{fetch_push_device_state_json, js_value_to_error_text};
+
+    fetch_push_device_state_json()
+        .await
+        .map_err(|e| js_value_to_error_text(&e))
+        .and_then(|json| parse_device_state(&json))
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+async fn fetch_device_push_state() -> Result<DevicePushState, String> {
+    Ok(DevicePushState::default())
+}
+
+async fn refresh_all(
+    api_base: &str,
+) -> Result<(PushStatus, Vec<SubscriptionRow>, DevicePushState), String> {
+    let status = fetch_status(api_base).await?;
+    let subs = fetch_subscriptions(api_base).await.unwrap_or_default();
+    let device = fetch_device_push_state().await.unwrap_or_default();
+    Ok((status, subs, device))
 }
 
 #[cfg(target_arch = "wasm32")]
 async fn enable_push(api_base: &str, label: &str) -> Result<(), String> {
-    use js_sys::{Function, Promise};
-    use wasm_bindgen::JsValue;
-    use wasm_bindgen_futures::JsFuture;
+    use crate::push::{enable_push_subscribe, js_value_to_error_text};
 
     let key_url = format!("{api_base}/api/push/vapid-public-key");
     let resp = crate::http::get(&key_url)
         .await
         .map_err(|e| format!("Failed to reach daemon: {e}"))?;
     if !resp.status().is_success() {
-        return Err("Web Push keys are not configured on the daemon.".into());
+        return Err(format!(
+            "Web Push keys are not configured on the daemon (HTTP {}).",
+            resp.status()
+        ));
     }
     let body: serde_json::Value = resp
         .json()
@@ -90,51 +122,10 @@ async fn enable_push(api_base: &str, label: &str) -> Result<(), String> {
     let Some(public_key) = body.get("public_key").and_then(|v| v.as_str()) else {
         return Err("Daemon returned no VAPID public key.".into());
     };
-    let public_key_json =
-        serde_json::to_string(public_key).map_err(|e| format!("Bad public key: {e}"))?;
-    let api_base_json =
-        serde_json::to_string(api_base).map_err(|e| format!("Bad api base: {e}"))?;
-    let label_json = serde_json::to_string(label).map_err(|e| format!("Bad label: {e}"))?;
-    let script = format!(
-        r#"
-const reg = await navigator.serviceWorker.ready;
-const publicKey = {public_key_json};
-const sub = await reg.pushManager.subscribe({{
-  userVisibleOnly: true,
-  applicationServerKey: (function (b64) {{
-    const pad = "=".repeat((4 - (b64.length % 4)) % 4);
-    const base64 = (b64 + pad).replace(/-/g, "+").replace(/_/g, "/");
-    const raw = atob(base64);
-    const out = new Uint8Array(raw.length);
-    for (let i = 0; i < raw.length; i++) out[i] = raw.charCodeAt(i);
-    return out;
-  }})(publicKey);
-}});
-const json = sub.toJSON();
-const apiBase = {api_base_json};
-const resp = await fetch(apiBase + "/api/push/subscriptions", {{
-  method: "POST",
-  credentials: "same-origin",
-  headers: {{ "content-type": "application/json", "x-liberado-csrf": document.cookie.match(/liberado_csrf=([^;]+)/)?.[1] || "" }},
-  body: JSON.stringify({{ endpoint: json.endpoint, keys: json.keys, label: {label_json} }}),
-}});
-if (!resp.ok) {{
-  const text = await resp.text();
-  throw new Error("subscribe failed: " + resp.status + " " + text);
-}}
-return {{ ok: true }};
-"#
-    );
-    let runner = format!("return (async () => {{\n{script}\n}})();");
-    let func = Function::new_with_args("", &runner);
-    let promise_val = func
-        .call0(&JsValue::NULL)
-        .map_err(|e| format!("Push subscribe failed: {}", js_error_message(&e)))?;
-    let promise = Promise::from(promise_val);
-    JsFuture::from(promise)
+    enable_push_subscribe(public_key, api_base, label, "")
         .await
+        .map_err(|e| js_value_to_error_text(&e))
         .map(|_| ())
-        .map_err(|e| format!("Push subscribe failed: {}", js_error_message(&e)))
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -150,7 +141,9 @@ async fn send_test(api_base: &str) -> Result<(), String> {
     if resp.status().is_success() {
         Ok(())
     } else {
-        Err(format!("Test send failed ({})", resp.status()))
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        Err(format!("Test send failed (HTTP {status}): {body}"))
     }
 }
 
@@ -162,15 +155,41 @@ async fn remove_subscription(api_base: &str, endpoint: &str) -> Result<(), Strin
     if resp.status().is_success() {
         Ok(())
     } else {
-        Err(format!("Remove failed ({})", resp.status()))
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        Err(format!("Remove failed (HTTP {status}): {body}"))
     }
+}
+
+fn device_state_summary(device: &DevicePushState, server_count: u32) -> String {
+    let controlled = if device.page_controlled {
+        "controlled"
+    } else {
+        "not controlled"
+    };
+    let local = if device.browser_subscribed {
+        format!(
+            "this browser subscribed ({})",
+            if device.subscription_host.is_empty() {
+                "push service".into()
+            } else {
+                device.subscription_host.clone()
+            }
+        )
+    } else {
+        "this browser has no push subscription".into()
+    };
+    format!(
+        "Notification permission: {}. Service worker: {} ({controlled}). {local}. Daemon subscriptions: {server_count}.",
+        device.notification_permission, device.service_worker_state,
+    )
 }
 
 #[component]
 fn RemoveSubscriptionButton(
     api_base: String,
     endpoint: String,
-    on_done: EventHandler<Result<Vec<SubscriptionRow>, String>>,
+    on_done: EventHandler<Result<(PushStatus, Vec<SubscriptionRow>, DevicePushState), String>>,
     on_error: EventHandler<String>,
 ) -> Element {
     rsx! {
@@ -182,8 +201,8 @@ fn RemoveSubscriptionButton(
                 spawn(async move {
                     if let Err(err) = remove_subscription(&base, &endpoint).await {
                         on_error.call(err);
-                    } else if let Ok(rows) = fetch_subscriptions(&base).await {
-                        on_done.call(Ok(rows));
+                    } else if let Ok(bundle) = refresh_all(&base).await {
+                        on_done.call(Ok(bundle));
                     }
                 });
             },
@@ -196,6 +215,7 @@ fn RemoveSubscriptionButton(
 pub fn Notifications(api_base: String) -> Element {
     let mut status = use_signal(PushStatus::default);
     let mut subs = use_signal(Vec::<SubscriptionRow>::new);
+    let mut device_state = use_signal(DevicePushState::default);
     let mut label = use_signal(|| "This device".to_string());
     let mut message = use_signal(String::new);
     let base = api_base.clone();
@@ -203,12 +223,13 @@ pub fn Notifications(api_base: String) -> Element {
     use_effect(move || {
         let base = base.clone();
         spawn(async move {
-            match fetch_status(&base).await {
-                Ok(row) => status.set(row),
+            match refresh_all(&base).await {
+                Ok((row, rows, device)) => {
+                    status.set(row);
+                    subs.set(rows);
+                    device_state.set(device);
+                }
                 Err(err) => message.set(err),
-            }
-            if let Ok(rows) = fetch_subscriptions(&base).await {
-                subs.set(rows);
             }
         });
     });
@@ -233,7 +254,9 @@ pub fn Notifications(api_base: String) -> Element {
                 } else {
                     "Web Push keys are not configured — set LIBERADO_VAPID_* on the homelab node."
                 }
-                " Subscriptions: {status().subscription_count}."
+            }
+            p { class: "notifications-meta",
+                "{device_state_summary(&device_state(), status().subscription_count)}"
             }
             p { class: "notifications-hint", "{ios_hint}" }
             label { class: "notifications-label",
@@ -254,8 +277,10 @@ pub fn Notifications(api_base: String) -> Element {
                             match enable_push(&base, &name).await {
                                 Ok(()) => {
                                     message.set("Push enabled on this device.".into());
-                                    if let Ok(rows) = fetch_subscriptions(&base).await {
+                                    if let Ok((row, rows, device)) = refresh_all(&base).await {
+                                        status.set(row);
                                         subs.set(rows);
+                                        device_state.set(device);
                                     }
                                 }
                                 Err(err) => message.set(err),
@@ -287,9 +312,11 @@ pub fn Notifications(api_base: String) -> Element {
                             RemoveSubscriptionButton {
                                 api_base: list_base.clone(),
                                 endpoint: row.endpoint.clone(),
-                                on_done: move |result: Result<Vec<SubscriptionRow>, String>| {
-                                    if let Ok(rows) = result {
+                                on_done: move |result: Result<(PushStatus, Vec<SubscriptionRow>, DevicePushState), String>| {
+                                    if let Ok((row, rows, device)) = result {
+                                        status.set(row);
                                         subs.set(rows);
+                                        device_state.set(device);
                                     }
                                 },
                                 on_error: move |err: String| message.set(err),
@@ -322,5 +349,15 @@ mod tests {
             .unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].label, "phone");
+    }
+
+    #[test]
+    fn device_state_json_parses() {
+        let row = parse_device_state(
+            r#"{"notification_permission":"granted","service_worker_state":"active","page_controlled":true,"browser_subscribed":true,"subscription_host":"fcm.googleapis.com"}"#,
+        )
+        .unwrap();
+        assert_eq!(row.notification_permission, "granted");
+        assert!(row.browser_subscribed);
     }
 }
