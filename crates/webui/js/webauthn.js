@@ -85,7 +85,6 @@ function credentialToJson(cred) {
     const extensions = cred.getClientExtensionResults();
     if (extensions && typeof extensions === "object" && Object.keys(extensions).length > 0) {
       out.clientExtensionResults = extensions;
-      out.extensions = extensions;
     }
   }
   return JSON.stringify(out);

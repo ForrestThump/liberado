@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 /** Bytes for base64url "AQID" */
 const CHALLENGE_BYTES = Uint8Array.of(0x01, 0x02, 0x03);
@@ -20,6 +23,14 @@ function assertArrayBufferField(obj, field, expected) {
   assert.ok(obj[field] instanceof ArrayBuffer, `${field} must be ArrayBuffer`);
   assert.ok(bytesEqual(obj[field], expected), `${field} bytes`);
 }
+
+const fixtureDir = join(dirname(fileURLToPath(import.meta.url)), "fixtures");
+const registerFixture = JSON.parse(
+  readFileSync(join(fixtureDir, "register_credential.json"), "utf8"),
+);
+const assertionFixture = JSON.parse(
+  readFileSync(join(fixtureDir, "assertion_credential.json"), "utf8"),
+);
 
 let lastCreateArgs = null;
 let lastGetArgs = null;
@@ -50,7 +61,17 @@ Object.defineProperty(globalThis, "navigator", {
       },
       get: async (args) => {
         lastGetArgs = args;
-        return mockCred;
+        return {
+          id: mockCred.id,
+          rawId: mockCred.rawId,
+          type: mockCred.type,
+          response: {
+            clientDataJSON: Uint8Array.of(10).buffer,
+            authenticatorData: Uint8Array.of(12).buffer,
+            signature: Uint8Array.of(13).buffer,
+          },
+          getClientExtensionResults: mockCred.getClientExtensionResults,
+        };
       },
     },
   },
@@ -98,9 +119,11 @@ assert.equal(lastGetArgs.publicKey.allowCredentials.length, 1);
 assertArrayBufferField(lastGetArgs.publicKey.allowCredentials[0], "id", CRED_ID_BYTES);
 
 const credJson = JSON.parse(await createPasskey(creationEnvelope));
-assert.equal(credJson.response.clientDataJSON, "Cg");
-assert.equal(credJson.response.attestationObject, "Cw");
-assert.deepEqual(credJson.response.transports, ["internal", "hybrid"]);
-assert.deepEqual(credJson.clientExtensionResults, { credProps: { rk: true } });
+assert.deepEqual(credJson, registerFixture);
+assert.equal("extensions" in credJson, false, "must not send duplicate extensions key");
+
+const assertionJson = JSON.parse(await getPasskey(requestEnvelope));
+assert.deepEqual(assertionJson, assertionFixture);
+assert.equal("extensions" in assertionJson, false, "must not send duplicate extensions key");
 
 console.log("webauthn_node_test: ok");

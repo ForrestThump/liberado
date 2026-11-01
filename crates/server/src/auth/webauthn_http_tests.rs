@@ -10,7 +10,10 @@ use liberado_config::{ApiConfig, WebAuthnConfig};
 use tower::ServiceExt;
 use webauthn_authenticator_rs::prelude::{Url as AuthUrl, WebauthnAuthenticator};
 use webauthn_authenticator_rs::softpasskey::SoftPasskey;
-use webauthn_rs::prelude::{CreationChallengeResponse, RequestChallengeResponse};
+use webauthn_rs::prelude::{
+    CreationChallengeResponse, PublicKeyCredential, RegisterPublicKeyCredential,
+    RequestChallengeResponse,
+};
 
 use crate::api::auth_login;
 use crate::auth::webauthn_handlers::{
@@ -825,4 +828,40 @@ async fn login_start_json_exposes_public_key_challenge_for_webui() {
     }
     serde_json::from_value::<RequestChallengeResponse>(body["options"].clone())
         .expect("options must deserialize as RequestChallengeResponse");
+}
+
+#[test]
+fn webui_browser_credential_json_deserializes_for_passkey_finish() {
+    let register_json = include_str!("../../../webui/js/fixtures/register_credential.json");
+    let reg: RegisterPublicKeyCredential =
+        serde_json::from_str(register_json).expect("register credential json");
+    assert_eq!(
+        reg.extensions.cred_props.as_ref().and_then(|c| c.rk),
+        Some(true)
+    );
+    assert!(
+        reg.response
+            .transports
+            .as_ref()
+            .is_some_and(|t| t.len() == 2),
+        "expected internal and hybrid transports"
+    );
+
+    let assertion_json = include_str!("../../../webui/js/fixtures/assertion_credential.json");
+    serde_json::from_str::<PublicKeyCredential>(assertion_json).expect("assertion credential json");
+
+    let mut duplicate =
+        serde_json::from_str::<serde_json::Value>(register_json).expect("register json value");
+    let ext = duplicate
+        .get("clientExtensionResults")
+        .cloned()
+        .expect("clientExtensionResults");
+    duplicate
+        .as_object_mut()
+        .expect("object")
+        .insert("extensions".into(), ext);
+    assert!(
+        serde_json::from_value::<RegisterPublicKeyCredential>(duplicate).is_err(),
+        "duplicate clientExtensionResults and extensions keys must fail serde"
+    );
 }
