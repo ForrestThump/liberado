@@ -34,6 +34,10 @@ pub mod ua_label;
 pub mod webauthn_config;
 pub mod webauthn_handlers;
 
+#[cfg(test)]
+#[path = "webauthn_http_tests.rs"]
+mod webauthn_http_tests;
+
 pub use bind::{BindPlan, ensure_bind_is_credentialed, resolve_bind};
 pub use guard::{ApiGuard, require_credential, require_owner};
 pub use tokens::ApiAuth;

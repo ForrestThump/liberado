@@ -239,3 +239,21 @@ async fn the_static_frontend_is_reachable_before_sign_in() {
         "the sign-in page cannot require being signed in"
     );
 }
+
+/// API clients using bearer tokens must keep working when `Host` is not a browser origin.
+#[tokio::test]
+async fn bearer_human_reaches_api_on_a_non_origin_host() {
+    let h = harness().await;
+    let (status, body) = call(
+        &h.app,
+        Request::builder()
+            .method("GET")
+            .uri("/api/status")
+            .header("authorization", format!("Bearer {HUMAN}"))
+            .header("host", "internal-only.example:4201")
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+}

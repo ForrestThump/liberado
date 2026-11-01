@@ -228,3 +228,23 @@ async fn signing_out_revokes_the_session_and_clears_both_cookies() {
         sent.cookies
     );
 }
+
+#[tokio::test]
+async fn repeated_bad_logins_are_rate_limited() {
+    let guard = guard_with_human();
+    let app = app(guard);
+    for _ in 0..5 {
+        let sent = send(&app, login_request("wrong-token")).await;
+        assert_eq!(sent.status, StatusCode::UNAUTHORIZED);
+    }
+    let limited = send(&app, login_request("wrong-token")).await;
+    assert_eq!(limited.status, StatusCode::TOO_MANY_REQUESTS);
+    assert!(
+        limited
+            .cookies
+            .is_empty()
+            && limited.body.contains("too many sign-in attempts"),
+        "{}",
+        limited.body
+    );
+}

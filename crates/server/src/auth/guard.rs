@@ -14,7 +14,6 @@ use liberado_config::ApiConfig;
 use liberado_outbox::Outbox;
 
 use super::challenges::ChallengeStore;
-use super::client_ip;
 use super::rate_limit::AuthRateLimiter;
 use super::sessions::{CSRF_HEADER, SESSION_COOKIE, SessionStore, cookie_value};
 use super::tokens::{ApiAuth, Principal};

@@ -113,3 +113,29 @@ fn an_unset_human_credential_is_not_reported_as_malformed() {
     assert!(api.human.is_unset());
     assert!(api.problems().is_empty());
 }
+
+#[test]
+fn webauthn_origin_must_match_rp_id_or_subdomain() {
+    let cfg = WebAuthnConfig {
+        rp_id: "example.com".into(),
+        origins: vec!["https://evil.org".into()],
+        rp_name: "Liberado".into(),
+    };
+    assert!(
+        cfg.problems()
+            .iter()
+            .any(|p| p.contains("subdomain")),
+        "{:?}",
+        cfg.problems()
+    );
+}
+
+#[test]
+fn webauthn_localhost_http_origin_is_allowed() {
+    let cfg = WebAuthnConfig {
+        rp_id: "localhost".into(),
+        origins: vec!["http://localhost:8080".into()],
+        rp_name: "Liberado".into(),
+    };
+    assert!(cfg.problems().is_empty());
+}

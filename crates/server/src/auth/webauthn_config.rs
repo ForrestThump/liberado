@@ -7,7 +7,6 @@ use webauthn_rs::prelude::{Webauthn, WebauthnBuilder};
 pub struct WebAuthnState {
     pub webauthn: Webauthn,
     pub origins: Vec<String>,
-    pub rp_id: String,
 }
 
 pub fn build_webauthn(cfg: &WebAuthnConfig) -> Result<WebAuthnState, String> {
@@ -32,7 +31,6 @@ pub fn build_webauthn(cfg: &WebAuthnConfig) -> Result<WebAuthnState, String> {
     Ok(WebAuthnState {
         webauthn,
         origins: cfg.origins.clone(),
-        rp_id: cfg.rp_id.trim().to_string(),
     })
 }
 

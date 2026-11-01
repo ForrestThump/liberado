@@ -62,3 +62,72 @@ pub async fn redirect_browser_origin(
     };
     Redirect::permanent(&uri.to_string()).into_response()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode, header};
+    use axum::middleware::from_fn_with_state;
+    use axum::routing::get;
+    use axum::Router;
+    use liberado_config::{ApiConfig, WebAuthnConfig};
+    use tower::ServiceExt;
+
+    use crate::auth::{ApiAuth, ApiGuard};
+
+    fn guard_with_webauthn() -> Arc<ApiGuard> {
+        ApiGuard::with_api(
+            ApiAuth::from_values(Some("human"), &[]),
+            ApiConfig {
+                webauthn: Some(WebAuthnConfig {
+                    rp_id: "homelab-node-ai.mermaid-halfbeak.ts.net".into(),
+                    origins: vec![
+                        "https://homelab-node-ai.mermaid-halfbeak.ts.net:8444".into(),
+                    ],
+                    rp_name: "Liberado".into(),
+                }),
+                ..ApiConfig::default()
+            },
+        )
+    }
+
+    fn redirect_app(guard: Arc<ApiGuard>) -> Router {
+        Router::new()
+            .route("/api/status", get(|| async { "ok" }))
+            .fallback(get(|| async { "html" }))
+            .layer(from_fn_with_state(guard, redirect_browser_origin))
+    }
+
+    #[tokio::test]
+    async fn html_get_on_wrong_host_redirects() {
+        let app = redirect_app(guard_with_webauthn());
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/chat")
+                    .header(header::HOST, "wrong.example:8444")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::PERMANENT_REDIRECT);
+    }
+
+    #[tokio::test]
+    async fn api_get_on_wrong_host_is_not_redirected() {
+        let app = redirect_app(guard_with_webauthn());
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/status")
+                    .header(header::HOST, "wrong.example:8444")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+}
