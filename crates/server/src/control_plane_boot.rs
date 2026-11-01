@@ -3,15 +3,25 @@
 use std::sync::Arc;
 
 use liberado_config::ApiConfig;
+use liberado_outbox::Outbox;
 use tracing::info;
 
 use crate::auth;
 
 /// Resolve `[api]` credentials into the live guard. Separated so the error says `API auth`
 /// before the loader's own message, which names a setting but not the subsystem.
-pub fn resolve_api_guard(api: &ApiConfig) -> Result<auth::ApiGuard, Box<dyn std::error::Error>> {
+pub fn resolve_api_guard(
+    api: &ApiConfig,
+    outbox: Arc<Outbox>,
+) -> Result<auth::ApiGuard, Box<dyn std::error::Error>> {
     let resolved = auth::ApiAuth::resolve(api).map_err(|e| format!("API auth: {e}"))?;
-    Ok(auth::ApiGuard::new(resolved, api.allowed_origins.clone()))
+    auth::ApiGuard::new(resolved, api, outbox).map_err(Into::into)
+}
+
+/// Open the shared SQLite file used for reminders and auth sessions.
+pub fn open_shared_outbox() -> Result<Arc<Outbox>, Box<dyn std::error::Error>> {
+    let path = liberado_config::data_dir().join(liberado_outbox::DB_FILE);
+    Ok(Arc::new(Outbox::open(&path).map_err(|e| format!("outbox: {e}"))?))
 }
 
 /// One startup line saying how closed the control plane actually is.
@@ -31,7 +41,8 @@ pub fn log_api_posture(guard: &auth::ApiGuard, plan: &auth::BindPlan) {
 pub fn prepare_control_plane(
     api: &ApiConfig,
 ) -> Result<(Arc<auth::ApiGuard>, auth::BindPlan), Box<dyn std::error::Error>> {
-    let guard = Arc::new(resolve_api_guard(api)?);
+    let outbox = open_shared_outbox()?;
+    let guard = Arc::new(resolve_api_guard(api, outbox)?);
     let plan = auth::resolve_bind(
         std::env::var(auth::bind::BIND_ENV).ok().as_deref(),
         std::env::var(auth::bind::PORT_ENV).ok().as_deref(),

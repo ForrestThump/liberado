@@ -119,7 +119,7 @@ async fn assemble_daemon_wires_outbox_in_watch_only_without_provider_keys() {
 
     let config = config_with_vault(vault.path().to_str().unwrap());
     let (_daemon_handle, _router, state) = {
-        let guard = Arc::new(auth::ApiGuard::new(auth::ApiAuth::default(), Vec::new()));
+        let guard = auth::ApiGuard::open_for_test();
         let boot = DaemonBoot {
             config,
             #[cfg(feature = "coding")]
@@ -158,7 +158,7 @@ async fn assemble_daemon_wires_outbox_when_provider_key_is_set() {
 
     let config = config_with_fake_provider(vault.path().to_str().unwrap());
     let (_daemon_handle, _router, state) = {
-        let guard = Arc::new(auth::ApiGuard::new(auth::ApiAuth::default(), Vec::new()));
+        let guard = auth::ApiGuard::open_for_test();
         let boot = DaemonBoot {
             config,
             #[cfg(feature = "coding")]

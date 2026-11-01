@@ -31,9 +31,9 @@ async fn harness() -> Harness {
     let dir = tempfile::tempdir().unwrap();
     let sessions = Arc::new(SessionStore::open(dir.path()).await);
     let state = Arc::new(AppState::for_test(sessions, None, dir.path().to_path_buf()));
-    let guard = Arc::new(ApiGuard::new(
-        ApiAuth::from_values(Some(HUMAN), &[("coder", AGENT)]),
-        Vec::new(),
+    let guard = ApiGuard::with_auth(ApiAuth::from_values(
+        Some(HUMAN),
+        &[("coder", AGENT)],
     ));
     let app = crate::build_app_router(&state, &guard);
     Harness {
@@ -208,7 +208,7 @@ async fn the_daemon_sends_no_cors_header_to_a_foreign_origin() {
 #[tokio::test]
 async fn the_browser_session_reaches_an_owner_only_route() {
     let h = harness().await;
-    let (id, csrf) = h.guard.sessions.create();
+    let (id, csrf) = h.guard.sessions.create(1, "token", None).unwrap();
     let (status, body) = call(
         &h.app,
         Request::builder()

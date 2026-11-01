@@ -13,6 +13,7 @@ mod auth;
 mod control_plane_boot;
 
 pub(crate) use app_router::build_app_router;
+pub(crate) mod browser_redirect;
 mod chat_agent_spawn;
 mod coding_notice;
 #[cfg(feature = "coding")]
@@ -399,7 +400,10 @@ async fn serve_with_drain(
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
     let drain_state = state.clone();
-    axum::serve(listener, app)
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
         .with_graceful_shutdown(async move {
             shutdown::wait_for_shutdown_signal().await;
             let outcome = shutdown::drain_for_shutdown(&drain_state, grace).await;

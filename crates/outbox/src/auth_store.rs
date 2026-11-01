@@ -5,6 +5,7 @@ use std::time::Duration;
 use chrono::{DateTime, Utc};
 use rand::RngCore;
 use rusqlite::{OptionalExtension, params};
+use serde::Serialize;
 use sha2::{Digest, Sha256};
 
 use crate::error::{Error, Result};
@@ -26,7 +27,7 @@ pub struct SessionRecord {
     pub user_agent: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct PasskeyRow {
     pub id: i64,
     pub name: String,
@@ -173,6 +174,16 @@ impl Outbox {
                 |row| row.get(0),
             )
             .map_err(Into::into)
+    }
+
+    pub fn passkey_json_values(&self, account_id: i64) -> Result<Vec<String>> {
+        let conn = self.lock();
+        let mut stmt =
+            conn.prepare("SELECT passkey_json FROM passkeys WHERE account_id = ?1 ORDER BY id")?;
+        let rows = stmt
+            .query_map([account_id], |row| row.get(0))?
+            .collect::<std::result::Result<Vec<String>, _>>()?;
+        Ok(rows)
     }
 
     pub fn create_auth_session(

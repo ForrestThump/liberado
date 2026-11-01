@@ -84,6 +84,14 @@ pub(crate) fn unauthenticated_routes(state: &Arc<AppState>, guard: &Arc<auth::Ap
         .route("/api/auth/login", axum::routing::post(api::auth_login))
         .route("/api/auth/logout", axum::routing::post(api::auth_logout))
         .route("/api/auth/session", axum::routing::get(api::auth_session))
+        .route(
+            "/api/auth/passkey/login/start",
+            axum::routing::post(crate::auth::webauthn_handlers::passkey_login_start),
+        )
+        .route(
+            "/api/auth/passkey/login/finish",
+            axum::routing::post(crate::auth::webauthn_handlers::passkey_login_finish),
+        )
         .with_state(guard.clone());
     let ack = Router::new()
         .route(
@@ -205,6 +213,34 @@ pub(crate) fn build_app_router(state: &Arc<AppState>, guard: &Arc<auth::ApiGuard
         )
         .with_state(state.clone());
 
+    let auth_guard_routes = Router::new()
+        .route(
+            "/api/auth/passkey/register/start",
+            axum::routing::post(crate::auth::webauthn_handlers::passkey_register_start),
+        )
+        .route(
+            "/api/auth/passkey/register/finish",
+            axum::routing::post(crate::auth::webauthn_handlers::passkey_register_finish),
+        )
+        .route("/api/auth/passkeys", axum::routing::get(api::list_passkeys))
+        .route(
+            "/api/auth/passkeys/{id}",
+            axum::routing::delete(api::delete_passkey).patch(api::patch_passkey),
+        )
+        .route(
+            "/api/auth/sessions",
+            axum::routing::get(api::list_auth_sessions),
+        )
+        .route(
+            "/api/auth/sessions/{id}",
+            axum::routing::delete(api::delete_auth_session),
+        )
+        .route_layer(axum::middleware::from_fn_with_state(
+            guard.clone(),
+            auth::require_credential,
+        ))
+        .with_state(guard.clone());
+
     let api_surface = authenticated
         .merge(owner_only_routes(state))
         .route_layer(axum::middleware::from_fn_with_state(
@@ -212,6 +248,7 @@ pub(crate) fn build_app_router(state: &Arc<AppState>, guard: &Arc<auth::ApiGuard
             auth::require_credential,
         ))
         .merge(unauthenticated_routes(state, guard))
+        .merge(auth_guard_routes)
         .layer(axum::middleware::from_fn(
             crate::request_log::log_api_request,
         ));
@@ -237,6 +274,10 @@ pub(crate) fn build_app_router(state: &Arc<AppState>, guard: &Arc<auth::ApiGuard
                 .layer(CompressionLayer::new())
                 .service(ServeDir::new(dist_dir())),
         )
+        .layer(axum::middleware::from_fn_with_state(
+            guard.clone(),
+            crate::browser_redirect::redirect_browser_origin,
+        ))
 }
 
 /// A CORS layer for the exact origins the operator listed, or `None` when the list is empty.

@@ -43,9 +43,9 @@ async fn owner_push_app(outbox: Arc<Outbox>) -> Router {
     let mut state = AppState::for_test(sessions, None, dir.path().to_path_buf());
     state.outbox = Some(outbox);
     let state = Arc::new(state);
-    let guard = Arc::new(ApiGuard::new(
-        ApiAuth::from_values(Some("owner-token-test-000000"), &[]),
-        Vec::new(),
+    let guard = ApiGuard::with_auth(ApiAuth::from_values(
+        Some("owner-token-test-000000"),
+        &[],
     ));
     Router::new()
         .route("/api/push/status", axum::routing::get(push_status))

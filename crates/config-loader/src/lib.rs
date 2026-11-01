@@ -47,7 +47,7 @@ pub use model::{
     RemindersConfig, ResolvedProfile, RoleOverride, ScheduleTiming, SessionProfile,
     ShepherdAuthConfig, ShepherdConfig, ShepherdProjectConfig, ShepherdReviewConfig,
     SubagentIsolation, TelegramApprovalsTuning, ToolImpact, Topology, Tuning, VaultRemindersConfig,
-    WebUiConfig, ZonePolicy, managed_binary_path, resolve_declared_zone,
+    WebAuthnConfig, WebUiConfig, ZonePolicy, managed_binary_path, resolve_declared_zone,
 };
 pub use source::{ConfigLoadError, ConfigSource};
 pub use validation::validate_merged_config;
