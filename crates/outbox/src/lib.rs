@@ -5,10 +5,12 @@
 //! are single transactions.
 
 mod ack;
+mod auth_store;
 mod batch;
 mod cursor;
 mod error;
 mod keys;
+mod migrate;
 mod pass;
 mod plan;
 mod rows;
@@ -26,6 +28,9 @@ pub use plan::{
     plan_targets,
 };
 pub use rows::{EnqueueOutcome, NewReminder, OutboxCounts, VisibleReminder};
+pub use auth_store::{
+    PasskeyCredential, PasskeyRow, SessionRecord, SESSION_ABSOLUTE, SESSION_IDLE, hash_session_id,
+};
 pub use store::Outbox;
 pub use subs::{NewSubscription, SubscriptionKeys, SubscriptionView};
 

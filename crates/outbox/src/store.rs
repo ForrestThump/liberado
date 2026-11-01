@@ -63,6 +63,7 @@ impl Outbox {
         conn.pragma_update(None, "busy_timeout", 5000)?;
         conn.pragma_update(None, "synchronous", "NORMAL")?;
         conn.execute_batch(SCHEMA)?;
+        crate::migrate::migrate(&conn)?;
         Ok(Self {
             conn: Mutex::new(conn),
         })
