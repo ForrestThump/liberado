@@ -115,6 +115,109 @@ pub struct ApiConfig {
     /// no setting that makes it one.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub allowed_origins: Vec<String>,
+    /// WebAuthn / passkey login. When unset, passkeys are disabled and token login remains.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub webauthn: Option<WebAuthnConfig>,
+}
+
+/// `[api.webauthn]` — passkey relying party settings.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WebAuthnConfig {
+    /// Relying party id (host only — no scheme or port).
+    pub rp_id: String,
+    /// Allowed origins (https, or `http://localhost` for dev).
+    pub origins: Vec<String>,
+    /// Display name shown in the passkey UI. Defaults to "Liberado".
+    #[serde(default = "default_rp_name")]
+    pub rp_name: String,
+}
+
+fn default_rp_name() -> String {
+    "Liberado".to_string()
+}
+
+impl WebAuthnConfig {
+    pub fn problems(&self) -> Vec<String> {
+        let mut problems = Vec::new();
+        let rp_id = self.rp_id.trim();
+        if rp_id.is_empty() {
+            problems.push("api.webauthn rp_id must not be empty".to_string());
+        } else if rp_id.contains("://") || rp_id.contains('/') || rp_id.contains(':') {
+            problems.push(
+                "api.webauthn rp_id must be a host name only (no scheme, path, or port)"
+                    .to_string(),
+            );
+        }
+        if self.origins.is_empty() {
+            problems.push("api.webauthn origins must list at least one https origin".to_string());
+        }
+        for origin in &self.origins {
+            problems.extend(origin_problem(origin, rp_id));
+        }
+        problems
+    }
+}
+
+fn origin_problem(origin: &str, rp_id: &str) -> Option<String> {
+    let trimmed = origin.trim();
+    if trimmed.is_empty() {
+        return Some("api.webauthn origins must not contain empty entries".to_string());
+    }
+    let Some((scheme, authority)) = split_origin(trimmed) else {
+        return Some(format!(
+            "api.webauthn origin '{trimmed}' is not a valid URL"
+        ));
+    };
+    let host = authority_host(&authority);
+    if scheme == "http" {
+        if host != "localhost" && host != "127.0.0.1" && host != "[::1]" {
+            return Some(format!(
+                "api.webauthn origin '{trimmed}' must use https (http is only allowed for localhost)"
+            ));
+        }
+    } else if scheme != "https" {
+        return Some(format!(
+            "api.webauthn origin '{trimmed}' must use https or http://localhost"
+        ));
+    }
+    if !host_is_rp_or_subdomain(&host, rp_id) {
+        return Some(format!(
+            "api.webauthn origin '{trimmed}' host must equal rp_id or be a subdomain of it"
+        ));
+    }
+    None
+}
+
+fn split_origin(origin: &str) -> Option<(String, String)> {
+    let (scheme, rest) = origin.split_once("://")?;
+    if scheme.is_empty() || rest.is_empty() {
+        return None;
+    }
+    let authority = rest
+        .split('/')
+        .next()?
+        .split('?')
+        .next()?
+        .split('#')
+        .next()?;
+    if authority.is_empty() {
+        return None;
+    }
+    Some((scheme.to_lowercase(), authority.to_string()))
+}
+
+fn authority_host(authority: &str) -> String {
+    if authority.starts_with('[')
+        && let Some(end) = authority.find(']')
+    {
+        return authority[..=end].to_string();
+    }
+    authority.split(':').next().unwrap_or(authority).to_string()
+}
+
+fn host_is_rp_or_subdomain(host: &str, rp_id: &str) -> bool {
+    host == rp_id || host.ends_with(&format!(".{rp_id}"))
 }
 
 impl ApiConfig {
@@ -151,6 +254,9 @@ impl ApiConfig {
                     "api.allowed_origins contains '*'; list exact origins instead".to_string(),
                 );
             }
+        }
+        if let Some(webauthn) = &self.webauthn {
+            problems.extend(webauthn.problems());
         }
         problems
     }

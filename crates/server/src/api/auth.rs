@@ -1,7 +1,4 @@
-//! `POST /api/auth/login`, `GET /api/auth/session`, `POST /api/auth/logout`, `GET /api/health`.
-//!
-//! How Forrest signs in to the WebUI: paste the human token once, get a cookie. The browser
-//! never stores the token, and page script can never read the cookie that replaces it.
+//! `POST /api/auth/login`, `GET /api/auth/session`, `POST /api/auth/logout`, passkeys, `GET /api/health`.
 
 use std::sync::Arc;
 
@@ -14,56 +11,54 @@ use axum::{
 use chat_client_contract::ApiError;
 use serde::{Deserialize, Serialize};
 
+use crate::auth::client_ip;
+use crate::auth::cookies::{clear_cookie, session_max_age, set_session_cookies};
 use crate::auth::guard::ApiGuard;
 use crate::auth::sessions::{CSRF_COOKIE, SESSION_COOKIE, cookie_value};
+use crate::auth::tokens::Principal;
 
 #[derive(Deserialize)]
 pub struct LoginRequest {
     pub token: String,
 }
 
-/// What the browser needs to know, and nothing it could not already see.
 #[derive(Serialize)]
 pub struct SessionResponse {
-    /// `true` when this request carried a live owner session.
     pub authenticated: bool,
-    /// `true` when an owner credential is configured, so signing in is possible at all. A
-    /// loopback daemon with no `[api]` table reports `false`, and the WebUI shows no sign-in
-    /// box because there is nothing to type.
     pub login_required: bool,
-    /// The token to echo in `X-Liberado-CSRF` on mutating requests. Present only for a live
-    /// session.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub csrf: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub method: Option<String>,
+    pub passkeys_enabled: bool,
+    pub passkey_count: i64,
+    pub can_register: bool,
 }
 
-/// Minimal liveness, deliberately unauthenticated and deliberately contentless.
-///
-/// The Compose healthcheck and any uptime monitor need a route that answers before anyone has
-/// signed in. `GET /api/status` used to be that route; it reports the vault path, the active
-/// model, and every connected tool, which is a reconnaissance gift to an unauthenticated
-/// caller. This says only that the process is up.
 pub async fn health() -> impl IntoResponse {
     Json(serde_json::json!({ "ok": true }))
 }
 
-/// Exchange the human token for a session cookie.
-///
-/// A wrong token is a flat 401 that does not say whether a credential is configured, and the
-/// comparison runs in constant time inside [`crate::auth::ApiAuth`].
-pub async fn login(State(guard): State<Arc<ApiGuard>>, Json(body): Json<LoginRequest>) -> Response {
+pub async fn login(
+    State(guard): State<Arc<ApiGuard>>,
+    headers: HeaderMap,
+    Json(body): Json<LoginRequest>,
+) -> Response {
+    let ip = client_ip::client_ip(&headers, None);
     if !guard.auth.has_human_credential() {
         return (
             StatusCode::NOT_FOUND,
             Json(ApiError {
-                error: "no human credential is configured; set [api] human in topology.toml"
-                    .to_string(),
+                error: "no human credential is configured".to_string(),
             }),
         )
             .into_response();
     }
     if !guard.auth.is_human_token(body.token.trim()) {
-        tracing::warn!("rejected an API sign-in attempt with a token that did not match");
+        tracing::warn!(client = %ip, "rejected API sign-in attempt");
+        if guard.rate_limiter.record_failure(&ip) {
+            return rate_limited(&guard);
+        }
         return (
             StatusCode::UNAUTHORIZED,
             Json(ApiError {
@@ -72,47 +67,44 @@ pub async fn login(State(guard): State<Arc<ApiGuard>>, Json(body): Json<LoginReq
         )
             .into_response();
     }
-
-    let (session_id, csrf) = guard.sessions.create();
-    let mut headers = HeaderMap::new();
-    append_cookie(
-        &mut headers,
-        &format!("{SESSION_COOKIE}={session_id}; HttpOnly; SameSite=Strict; Path=/"),
-    );
-    // Readable on purpose: the WebUI reads it back after a reload so a refresh does not need
-    // another round trip before it can send a mutating request. It authenticates nothing — the
-    // `HttpOnly` cookie above does that — so a script that reads it has gained nothing.
-    append_cookie(
-        &mut headers,
-        &format!("{CSRF_COOKIE}={csrf}; SameSite=Strict; Path=/"),
-    );
+    let ua = headers
+        .get(header::USER_AGENT)
+        .and_then(|v| v.to_str().ok());
+    let (session_id, csrf) = match guard.sessions.create(1, "token", ua) {
+        Ok(v) => v,
+        Err(_) => return internal_error("could not create session"),
+    };
+    let live = match guard.sessions.touch(&session_id) {
+        Some(l) => l,
+        None => return internal_error("could not create session"),
+    };
+    let max_age = session_max_age(&live.expires_at);
+    let mut out = HeaderMap::new();
+    set_session_cookies(&mut out, &session_id, &csrf, max_age);
     (
-        headers,
-        Json(SessionResponse {
-            authenticated: true,
-            login_required: true,
-            csrf: Some(csrf),
-        }),
+        out,
+        Json(session_body(
+            &guard,
+            Some(csrf.clone()),
+            Some("token".into()),
+            true,
+        )),
     )
         .into_response()
 }
 
-/// Whether this browser is signed in, and the CSRF token if so.
 pub async fn session(State(guard): State<Arc<ApiGuard>>, headers: HeaderMap) -> Response {
-    let csrf = headers
+    let live = headers
         .get(header::COOKIE)
         .and_then(|v| v.to_str().ok())
         .and_then(|raw| cookie_value(raw, SESSION_COOKIE))
         .and_then(|id| guard.sessions.touch(id));
-    Json(SessionResponse {
-        authenticated: csrf.is_some(),
-        login_required: !guard.auth.is_open(),
-        csrf,
-    })
-    .into_response()
+    let authenticated = live.is_some();
+    let csrf = live.as_ref().map(|l| l.csrf.clone());
+    let method = live.map(|l| l.method);
+    Json(session_body(&guard, csrf, method, authenticated)).into_response()
 }
 
-/// Revoke this session and clear both cookies.
 pub async fn logout(State(guard): State<Arc<ApiGuard>>, headers: HeaderMap) -> Response {
     if let Some(id) = headers
         .get(header::COOKIE)
@@ -122,32 +114,176 @@ pub async fn logout(State(guard): State<Arc<ApiGuard>>, headers: HeaderMap) -> R
         guard.sessions.revoke(id);
     }
     let mut out = HeaderMap::new();
-    append_cookie(
-        &mut out,
-        &format!("{SESSION_COOKIE}=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0"),
-    );
-    append_cookie(
-        &mut out,
-        &format!("{CSRF_COOKIE}=; SameSite=Strict; Path=/; Max-Age=0"),
-    );
+    clear_cookie(&mut out, SESSION_COOKIE);
+    clear_cookie(&mut out, CSRF_COOKIE);
+    (out, Json(session_body(&guard, None, None, false))).into_response()
+}
+
+pub async fn list_passkeys(
+    State(guard): State<Arc<ApiGuard>>,
+    axum::Extension(principal): axum::Extension<Principal>,
+) -> Response {
+    if !principal.is_human() {
+        return forbidden_client();
+    }
+    match guard.sessions.outbox().list_passkeys(1) {
+        Ok(rows) => Json(rows).into_response(),
+        Err(_) => internal_error("could not list passkeys"),
+    }
+}
+
+#[derive(Deserialize)]
+pub struct PasskeyRename {
+    pub name: String,
+}
+
+pub async fn patch_passkey(
+    State(guard): State<Arc<ApiGuard>>,
+    axum::extract::Path(id): axum::extract::Path<i64>,
+    axum::Extension(principal): axum::Extension<Principal>,
+    Json(body): Json<PasskeyRename>,
+) -> Response {
+    if !principal.is_human() {
+        return forbidden_client();
+    }
+    match guard.sessions.outbox().rename_passkey(1, id, &body.name) {
+        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(false) => StatusCode::NOT_FOUND.into_response(),
+        Err(e) => (
+            StatusCode::BAD_REQUEST,
+            Json(ApiError {
+                error: e.to_string(),
+            }),
+        )
+            .into_response(),
+    }
+}
+
+pub async fn delete_passkey(
+    State(guard): State<Arc<ApiGuard>>,
+    axum::extract::Path(id): axum::extract::Path<i64>,
+    axum::Extension(principal): axum::Extension<Principal>,
+) -> Response {
+    if !principal.is_human() {
+        return forbidden_client();
+    }
+    match guard.sessions.outbox().delete_passkey(1, id) {
+        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(false) => StatusCode::NOT_FOUND.into_response(),
+        Err(_) => internal_error("could not delete passkey"),
+    }
+}
+
+#[derive(Serialize)]
+pub struct SessionListItem {
+    pub id: String,
+    pub method: String,
+    pub created_at: String,
+    pub last_seen_at: String,
+    pub user_agent: Option<String>,
+    pub current: bool,
+}
+
+pub async fn list_auth_sessions(
+    State(guard): State<Arc<ApiGuard>>,
+    headers: HeaderMap,
+    axum::Extension(principal): axum::Extension<Principal>,
+) -> Response {
+    if !principal.is_human() {
+        return forbidden_client();
+    }
+    let current = headers
+        .get(header::COOKIE)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|raw| cookie_value(raw, SESSION_COOKIE))
+        .and_then(|id| guard.sessions.touch(id))
+        .map(|l| l.public_id);
+    let rows = match guard.sessions.outbox().list_auth_sessions(1) {
+        Ok(r) => r,
+        Err(_) => return internal_error("could not list sessions"),
+    };
+    let items: Vec<SessionListItem> = rows
+        .into_iter()
+        .map(|r| SessionListItem {
+            id: r.public_id.clone(),
+            method: r.method,
+            created_at: r.created_at,
+            last_seen_at: r.last_seen_at,
+            user_agent: r.user_agent,
+            current: current.as_ref() == Some(&r.public_id),
+        })
+        .collect();
+    Json(items).into_response()
+}
+
+pub async fn delete_auth_session(
+    State(guard): State<Arc<ApiGuard>>,
+    axum::extract::Path(public_id): axum::extract::Path<String>,
+    axum::Extension(principal): axum::Extension<Principal>,
+) -> Response {
+    if !principal.is_human() {
+        return forbidden_client();
+    }
+    match guard
+        .sessions
+        .outbox()
+        .revoke_auth_session_public(1, &public_id)
+    {
+        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(false) => StatusCode::NOT_FOUND.into_response(),
+        Err(_) => internal_error("could not revoke session"),
+    }
+}
+
+fn session_body(
+    guard: &ApiGuard,
+    csrf: Option<String>,
+    method: Option<String>,
+    authenticated: bool,
+) -> SessionResponse {
+    let passkeys_enabled = guard.webauthn.is_some();
+    let passkey_count = guard.sessions.outbox().passkey_count(1).unwrap_or(0);
+    SessionResponse {
+        authenticated,
+        login_required: !guard.auth.is_open(),
+        csrf,
+        method,
+        passkeys_enabled,
+        passkey_count,
+        can_register: passkeys_enabled,
+    }
+}
+
+fn forbidden_client() -> Response {
     (
-        out,
-        Json(SessionResponse {
-            authenticated: false,
-            login_required: !guard.auth.is_open(),
-            csrf: None,
+        StatusCode::FORBIDDEN,
+        Json(ApiError {
+            error: "this route needs the owner session".to_string(),
         }),
     )
         .into_response()
 }
 
-/// Append one `Set-Cookie`. A malformed value cannot occur here — both are hex and fixed
-/// literals — so a header that will not build is dropped rather than given an error path no
-/// test could reach.
-fn append_cookie(headers: &mut HeaderMap, value: &str) {
-    if let Ok(parsed) = value.parse() {
-        headers.append(header::SET_COOKIE, parsed);
-    }
+fn rate_limited(guard: &ApiGuard) -> Response {
+    let secs = guard.rate_limiter.retry_after_secs();
+    (
+        StatusCode::TOO_MANY_REQUESTS,
+        [(header::RETRY_AFTER, secs.to_string())],
+        Json(ApiError {
+            error: "too many sign-in attempts; try again later".to_string(),
+        }),
+    )
+        .into_response()
+}
+
+fn internal_error(msg: &str) -> Response {
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(ApiError {
+            error: msg.to_string(),
+        }),
+    )
+        .into_response()
 }
 
 #[cfg(test)]

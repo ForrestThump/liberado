@@ -54,6 +54,9 @@ axum = { version = "0.8", features = ["json"] }
 tower-http = { version = "0.6", features = ["cors", "fs", "compression-gzip"] }
 tower = { version = "0.5", features = ["util"] }
 thiserror = { workspace = true }
+webauthn-rs = "=0.5.5"
+sha2 = "=0.10.9"
+url = "2.5"
 
 [features]
 default = []
@@ -81,6 +84,10 @@ http-body-util = "0.1"
 # `start_paused` — runs the SSE heartbeat test on a virtual clock so it observes a 15s interval
 # without taking 15 seconds.
 tokio = { workspace = true, features = ["test-util"] }
+webauthn-authenticator-rs = { version = "=0.5.5", features = ["softpasskey"] }
+
+[target.'cfg(windows)'.dependencies]
+openssl = { version = "=0.10.81", features = ["vendored"] }
 
 [package.metadata.liberado]
 # Layer role for the layer-rules test + crate-map generator (docs/architecture/contracts.md)

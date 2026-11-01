@@ -586,13 +586,15 @@ pub fn Chat(
             },
             &base_for_title,
             incognito(),
-            // Only meaningful when creating: an existing session's profile is already stored, and
-            // the daemon ignores the field when a session id is present.
-            active_profile(),
-            // Unlike the profile, this is honoured with or without a session id — a model is a
-            // property of a turn. Taken (not read) so it applies once and then lives on the log.
-            pending_model.take(),
-            active_project.read().clone(),
+            StreamTurnOptions {
+                // Only meaningful when creating: an existing session's profile is already stored, and
+                // the daemon ignores the field when a session id is present.
+                profile: active_profile(),
+                // Unlike the profile, this is honoured with or without a session id — a model is a
+                // property of a turn. Taken (not read) so it applies once and then lives on the log.
+                model: pending_model.take(),
+                project: active_project.read().clone(),
+            },
         );
         #[cfg(not(target_arch = "wasm32"))]
         {
@@ -965,19 +967,26 @@ struct StreamTargets {
 }
 
 #[cfg(target_arch = "wasm32")]
+struct StreamTurnOptions {
+    profile: Option<String>,
+    model: Option<String>,
+    project: Option<String>,
+}
+
+#[cfg(target_arch = "wasm32")]
 fn open_stream(
     api_base: &str,
     message: &str,
     targets: StreamTargets,
     api_base_for_title: &str,
     incognito: bool,
-    // A profile chosen before this conversation existed. Applied by the request that creates it.
-    pending_profile: Option<String>,
-    // A model chosen for this turn. Unlike the profile, applies whether or not the conversation
-    // already exists — see `ChatRequest::model`.
-    pending_model: Option<String>,
-    pending_project: Option<String>,
+    turn: StreamTurnOptions,
 ) {
+    let StreamTurnOptions {
+        profile: pending_profile,
+        model: pending_model,
+        project: pending_project,
+    } = turn;
     let encoded = urlencoding::encode(message);
     let url = stream_url(
         api_base,
@@ -1051,7 +1060,7 @@ fn connect_stream(
     use web_sys::{EventSource, MessageEvent};
 
     let ghost_base = api_base.to_string();
-    let source = match EventSource::new(&url) {
+    let source = match EventSource::new(url) {
         Ok(s) => Rc::new(s),
         Err(_) => {
             sending.set(false);
@@ -1111,34 +1120,33 @@ fn connect_stream(
     // (chat_client_contract::SessionEvent — same decoder as the TUI/CLI).
     {
         let on_tool = Closure::<dyn FnMut(MessageEvent)>::new(move |e: MessageEvent| {
-            if let Some(data) = e.data().as_string() {
-                if let Ok(chat_client_contract::SessionEvent {
+            if let Some(data) = e.data().as_string()
+                && let Ok(chat_client_contract::SessionEvent {
                     kind: chat_client_contract::SessionEventKind::ToolStarted { name, args_preview },
                     ..
                 }) = chat_client_contract::SessionEvent::from_sse_data("tool_started", &data)
-                {
-                    let clean = chat_fold::clean_args(&args_preview);
-                    messages.with_mut(|m| match m.last_mut() {
-                        Some(last) if last.role == "assistant" => {
-                            last.thinking_steps.push(ThinkingStep {
-                                tool_name: name,
-                                tool_args: clean.clone(),
-                                ok: None,
-                                preview: String::new(),
-                            });
-                        }
-                        _ => {
-                            let mut msg = ChatMsg::new_assistant(String::new());
-                            msg.thinking_steps.push(ThinkingStep {
-                                tool_name: name,
-                                tool_args: clean,
-                                ok: None,
-                                preview: String::new(),
-                            });
-                            m.push(msg);
-                        }
-                    });
-                }
+            {
+                let clean = chat_fold::clean_args(&args_preview);
+                messages.with_mut(|m| match m.last_mut() {
+                    Some(last) if last.role == "assistant" => {
+                        last.thinking_steps.push(ThinkingStep {
+                            tool_name: name,
+                            tool_args: clean.clone(),
+                            ok: None,
+                            preview: String::new(),
+                        });
+                    }
+                    _ => {
+                        let mut msg = ChatMsg::new_assistant(String::new());
+                        msg.thinking_steps.push(ThinkingStep {
+                            tool_name: name,
+                            tool_args: clean,
+                            ok: None,
+                            preview: String::new(),
+                        });
+                        m.push(msg);
+                    }
+                });
             }
         });
         let _ = source

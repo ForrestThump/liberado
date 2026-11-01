@@ -10,9 +10,14 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use chat_client_contract::ApiError;
+use liberado_config::ApiConfig;
+use liberado_outbox::Outbox;
 
+use super::challenges::ChallengeStore;
+use super::rate_limit::AuthRateLimiter;
 use super::sessions::{CSRF_HEADER, SESSION_COOKIE, SessionStore, cookie_value};
 use super::tokens::{ApiAuth, Principal};
+use super::webauthn_config::WebAuthnState;
 
 /// Everything the auth layer needs, held apart from `AppState` so a handler cannot reach a
 /// token by going through the state it already has.
@@ -21,24 +26,49 @@ pub struct ApiGuard {
     pub sessions: SessionStore,
     /// Exact browser origins allowed to call the API cross-origin (`[api] allowed_origins`).
     pub allowed_origins: Vec<String>,
+    pub webauthn: Option<WebAuthnState>,
+    pub challenges: ChallengeStore,
+    pub rate_limiter: AuthRateLimiter,
 }
 
 impl ApiGuard {
-    pub fn new(auth: ApiAuth, allowed_origins: Vec<String>) -> Self {
-        Self {
+    pub fn new(
+        auth: ApiAuth,
+        api: &ApiConfig,
+        outbox: Arc<Outbox>,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
+        let webauthn = match &api.webauthn {
+            Some(cfg) => Some(super::webauthn_config::build_webauthn(cfg)?),
+            None => None,
+        };
+        Ok(Self {
             auth,
-            sessions: SessionStore::new(),
-            allowed_origins,
-        }
+            sessions: SessionStore::new(outbox),
+            allowed_origins: api.allowed_origins.clone(),
+            webauthn,
+            challenges: ChallengeStore::default(),
+            rate_limiter: AuthRateLimiter::default(),
+        })
     }
 
     /// A guard with no credentials, for tests about something other than authentication.
-    ///
-    /// It behaves exactly as a loopback daemon with no `[api]` table does, so a test that
-    /// uses it is still exercising a real configuration rather than a bypass.
     #[cfg(test)]
     pub fn open_for_test() -> Arc<Self> {
-        Arc::new(Self::new(ApiAuth::default(), Vec::new()))
+        let dir = tempfile::tempdir().expect("tempdir");
+        let outbox = Arc::new(Outbox::open(&dir.path().join("liberado.db")).expect("outbox"));
+        Arc::new(Self::new(ApiAuth::default(), &ApiConfig::default(), outbox).expect("open guard"))
+    }
+
+    #[cfg(test)]
+    pub fn with_auth(auth: ApiAuth) -> Arc<Self> {
+        Self::with_api(auth, ApiConfig::default())
+    }
+
+    #[cfg(test)]
+    pub fn with_api(auth: ApiAuth, api: ApiConfig) -> Arc<Self> {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let outbox = Arc::new(Outbox::open(&dir.path().join("liberado.db")).expect("outbox"));
+        Arc::new(Self::new(auth, &api, outbox).expect("guard"))
     }
 }
 
@@ -52,7 +82,6 @@ fn refuse(status: StatusCode, message: &str) -> Response {
         .into_response()
 }
 
-/// The bearer token on this request, if it carries a well-formed `Authorization` header.
 fn bearer(headers: &HeaderMap) -> Option<&str> {
     let value = headers.get(header::AUTHORIZATION)?.to_str().ok()?;
     let (scheme, token) = value.split_once(' ')?;
@@ -64,8 +93,6 @@ fn session_id(headers: &HeaderMap) -> Option<&str> {
     cookie_value(raw, SESSION_COOKIE)
 }
 
-/// Methods that can change something, and therefore need the CSRF check when the credential
-/// is a cookie the browser attaches on its own.
 fn is_mutating(method: &Method) -> bool {
     matches!(
         *method,
@@ -73,24 +100,18 @@ fn is_mutating(method: &Method) -> bool {
     )
 }
 
-/// Decide who is calling, from a bearer token or a session cookie.
 fn identify(guard: &ApiGuard, headers: &HeaderMap) -> Option<Principal> {
     if let Some(token) = bearer(headers) {
         return guard.auth.authenticate_bearer(token);
     }
     let id = session_id(headers)?;
-    guard
-        .sessions
-        .touch(id)
-        .map(|_| Principal::Human { via_cookie: true })
+    guard.sessions.touch(id).map(|live| Principal::Human {
+        account_id: live.account_id as u64,
+        via_cookie: true,
+        session_method: Some(live.method),
+    })
 }
 
-/// Whether a cookie-authenticated mutating request proved it came from our own page.
-///
-/// Two independent checks, because they fail in different places. `SameSite=Strict` already
-/// stops the browser sending the cookie cross-site, so reaching here cross-site should be
-/// impossible; the CSRF token and the `Origin` check are what catch the case where it is not —
-/// an old browser, a same-site subdomain, or a future change that relaxes the cookie.
 fn cookie_request_is_same_origin(
     guard: &ApiGuard,
     headers: &HeaderMap,
@@ -98,7 +119,7 @@ fn cookie_request_is_same_origin(
     let Some(id) = session_id(headers) else {
         return Err("no session");
     };
-    let Some(expected) = guard.sessions.touch(id) else {
+    let Some(expected) = guard.sessions.touch(id).map(|l| l.csrf) else {
         return Err("no session");
     };
     let presented = headers
@@ -119,8 +140,6 @@ fn cookie_request_is_same_origin(
     Ok(())
 }
 
-/// An `Origin` is ours when it names the host the request was addressed to, or when the
-/// operator listed it in `[api] allowed_origins`.
 fn origin_is_allowed(guard: &ApiGuard, headers: &HeaderMap, origin: &str) -> bool {
     if guard.allowed_origins.iter().any(|o| o == origin) {
         return true;
@@ -128,32 +147,22 @@ fn origin_is_allowed(guard: &ApiGuard, headers: &HeaderMap, origin: &str) -> boo
     let Some(host) = headers.get(header::HOST).and_then(|v| v.to_str().ok()) else {
         return false;
     };
-    // Compare authorities: `http://127.0.0.1:4201` against `127.0.0.1:4201`. The scheme is not
-    // compared because the daemon serves plain HTTP on the tailnet and a reverse proxy may
-    // front it with TLS without rewriting `Host`.
     origin
         .split_once("://")
         .is_some_and(|(_, authority)| authority == host)
 }
 
-/// Require a credential on every API route this layer covers.
-///
-/// Applied with `route_layer`, so it runs only for matched API routes and leaves the static
-/// WebUI bundle reachable — the sign-in page has to load before there is anything to sign in
-/// with.
 pub async fn require_credential(
     State(guard): State<Arc<ApiGuard>>,
     mut request: Request,
     next: Next,
 ) -> Response {
     if guard.auth.is_open() {
-        // No credential configured at all. The daemon only reaches this state on a loopback
-        // bind — `ensure_bind_is_credentialed` refuses any other — so the operating system is
-        // the boundary and demanding a token nobody has would lock the owner out of his own
-        // box.
-        request
-            .extensions_mut()
-            .insert(Principal::Human { via_cookie: false });
+        request.extensions_mut().insert(Principal::Human {
+            account_id: 1,
+            via_cookie: false,
+            session_method: None,
+        });
         return next.run(request).await;
     }
 
@@ -165,8 +174,13 @@ pub async fn require_credential(
         );
     };
 
-    if matches!(principal, Principal::Human { via_cookie: true })
-        && is_mutating(request.method())
+    if matches!(
+        principal,
+        Principal::Human {
+            via_cookie: true,
+            ..
+        }
+    ) && is_mutating(request.method())
         && let Err(why) = cookie_request_is_same_origin(&guard, request.headers())
     {
         return refuse(StatusCode::FORBIDDEN, why);
@@ -177,11 +191,6 @@ pub async fn require_credential(
     next.run(request).await
 }
 
-/// Require the owner. Layered onto the routes that change authority rather than use it.
-///
-/// A client token authenticates; it does not make its holder Forrest. The case this exists for
-/// is concrete: a coding run with a token in its environment reaching
-/// `POST /api/approvals/{id}/resolve` and approving its own write.
 pub async fn require_owner(request: Request, next: Next) -> Response {
     match request.extensions().get::<Principal>() {
         Some(p) if p.is_human() => next.run(request).await,
@@ -192,13 +201,28 @@ pub async fn require_owner(request: Request, next: Next) -> Response {
                  session credential"
             ),
         ),
-        // No extension means this route was mounted outside `require_credential`. Refusing is
-        // the only safe reading of a wiring mistake on an owner-only route.
         _ => refuse(
             StatusCode::UNAUTHORIZED,
             "owner-only endpoint reached without an authenticated principal",
         ),
     }
+}
+
+pub fn can_register_passkeys(guard: &ApiGuard, headers: &HeaderMap) -> bool {
+    if let Some(token) = bearer(headers) {
+        return guard.auth.is_human_token(token);
+    }
+    let Some(id) = session_id(headers) else {
+        return false;
+    };
+    let Some(live) = guard.sessions.touch(id) else {
+        return false;
+    };
+    live.method == "token"
+}
+
+pub fn passkey_session_forbidden_message() -> &'static str {
+    "passkey sessions cannot register new passkeys; sign in with the emergency token first"
 }
 
 #[cfg(test)]

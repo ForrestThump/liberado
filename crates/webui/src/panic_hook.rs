@@ -1,5 +1,6 @@
 //! Console + on-page banner when the WASM app panics or hits an uncaught wasm-bindgen error.
 
+#[cfg(target_arch = "wasm32")]
 pub use crate::fatal_classifier::wasm_bindgen_fatal_signal;
 
 #[cfg(target_arch = "wasm32")]
@@ -109,10 +110,10 @@ fn show_reload_banner(message: &str) {
     let Ok(banner) = document.create_element("div") else {
         return;
     };
-    let _ = banner.set_id("liberado-panic-banner");
-    let _ = banner.set_class_name("panic-banner");
+    banner.set_id("liberado-panic-banner");
+    banner.set_class_name("panic-banner");
     let safe = html_escape(message);
-    let _ = banner.set_inner_html(&format!(
+    banner.set_inner_html(&format!(
         "<p class=\"panic-banner-title\">Something broke — Reload</p>\
          <button type=\"button\" class=\"btn-primary panic-banner-reload\" \
          onclick=\"location.reload()\">Reload</button>\
@@ -139,10 +140,10 @@ fn csrf_token_from_cookie() -> Option<String> {
     let cookie = doc.cookie().ok()?;
     for part in cookie.split(';') {
         let part = part.trim();
-        if let Some(value) = part.strip_prefix("liberado_csrf=") {
-            if !value.is_empty() {
-                return Some(value.to_string());
-            }
+        if let Some(value) = part.strip_prefix("liberado_csrf=")
+            && !value.is_empty()
+        {
+            return Some(value.to_string());
         }
     }
     None

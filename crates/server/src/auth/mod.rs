@@ -23,9 +23,20 @@
 //! them.
 
 pub mod bind;
+pub mod challenges;
+pub mod client_ip;
+pub mod cookies;
 pub mod guard;
+pub mod rate_limit;
 pub mod sessions;
 pub mod tokens;
+pub mod ua_label;
+pub mod webauthn_config;
+pub mod webauthn_handlers;
+
+#[cfg(test)]
+#[path = "webauthn_http_tests.rs"]
+mod webauthn_http_tests;
 
 pub use bind::{BindPlan, ensure_bind_is_credentialed, resolve_bind};
 pub use guard::{ApiGuard, require_credential, require_owner};

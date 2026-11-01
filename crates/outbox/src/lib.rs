@@ -5,10 +5,12 @@
 //! are single transactions.
 
 mod ack;
+mod auth_store;
 mod batch;
 mod cursor;
 mod error;
 mod keys;
+mod migrate;
 mod pass;
 mod plan;
 mod rows;
@@ -17,6 +19,9 @@ mod subs;
 mod time;
 
 pub use ack::constant_time_eq;
+pub use auth_store::{
+    PasskeyCredential, PasskeyRow, SESSION_ABSOLUTE, SESSION_IDLE, SessionRecord, hash_session_id,
+};
 pub use batch::{DeliveryBatch, DeliveryOutcome, DeliveryRow};
 pub use error::Error;
 pub use keys::{content_id, fanout_key, task_key};

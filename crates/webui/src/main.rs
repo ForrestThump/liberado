@@ -15,6 +15,7 @@ mod push;
 mod pwa;
 mod shell;
 mod theme;
+mod webauthn;
 
 use components::chat::Chat;
 use components::sidebar::{Route, Sidebar};
@@ -100,10 +101,15 @@ fn App() -> Element {
     let base = api_base();
     let mut auth_ready = use_signal(|| false);
     let mut need_login = use_signal(|| false);
+    #[cfg(target_arch = "wasm32")]
     let base_for_session = base.clone();
     use_effect(move || {
         #[cfg(target_arch = "wasm32")]
         {
+            let on_expired = Callback::new(move |_| need_login.set(true));
+            crate::http::set_unauthenticated_handler(std::rc::Rc::new(move || {
+                on_expired.call(());
+            }));
             let base = base_for_session.clone();
             wasm_bindgen_futures::spawn_local(async move {
                 match components::login_gate::probe_session(&base).await {
@@ -242,6 +248,7 @@ fn App() -> Element {
     rsx! {
         style { {crate::theme::theme_css_vars(&crate::theme::theme_by_name(&theme_name()))} }
         style { {include_str!("./styles/main.css")} }
+        style { {include_str!("./styles/login.css")} }
 
         if !auth_ready() {
             div { class: "login-gate-shell",

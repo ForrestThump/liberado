@@ -24,7 +24,7 @@ mod topology_default;
 mod tuning;
 mod vault_reminders;
 
-pub use api::{ApiClientConfig, ApiConfig, CredentialRef, DEFAULT_BIND};
+pub use api::{ApiClientConfig, ApiConfig, CredentialRef, DEFAULT_BIND, WebAuthnConfig};
 pub use builder::ConfigBuilder;
 pub use config::{CodingAuthError, CodingWorkspaceAuth, Config, GrantParts, ResolvedProfile};
 pub use config_builtin_editor::BUILTIN_AUTOMATION_EDITOR_PROFILE;

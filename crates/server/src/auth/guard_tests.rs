@@ -18,7 +18,7 @@ fn guard(open: bool) -> Arc<ApiGuard> {
         true => ApiAuth::default(),
         false => ApiAuth::from_values(Some(HUMAN), &[("coder", AGENT)]),
     };
-    Arc::new(ApiGuard::new(auth, Vec::new()))
+    ApiGuard::with_auth(auth)
 }
 
 /// A router shaped like the daemon's: an authenticated route and an owner-only one behind the
@@ -187,7 +187,7 @@ async fn resolving_an_approval_with_the_human_token_is_allowed() {
 #[tokio::test]
 async fn a_session_cookie_authenticates_a_read() {
     let guard = guard(false);
-    let (id, _) = guard.sessions.create();
+    let (id, _) = guard.sessions.create(1, "token", None).unwrap();
     let sent = send(
         &app(&guard),
         get_request("/api/status")
@@ -204,7 +204,7 @@ async fn a_session_cookie_authenticates_a_read() {
 #[tokio::test]
 async fn a_cookie_authenticated_write_without_the_csrf_header_is_403() {
     let guard = guard(false);
-    let (id, _) = guard.sessions.create();
+    let (id, _) = guard.sessions.create(1, "token", None).unwrap();
     let sent = send(
         &app(&guard),
         Request::builder()
@@ -222,7 +222,7 @@ async fn a_cookie_authenticated_write_without_the_csrf_header_is_403() {
 #[tokio::test]
 async fn a_cookie_authenticated_write_with_the_csrf_header_is_allowed() {
     let guard = guard(false);
-    let (id, csrf) = guard.sessions.create();
+    let (id, csrf) = guard.sessions.create(1, "token", None).unwrap();
     let sent = send(
         &app(&guard),
         Request::builder()
@@ -240,8 +240,8 @@ async fn a_cookie_authenticated_write_with_the_csrf_header_is_allowed() {
 #[tokio::test]
 async fn another_sessions_csrf_token_does_not_work() {
     let guard = guard(false);
-    let (id, _) = guard.sessions.create();
-    let (_, other_csrf) = guard.sessions.create();
+    let (id, _) = guard.sessions.create(1, "token", None).unwrap();
+    let (_, other_csrf) = guard.sessions.create(1, "token", None).unwrap();
     let sent = send(
         &app(&guard),
         Request::builder()
@@ -263,7 +263,7 @@ async fn another_sessions_csrf_token_does_not_work() {
 #[tokio::test]
 async fn a_cookie_authenticated_write_from_a_foreign_origin_is_403() {
     let guard = guard(false);
-    let (id, csrf) = guard.sessions.create();
+    let (id, csrf) = guard.sessions.create(1, "token", None).unwrap();
     let sent = send(
         &app(&guard),
         Request::builder()
@@ -284,7 +284,7 @@ async fn a_cookie_authenticated_write_from_a_foreign_origin_is_403() {
 #[tokio::test]
 async fn a_write_from_our_own_origin_is_allowed() {
     let guard = guard(false);
-    let (id, csrf) = guard.sessions.create();
+    let (id, csrf) = guard.sessions.create(1, "token", None).unwrap();
     let sent = send(
         &app(&guard),
         Request::builder()
@@ -304,11 +304,12 @@ async fn a_write_from_our_own_origin_is_allowed() {
 #[tokio::test]
 async fn a_listed_origin_is_allowed() {
     let auth = ApiAuth::from_values(Some(HUMAN), &[]);
-    let guard = Arc::new(ApiGuard::new(
-        auth,
-        vec!["http://127.0.0.1:8080".to_string()],
-    ));
-    let (id, csrf) = guard.sessions.create();
+    let api = ApiConfig {
+        allowed_origins: vec!["http://127.0.0.1:8080".to_string()],
+        ..Default::default()
+    };
+    let guard = ApiGuard::with_api(auth, api);
+    let (id, csrf) = guard.sessions.create(1, "token", None).unwrap();
     let sent = send(
         &app(&guard),
         Request::builder()
@@ -347,7 +348,7 @@ async fn a_bearer_authenticated_write_needs_no_csrf_header() {
 #[tokio::test]
 async fn a_revoked_session_cookie_stops_working() {
     let guard = guard(false);
-    let (id, _) = guard.sessions.create();
+    let (id, _) = guard.sessions.create(1, "token", None).unwrap();
     guard.sessions.revoke(&id);
     let sent = send(
         &app(&guard),

@@ -702,3 +702,9 @@ tier = "work_plane"
 input = 0.14
 output = 0.28
 cached_input = 0.0028
+
+# Optional: passkey sign-in for the WebUI (https or localhost in the browser).
+# [api.webauthn]
+# rp_id = "homelab-node-ai.mermaid-halfbeak.ts.net"
+# origins = ["https://homelab-node-ai.mermaid-halfbeak.ts.net:8444"]
+# rp_name = "Liberado"

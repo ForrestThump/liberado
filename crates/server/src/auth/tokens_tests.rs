@@ -28,7 +28,11 @@ fn the_human_token_authenticates_as_the_owner() {
     let auth = ApiAuth::from_values(Some(FAKE_HUMAN), &[]);
     assert_eq!(
         auth.authenticate_bearer(FAKE_HUMAN),
-        Some(Principal::Human { via_cookie: false })
+        Some(Principal::Human {
+            account_id: 1,
+            via_cookie: false,
+            session_method: None,
+        })
     );
     assert!(auth.is_human_token(FAKE_HUMAN));
 }

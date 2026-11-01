@@ -50,10 +50,10 @@ fn friendly_push_error(raw: &str) -> Option<String> {
                 .into(),
         );
     }
-    if let Some(rest) = raw.strip_prefix("HTTP ") {
-        if let Some((code, body)) = rest.split_once(": ") {
-            return Some(format!("Subscribe failed (HTTP {code}): {body}"));
-        }
+    if let Some(rest) = raw.strip_prefix("HTTP ")
+        && let Some((code, body)) = rest.split_once(": ")
+    {
+        return Some(format!("Subscribe failed (HTTP {code}): {body}"));
     }
     None
 }

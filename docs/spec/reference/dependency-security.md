@@ -99,3 +99,18 @@ maintained hard fork of the `serde_yaml` 0.9 API. It depends on
 `unsafe-libyaml-norway` instead of `unsafe-libyaml`, so that advisory is not
 in the graph. The callers are `liberado-common`, `liberado-cli`, and
 `liberado-memory-store`.
+
+Passkey support in `liberado-server` adds `webauthn-rs@0.5.5` as a normal
+dependency and `webauthn-authenticator-rs@0.5.5` with the `softpasskey` feature
+as a dev-dependency for HTTP integration tests only. On Windows only,
+`liberado-server` also depends on `openssl@0.10.81` with the `vendored`
+feature so CI can build OpenSSL from `openssl-src` (Linux keeps system
+OpenSSL). `deny.toml` allows the
+build scripts `oid-registry@0.7.1`, `openssl-src@300.6.1+3.6.3`,
+`webauthn-attestation-ca@0.5.5`,
+`webauthn-rs-core@0.5.5`, and `webauthn-authenticator-rs@0.5.5`. Matching
+cargo-vet exemptions in `supply-chain/config.toml` cover the webauthn 0.5.5
+crate set; `webauthn-authenticator-rs` and `serde_bytes@0.11.19` (transitive
+only through the authenticator) use the dev `safe-to-run` criteria. Version
+0.5.5 was chosen over 0.6.2 because 0.6.2 pulls `rsa` with RUSTSEC-2023-0071;
+no advisory ignore was added. These exemptions are debt, not audits.

@@ -46,10 +46,15 @@ impl SecretToken {
 pub enum Principal {
     /// The owner: the human token, or a browser session minted from it.
     Human {
+        /// Account row in `liberado.db`. Always `1` today (single owner).
+        account_id: u64,
         /// `true` when the credential was the session cookie rather than a bearer token. Only
         /// a cookie can be replayed by a browser the owner did not intend, so only a cookie
         /// needs the CSRF check.
         via_cookie: bool,
+        /// Session sign-in method when `via_cookie` (`token` or `passkey`). Bearer human has
+        /// `None` and is treated like a token for passkey registration policy.
+        session_method: Option<String>,
     },
     /// A declared non-human client, named by its `[[api.clients]]` entry.
     Client { name: String },
@@ -149,7 +154,11 @@ impl ApiAuth {
     /// matched nothing; the caller answers 401 and does not say which part was wrong.
     pub fn authenticate_bearer(&self, presented: &str) -> Option<Principal> {
         if self.human.as_ref().is_some_and(|t| t.matches(presented)) {
-            return Some(Principal::Human { via_cookie: false });
+            return Some(Principal::Human {
+                account_id: 1,
+                via_cookie: false,
+                session_method: None,
+            });
         }
         self.clients
             .iter()

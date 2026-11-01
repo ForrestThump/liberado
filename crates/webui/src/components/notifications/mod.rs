@@ -1,7 +1,7 @@
 //! Owner notifications — Web Push subscriptions and outbox visibility.
 
 mod api;
-mod model;
+pub(crate) mod model;
 
 use dioxus::prelude::*;
 
@@ -14,6 +14,9 @@ use self::model::{
     display_push_status, format_added_date, push_test_success_message, status_pill_class,
     status_pill_label, troubleshooting_lines,
 };
+
+type NotificationRefreshResult =
+    Result<(PushStatus, Vec<SubscriptionRow>, DevicePushState), String>;
 
 fn apply_refresh_bundle(
     status: &mut Signal<PushStatus>,
@@ -34,7 +37,7 @@ fn apply_refresh_bundle(
 fn RemoveSubscriptionButton(
     api_base: String,
     endpoint: String,
-    on_done: EventHandler<Result<(PushStatus, Vec<SubscriptionRow>, DevicePushState), String>>,
+    on_done: EventHandler<NotificationRefreshResult>,
     on_error: EventHandler<String>,
 ) -> Element {
     rsx! {
@@ -230,6 +233,10 @@ pub fn Notifications(api_base: String) -> Element {
                             dd { "{value}" }
                         }
                     }
+                }
+                crate::components::auth_settings::AuthSettingsSection {
+                    api_base: api_base.clone(),
+                    line,
                 }
                 if !subs().is_empty() {
                     h2 { class: "notifications-section-title", "Devices" }

@@ -20,7 +20,10 @@ mod sessions;
 mod status;
 
 pub use approvals::{list_approvals, list_pending_approvals, resolve_approval};
-pub use auth::{health, login as auth_login, logout as auth_logout, session as auth_session};
+pub use auth::{
+    delete_auth_session, delete_passkey, health, list_auth_sessions, list_passkeys,
+    login as auth_login, logout as auth_logout, patch_passkey, session as auth_session,
+};
 pub use automations::{list_hooks, list_schedules};
 pub use chat::{
     attach_conversation, cancel_conversation_turn, chat, chat_stream_get, chat_stream_post,
@@ -47,3 +50,7 @@ pub use status::{catalog, models, reactions, reload_mcp_peers, select_model, sta
 #[cfg(test)]
 #[path = "auth_router_http_tests.rs"]
 mod auth_router_http_tests;
+
+#[cfg(test)]
+#[path = "auth_management_http_tests.rs"]
+mod auth_management_http_tests;

@@ -31,10 +31,7 @@ async fn harness() -> Harness {
     let dir = tempfile::tempdir().unwrap();
     let sessions = Arc::new(SessionStore::open(dir.path()).await);
     let state = Arc::new(AppState::for_test(sessions, None, dir.path().to_path_buf()));
-    let guard = Arc::new(ApiGuard::new(
-        ApiAuth::from_values(Some(HUMAN), &[("coder", AGENT)]),
-        Vec::new(),
-    ));
+    let guard = ApiGuard::with_auth(ApiAuth::from_values(Some(HUMAN), &[("coder", AGENT)]));
     let app = crate::build_app_router(&state, &guard);
     Harness {
         app,
@@ -208,7 +205,7 @@ async fn the_daemon_sends_no_cors_header_to_a_foreign_origin() {
 #[tokio::test]
 async fn the_browser_session_reaches_an_owner_only_route() {
     let h = harness().await;
-    let (id, csrf) = h.guard.sessions.create();
+    let (id, csrf) = h.guard.sessions.create(1, "token", None).unwrap();
     let (status, body) = call(
         &h.app,
         Request::builder()
@@ -238,4 +235,22 @@ async fn the_static_frontend_is_reachable_before_sign_in() {
         StatusCode::UNAUTHORIZED,
         "the sign-in page cannot require being signed in"
     );
+}
+
+/// API clients using bearer tokens must keep working when `Host` is not a browser origin.
+#[tokio::test]
+async fn bearer_human_reaches_api_on_a_non_origin_host() {
+    let h = harness().await;
+    let (status, body) = call(
+        &h.app,
+        Request::builder()
+            .method("GET")
+            .uri("/api/status")
+            .header("authorization", format!("Bearer {HUMAN}"))
+            .header("host", "internal-only.example:4201")
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
 }

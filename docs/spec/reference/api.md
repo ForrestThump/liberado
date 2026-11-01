@@ -374,61 +374,31 @@ each of them. Shepherd sends that bearer only on its goal calls. GitHub access s
 3. **Server owns state, clients stay thin.** Conversation/session/history live server-side; a client
    is a renderer + an input box.
 
-## Trust boundary: the API is unauthenticated and agent-reachable
+## Trust boundary: credentials, sessions, and passkeys
 
-**Known gap, recorded 2026-07-28. Not yet fixed.**
+The HTTP API is **not** open on the tailnet by default: it binds loopback unless you configure
+`[api]` and widen `bind`. Every route under `/api` (except the small unauthenticated band documented
+above) requires either:
 
-The daemon's HTTP API has no authentication. That is defensible on its own — it binds a LAN address
-and every client is the operator's. What makes it a real exposure is the second half:
+- **`Authorization: Bearer`** with the owner human token or a `[[api.clients]]` token, or
+- A **browser session** minted by `POST /api/auth/login` (emergency token) or passkey sign-in,
+  carried as `HttpOnly` cookies plus `X-Liberado-CSRF` on mutating requests.
 
-**A granted web-fetching MCP can call it.** `spider-mcp` performs no loopback or private-IP check on
-its target URLs (no `is_loopback`, no private-range filter anywhere in `crates/…/scraper`), so a
-model that can reach it can also reach `http://127.0.0.1:4201/api/…`. The agent's *information*
-channel therefore terminates inside the daemon's own control surface — a channel crossing
-[`channels-and-interactivity.md`](../../spec/architecture/channels-and-interactivity.md) otherwise keeps
-separate.
+Owner-only routes (approvals resolve, profile changes, push admin, …) require the **human**
+principal — client tokens authenticate but cannot decide.
 
-What is reachable today, given spider-mcp fetches with `GET`:
+When `[api.webauthn]` is configured, the WebUI can register and sign in with passkeys on the listed
+https origins (or `http://localhost` for dev). Sessions are stored hashed in `liberado.db` with a
+30-day absolute lifetime and 14-day idle timeout. The human token remains available for scripts
+(`Authorization: Bearer`) and emergency browser sign-in.
 
-| Endpoint | Consequence |
-|---|---|
-| `GET /api/conversations` | Every conversation id and title |
-| `GET /api/conversations/{id}` | A full transcript, system prompt included |
-| `GET /api/conversations/search?q=` | Grep across every stored chat |
-| `GET /api/status`, `/api/catalog` | Model, MCP fleet, capability grants |
+Cross-origin browser access still requires explicit `allowed_origins`; there is no wildcard CORS.
+Agent tools that can `GET` URLs may still reach loopback if granted a web-fetch MCP — treat MCP
+grants as part of the trust boundary.
 
-So the live exposure through spider-mcp is **disclosure, not escalation**: no `GET` mutates
-anything. `PATCH /api/profiles/{name}`, `DELETE /api/profiles/{name}`, and `PUT /api/plugins/{id}`
-are not `GET` and are not agent tools. An incognito chat
-is not listed and has no file, so it cannot be found by listing or search — but it *is* readable at
-`GET /api/conversations/{id}` by anyone holding the id.
-
-### What this means for anything claiming to be human-only
-
-Do not rest such a claim on "no tool in the catalog does this". That is true and useful — it is why
-the agent cannot re-authorize its own session — but it is a statement about the tool catalog, not
-about reachability. Two rules follow:
-
-1. **Mutating authority endpoints must not be `GET`.** A `POST`/`PATCH`/`DELETE` is out of reach of a
-   fetcher that only issues `GET`s, which is an incidental defence but a real one. The session-profile
-   switch is a `POST` for exactly this reason. `POST /api/approvals/{id}/resolve` is too: it records
-   a vault-zone permission decision (Deny / Once / Session / Everywhere) and it is not registered as
-   an agent tool or on the operator dogfood MCP. `GET /api/conversations/{id}/approvals` only lists
-   the cards, the same disclosure class as reading a transcript. Opening a conversation
-   (`GET /api/conversations/{id}`) includes the same list on `approvals`.
-   `GET /api/approvals/pending` lists open permission requests (`id`, `conversation`, `tool`,
-   `zone`, `created_at`) and does not decide one. `GET /api/conversations/{id}/grant` returns the
-   grant stored on the current session header. The operator dogfood MCP reads both. It still has
-   no approve tool and no resolve tool. See
-   [`operator-dogfood-mcp.md`](operator-dogfood-mcp.md).
-2. **A real fix has to distinguish surface traffic from agent traffic** — a shared secret the MCPs are
-   not given, a separate bind address for mutating routes, or an egress filter that refuses
-   loopback/private targets in the fetching MCPs themselves. The last is the most general: it fixes
-   every future endpoint at once, and it belongs in the MCPs, which are the things making the
-   requests.
-
-Until then, treat any capability reachable over `GET` as readable by any session granted a
-web-fetching MCP.
+Mutating routes use `POST`/`PATCH`/`DELETE` so a `GET`-only fetcher cannot decide approvals or
+change profiles. A web-fetching MCP granted to an agent can still read anything exposed via `GET`
+on loopback if it can reach the bind address — scope MCP grants accordingly.
 
 ## Reminders and Web Push (owner + device)
 

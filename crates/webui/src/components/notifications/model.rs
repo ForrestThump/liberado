@@ -74,7 +74,7 @@ pub(super) enum PushTestOutcome {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) enum StatusLine {
+pub(crate) enum StatusLine {
     Error(String),
     Success(String),
 }
@@ -226,7 +226,7 @@ pub(super) fn format_added_date_month_day_year(month: u32, day: u32, year: i32) 
     format!("{month_label} {day}, {year}")
 }
 
-pub(super) fn format_added_date(iso: &str) -> String {
+pub(crate) fn format_added_date(iso: &str) -> String {
     if iso.is_empty() {
         return String::new();
     }
@@ -240,7 +240,7 @@ pub(super) fn format_added_date(iso: &str) -> String {
         let month = date.get_month() + 1;
         let day = date.get_date();
         let year = date.get_full_year() as i32;
-        return format_added_date_month_day_year(month, day, year);
+        format_added_date_month_day_year(month, day, year)
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
@@ -323,11 +323,13 @@ mod tests {
 
     #[test]
     fn display_push_status_requires_server_endpoint() {
-        let mut device = DevicePushState::default();
-        device.push_available = true;
-        device.notification_permission = "granted".into();
-        device.browser_subscribed = true;
-        device.subscription_endpoint = "https://fcm.googleapis.com/x".into();
+        let device = DevicePushState {
+            push_available: true,
+            notification_permission: "granted".into(),
+            browser_subscribed: true,
+            subscription_endpoint: "https://fcm.googleapis.com/x".into(),
+            ..Default::default()
+        };
         let subs = vec![SubscriptionRow {
             id: 1,
             label: "phone".into(),
@@ -388,32 +390,49 @@ mod tests {
 
     #[test]
     fn device_push_status_matrix() {
-        let mut device = DevicePushState::default();
-        device.notification_permission = "unsupported".into();
+        let unsupported = DevicePushState {
+            notification_permission: "unsupported".into(),
+            ..Default::default()
+        };
         assert_eq!(
-            device_push_status(&device, true),
+            device_push_status(&unsupported, true),
             DevicePushStatus::NotSupported
         );
 
-        device = DevicePushState::default();
-        device.push_available = true;
+        let not_configured = DevicePushState {
+            push_available: true,
+            ..Default::default()
+        };
         assert_eq!(
-            device_push_status(&device, false),
+            device_push_status(&not_configured, false),
             DevicePushStatus::NotConfigured
         );
 
-        device.notification_permission = "denied".into();
-        device.push_available = true;
-        assert_eq!(device_push_status(&device, true), DevicePushStatus::Blocked);
+        let blocked = DevicePushState {
+            push_available: true,
+            notification_permission: "denied".into(),
+            ..Default::default()
+        };
+        assert_eq!(
+            device_push_status(&blocked, true),
+            DevicePushStatus::Blocked
+        );
 
-        device.notification_permission = "granted".into();
-        device.browser_subscribed = true;
-        device.push_available = true;
-        assert_eq!(device_push_status(&device, true), DevicePushStatus::On);
+        let on = DevicePushState {
+            push_available: true,
+            notification_permission: "granted".into(),
+            browser_subscribed: true,
+            ..Default::default()
+        };
+        assert_eq!(device_push_status(&on, true), DevicePushStatus::On);
 
-        device.browser_subscribed = false;
-        device.push_available = true;
-        assert_eq!(device_push_status(&device, true), DevicePushStatus::Off);
+        let off = DevicePushState {
+            push_available: true,
+            notification_permission: "granted".into(),
+            browser_subscribed: false,
+            ..Default::default()
+        };
+        assert_eq!(device_push_status(&off, true), DevicePushStatus::Off);
     }
 
     #[test]
