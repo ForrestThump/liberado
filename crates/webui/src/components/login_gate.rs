@@ -30,14 +30,13 @@ pub fn LoginGate(api_base: String, on_authenticated: EventHandler<()>) -> Elemen
     use_effect(move || {
         let base_probe = base_probe.clone();
         spawn(async move {
-            if let Ok(resp) = crate::http::session_status(&base_probe).await {
-                if resp.status().is_success()
-                    && let Ok(body) = resp.json::<SessionResponse>().await
-                {
-                    session_meta.set(Some(body.clone()));
-                    if !body.passkeys_enabled {
-                        show_token.set(true);
-                    }
+            if let Ok(resp) = crate::http::session_status(&base_probe).await
+                && resp.status().is_success()
+                && let Ok(body) = resp.json::<SessionResponse>().await
+            {
+                session_meta.set(Some(body.clone()));
+                if !body.passkeys_enabled {
+                    show_token.set(true);
                 }
             }
         });

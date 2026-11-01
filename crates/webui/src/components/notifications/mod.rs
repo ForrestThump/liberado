@@ -15,6 +15,9 @@ use self::model::{
     status_pill_label, troubleshooting_lines,
 };
 
+type NotificationRefreshResult =
+    Result<(PushStatus, Vec<SubscriptionRow>, DevicePushState), String>;
+
 fn apply_refresh_bundle(
     status: &mut Signal<PushStatus>,
     subs: &mut Signal<Vec<SubscriptionRow>>,
@@ -34,7 +37,7 @@ fn apply_refresh_bundle(
 fn RemoveSubscriptionButton(
     api_base: String,
     endpoint: String,
-    on_done: EventHandler<Result<(PushStatus, Vec<SubscriptionRow>, DevicePushState), String>>,
+    on_done: EventHandler<NotificationRefreshResult>,
     on_error: EventHandler<String>,
 ) -> Element {
     rsx! {
