@@ -729,3 +729,100 @@ async fn register_one_passkey_with_authenticator(
         .expect("one passkey")
         .id
 }
+
+async fn token_login(app: &Router, jar: &mut String) {
+    let resp = send(
+        app,
+        Request::builder()
+            .method("POST")
+            .uri("/api/auth/login")
+            .header("content-type", "application/json")
+            .body(Body::from(format!(r#"{{"token":"{HUMAN}"}}"#)))
+            .unwrap(),
+        jar,
+    )
+    .await;
+    assert_eq!(resp.status, StatusCode::OK, "{}", resp.body);
+}
+
+#[tokio::test]
+async fn register_start_json_exposes_public_key_challenge_for_webui() {
+    let guard = ApiGuard::with_api(ApiAuth::from_values(Some(HUMAN), &[]), webauthn_api());
+    let app = app(guard);
+    let mut jar = String::new();
+    token_login(&app, &mut jar).await;
+
+    let reg_start = send(
+        &app,
+        Request::builder()
+            .method("POST")
+            .uri("/api/auth/passkey/register/start")
+            .body(Body::empty())
+            .unwrap(),
+        &mut jar,
+    )
+    .await;
+    assert_eq!(reg_start.status, StatusCode::OK, "{}", reg_start.body);
+    let body: serde_json::Value = serde_json::from_str(&reg_start.body).expect("json");
+    let challenge = body
+        .pointer("/options/publicKey/challenge")
+        .expect("options.publicKey.challenge");
+    assert!(
+        challenge.is_string(),
+        "challenge must be base64url string for webauthn.js, got {challenge}"
+    );
+    assert!(
+        !challenge.as_str().unwrap().is_empty(),
+        "challenge must not be empty"
+    );
+    serde_json::from_value::<CreationChallengeResponse>(body["options"].clone())
+        .expect("options must deserialize as CreationChallengeResponse");
+}
+
+#[tokio::test]
+async fn login_start_json_exposes_public_key_challenge_for_webui() {
+    let guard = ApiGuard::with_api(ApiAuth::from_values(Some(HUMAN), &[]), webauthn_api());
+    let app = app(guard.clone());
+    let mut jar = String::new();
+    token_login(&app, &mut jar).await;
+    register_one_passkey(&app, &guard, &mut jar).await;
+
+    let login_start = send(
+        &app,
+        Request::builder()
+            .method("POST")
+            .uri("/api/auth/passkey/login/start")
+            .body(Body::empty())
+            .unwrap(),
+        &mut String::new(),
+    )
+    .await;
+    assert_eq!(login_start.status, StatusCode::OK, "{}", login_start.body);
+    let body: serde_json::Value = serde_json::from_str(&login_start.body).expect("json");
+    let challenge = body
+        .pointer("/options/publicKey/challenge")
+        .expect("options.publicKey.challenge");
+    assert!(
+        challenge.is_string(),
+        "challenge must be base64url string for webauthn.js, got {challenge}"
+    );
+    assert!(
+        !challenge.as_str().unwrap().is_empty(),
+        "challenge must not be empty"
+    );
+    if let Some(allow) = body.pointer("/options/publicKey/allowCredentials") {
+        assert!(
+            allow.is_array(),
+            "allowCredentials must be an array when present"
+        );
+        for entry in allow.as_array().unwrap() {
+            let id = entry.get("id").expect("allowCredentials[].id");
+            assert!(
+                id.is_string(),
+                "credential id must be base64url string, got {id}"
+            );
+        }
+    }
+    serde_json::from_value::<RequestChallengeResponse>(body["options"].clone())
+        .expect("options must deserialize as RequestChallengeResponse");
+}

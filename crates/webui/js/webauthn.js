@@ -14,6 +14,18 @@ function bufferToBase64Url(buffer) {
   return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 
+/** webauthn-rs wraps ceremony options in `{ publicKey: { challenge, ... } }`. */
+function unwrapWebAuthnRsOptions(parsed) {
+  if (
+    parsed &&
+    typeof parsed === "object" &&
+    Object.prototype.hasOwnProperty.call(parsed, "publicKey")
+  ) {
+    return parsed.publicKey;
+  }
+  return parsed;
+}
+
 function normalizeCreationOptions(obj) {
   const o = { ...obj };
   if (typeof o.challenge === "string") o.challenge = base64UrlToBuffer(o.challenge);
@@ -63,19 +75,37 @@ function credentialToJson(cred) {
   if (response.userHandle) {
     out.response.userHandle = bufferToBase64Url(response.userHandle);
   }
+  if (typeof response.getTransports === "function") {
+    const transports = response.getTransports();
+    if (Array.isArray(transports) && transports.length > 0) {
+      out.response.transports = transports;
+    }
+  }
+  if (typeof cred.getClientExtensionResults === "function") {
+    const extensions = cred.getClientExtensionResults();
+    if (extensions && typeof extensions === "object" && Object.keys(extensions).length > 0) {
+      out.clientExtensionResults = extensions;
+      out.extensions = extensions;
+    }
+  }
   return JSON.stringify(out);
 }
 
 export async function createPasskey(optionsJson) {
-  const options = normalizeCreationOptions(JSON.parse(optionsJson));
+  const parsed = JSON.parse(optionsJson);
+  const options = normalizeCreationOptions(unwrapWebAuthnRsOptions(parsed));
   const cred = await navigator.credentials.create({ publicKey: options });
   if (!cred) throw new Error("Passkey creation was cancelled");
   return credentialToJson(cred);
 }
 
 export async function getPasskey(optionsJson) {
-  const options = normalizeRequestOptions(JSON.parse(optionsJson));
-  const cred = await navigator.credentials.get({ publicKey: options });
+  const parsed = JSON.parse(optionsJson);
+  const mediation = parsed.mediation;
+  const publicKeyOptions = normalizeRequestOptions(unwrapWebAuthnRsOptions(parsed));
+  const getArgs = { publicKey: publicKeyOptions };
+  if (mediation !== undefined) getArgs.mediation = mediation;
+  const cred = await navigator.credentials.get(getArgs);
   if (!cred) throw new Error("Passkey sign-in was cancelled");
   return credentialToJson(cred);
 }

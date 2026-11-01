@@ -84,4 +84,18 @@ mod webauthn_js_tests {
             .expect("node must be installed to validate webauthn.js syntax");
         assert!(status.success(), "{js}");
     }
+
+    fn webauthn_js_dir() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("js")
+    }
+
+    #[test]
+    fn webauthn_js_unwraps_webauthn_rs_public_key_envelope() {
+        let status = std::process::Command::new("node")
+            .arg("webauthn_node_test.mjs")
+            .current_dir(webauthn_js_dir())
+            .status()
+            .expect("node must be installed to run webauthn_node_test.mjs");
+        assert!(status.success(), "webauthn_node_test.mjs failed");
+    }
 }
