@@ -13,7 +13,16 @@ This file is the only queue from which an agent should select implementation wor
 open work only. Code, tests, specifications, validation records, and git history describe work
 that has landed.
 
-The order is the October 2026 merged roadmap: first-review steps 1–12, plus agent-runtime items
+**Operator note (2026-11-01).** One active track. Polish notifications fully before other substrate
+rows. **[#332](https://github.com/ForrestThump/liberado/pull/332)** (accounts + passkey login) is
+in flight on another branch — the **last** accounts PR. Planned "PR3" (account-owned devices /
+notifications / conversations) is **dropped**; device identity is the push subscription, and
+outbox ack uses per-row tokens.
+
+While #332 is open, finish #332 only; do not start the notifications track or other rows here in
+parallel on `main`. **After #332 merges, take work only from [Active track — notifications](#active-track--notifications-polish-after-332)** until that track is daily-driver on Forrest's Pixel. Do not select rows from the October 2026 table below until then.
+
+The order below is the October 2026 merged roadmap: first-review steps 1–12, plus agent-runtime items
 A0–A10, in the slot-table order 1–14. The reviews are historical evidence:
 
 - [2026-10-opus-review.md](../reviews/2026-10-opus-review.md)
@@ -22,9 +31,9 @@ A0–A10, in the slot-table order 1–14. The reviews are historical evidence:
 Where a review and this file disagree, this file wins. The first review's step 3 says "cut the
 gate tax". This queue does not. Use the step 3 title in the table.
 
-Take the first open row whose dependency is met and that is not already in progress. Do not choose
-a later row because it is easier. Use one item per PR. Before implementation, verify the item
-against current code and recent git history.
+When no dated operator note overrides selection, take the first open row whose dependency is met
+and that is not already in progress. Do not choose a later row because it is easier. Use one item
+per PR. Before implementation, verify the item against current code and recent git history.
 
 **A0 is in progress.** The pull request is "fix: runtime authority defects (A0)", on branch
 `fix/runtime-authority-a0`. Do not open a second branch for A0a, A0b, or A0c.
@@ -50,7 +59,34 @@ Already landed, and not rows: wire stamp
 [#278](https://github.com/ForrestThump/liberado/pull/278). Contract:
 [`../spec/architecture/chat-agent-surface-mode.md`](../spec/architecture/chat-agent-surface-mode.md).
 
+## Active track — notifications polish (after #332)
+
+Selectable only after #332 merges. One PR per step. Live-test on Forrest's Pixel; use it for a few
+days before opening the next step.
+
+| Step | Item | Dependency |
+|---:|---|---|
+| **N1** | **Richer daemon Web Push payload** — `title` and `body` answer "what is this and why now" on their own; set `url` to the detail route (e.g. `/notifications/<id>`). Backward compatible: `crates/webui/public/sw.js` already defaults missing fields and stores the full JSON in `notification.data`. Today `reminder_payload` supports `url` but `OutboxDelivery` sends `"/"`; vault rows often use title `"Reminder"` and a single `body` line, not a standalone summary. | #332 merged |
+| **N2** | **WebUI notification detail** — new `Route` variant and page at `/notifications/<id>` that loads the outbox row (trigger, source note or goal, due time) and actions: Done, Snooze, open related session. The existing `Route::Notifications` page (#331) is push settings and device list only; there is no per-id route yet. | N1 merged and lived-with |
+| **N3** | **Done / Snooze on the system notification** — handle in `sw.js` `notificationclick` (after detail page is good). Today click acks all `rows` via `/api/outbox/ack` then navigates to `payload.url`. | N2 merged and lived-with |
+
+### N1 done when
+
+- Push shows human-readable title/body without opening the app; `url` opens the N2 detail route when present.
+- Old clients still work (missing `url` defaults to `/` in the service worker).
+
+### N2 done when
+
+- From a push (or the notifications settings page), `/notifications/<id>` shows the outbox record and the three actions work against the real API.
+- Forrest uses detail for real reminders for several days before N3 starts.
+
+### N3 done when
+
+- Done and Snooze from the tray notification behave like the detail page, without regressing ack/navigation.
+
 ## Implementation order
+
+**Deferred** while the [notifications track](#active-track--notifications-polish-after-332) is active (2026-11-01). Resume at order 1 when that track is daily-driver.
 
 | Order | Item | Dependency |
 |---:|---|---|
