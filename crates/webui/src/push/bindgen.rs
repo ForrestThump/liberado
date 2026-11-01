@@ -20,4 +20,11 @@ extern "C" {
 
     #[wasm_bindgen(catch, js_name = disablePushUnsubscribeJson)]
     pub async fn disable_push_unsubscribe_json_raw() -> Result<JsValue, JsValue>;
+
+    #[wasm_bindgen(catch, js_name = upsertExistingPushSubscriptionJson)]
+    pub async fn upsert_existing_push_subscription_json_raw(
+        api_base: &str,
+        label: &str,
+        csrf_token: &str,
+    ) -> Result<JsValue, JsValue>;
 }

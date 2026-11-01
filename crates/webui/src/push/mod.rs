@@ -50,6 +50,22 @@ fn parse_device_label_hints(json: &str) -> Result<crate::device_label::DeviceLab
 }
 
 #[cfg(target_arch = "wasm32")]
+pub async fn reregister_existing_push_on_server(api_base: &str, label: &str) -> Result<(), String> {
+    bindgen::upsert_existing_push_subscription_json_raw(api_base, label, "")
+        .await
+        .map_err(|e| js_value_to_error_text(&e))?;
+    Ok(())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub async fn reregister_existing_push_on_server(
+    _api_base: &str,
+    _label: &str,
+) -> Result<(), String> {
+    Err("Re-register push from the installed WebUI in a browser.".into())
+}
+
+#[cfg(target_arch = "wasm32")]
 pub async fn disable_push_local() -> Result<String, String> {
     let json = bindgen::disable_push_unsubscribe_json_raw()
         .await
@@ -127,6 +143,7 @@ mod push_js_tests {
         assert!(js.contains("export async function fetchPushDeviceStateJson"));
         assert!(js.contains("export async function fetchDeviceLabelHintsJson"));
         assert!(js.contains("export async function disablePushUnsubscribeJson"));
+        assert!(js.contains("export async function upsertExistingPushSubscriptionJson"));
         assert!(js.contains("applicationServerKey: urlBase64ToUint8Array(vapidKey)"));
         assert!(!js.contains("}})(publicKey);"));
         assert!(!js.contains("Function("));

@@ -166,6 +166,40 @@ export async function disablePushUnsubscribeJson() {
   return JSON.stringify({ endpoint });
 }
 
+export async function upsertExistingPushSubscriptionJson(apiBase, label, csrfToken) {
+  if (!("serviceWorker" in navigator)) {
+    throw new Error("Service worker not available");
+  }
+  const reg = await serviceWorkerReadyWithTimeout();
+  if (!reg.pushManager) {
+    throw new Error("Push manager not available");
+  }
+  const sub = await reg.pushManager.getSubscription();
+  if (!sub) {
+    throw new Error("No browser push subscription to register");
+  }
+  const json = sub.toJSON();
+  const token = csrfToken || csrfFromCookie();
+  const resp = await fetch(apiBase + "/api/push/subscriptions", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: {
+      "content-type": "application/json",
+      "x-liberado-csrf": token,
+    },
+    body: JSON.stringify({
+      endpoint: json.endpoint,
+      keys: json.keys,
+      label: label,
+    }),
+  });
+  if (!resp.ok) {
+    const text = await resp.text();
+    throw new Error("HTTP " + resp.status + ": " + text);
+  }
+  return JSON.stringify({ endpoint: json.endpoint || "" });
+}
+
 export async function enablePushSubscribe(vapidKey, apiBase, label, csrfToken) {
   if (typeof Notification === "undefined") {
     throw new DOMException(

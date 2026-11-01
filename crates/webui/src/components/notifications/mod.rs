@@ -5,11 +5,30 @@ mod model;
 
 use dioxus::prelude::*;
 
-use self::api::{enable_push, refresh_all, remove_subscription, send_test, turn_off_push};
-use self::model::{
-    DevicePushState, DevicePushStatus, PushStatus, StatusLine, SubscriptionRow, device_push_status,
-    format_added_date, status_pill_class, status_pill_label, troubleshooting_lines,
+use self::api::{
+    RefreshBundle, enable_push, refresh_and_reconcile, remove_subscription, send_test,
+    turn_off_push,
 };
+use self::model::{
+    DevicePushState, DevicePushStatus, PushStatus, StatusLine, SubscriptionRow,
+    display_push_status, format_added_date, push_test_success_message, status_pill_class,
+    status_pill_label, troubleshooting_lines,
+};
+
+fn apply_refresh_bundle(
+    status: &mut Signal<PushStatus>,
+    subs: &mut Signal<Vec<SubscriptionRow>>,
+    device_state: &mut Signal<DevicePushState>,
+    line: &mut Signal<Option<StatusLine>>,
+    bundle: RefreshBundle,
+) {
+    status.set(bundle.status);
+    subs.set(bundle.subs);
+    device_state.set(bundle.device);
+    if let Some(err) = bundle.reconcile_error {
+        line.set(Some(StatusLine::Error(err)));
+    }
+}
 
 #[component]
 fn RemoveSubscriptionButton(
@@ -28,8 +47,8 @@ fn RemoveSubscriptionButton(
                 spawn(async move {
                     if let Err(err) = remove_subscription(&base, &endpoint).await {
                         on_error.call(err);
-                    } else if let Ok(bundle) = refresh_all(&base).await {
-                        on_done.call(Ok(bundle));
+                    } else if let Ok(bundle) = refresh_and_reconcile(&base).await {
+                        on_done.call(Ok((bundle.status, bundle.subs, bundle.device)));
                     }
                 });
             },
@@ -49,18 +68,20 @@ pub fn Notifications(api_base: String) -> Element {
     use_effect(move || {
         let base = base.clone();
         spawn(async move {
-            match refresh_all(&base).await {
-                Ok((row, rows, device)) => {
-                    status.set(row);
-                    subs.set(rows);
-                    device_state.set(device);
-                }
+            match refresh_and_reconcile(&base).await {
+                Ok(bundle) => apply_refresh_bundle(
+                    &mut status,
+                    &mut subs,
+                    &mut device_state,
+                    &mut line,
+                    bundle,
+                ),
                 Err(err) => line.set(Some(StatusLine::Error(err))),
             }
         });
     });
 
-    let push_status = device_push_status(&device_state(), status().vapid_configured);
+    let push_status = display_push_status(&device_state(), status().vapid_configured, &subs());
     let this_endpoint = device_state().subscription_endpoint.clone();
     let badge_endpoint = this_endpoint.clone();
     let ios_hint = "Add this site to your Home Screen (Share → Add to Home Screen), open it from the icon, then turn notifications on here.";
@@ -124,10 +145,14 @@ pub fn Notifications(api_base: String) -> Element {
                                                     line.set(Some(StatusLine::Success(
                                                         "Push enabled on this device.".into(),
                                                     )));
-                                                    if let Ok((row, rows, device)) = refresh_all(&base).await {
-                                                        status.set(row);
-                                                        subs.set(rows);
-                                                        device_state.set(device);
+                                                    if let Ok(bundle) = refresh_and_reconcile(&base).await {
+                                                        apply_refresh_bundle(
+                                                            &mut status,
+                                                            &mut subs,
+                                                            &mut device_state,
+                                                            &mut line,
+                                                            bundle,
+                                                        );
                                                     }
                                                 }
                                                 Err(err) => line.set(Some(StatusLine::Error(err))),
@@ -147,9 +172,20 @@ pub fn Notifications(api_base: String) -> Element {
                                         spawn(async move {
                                             match send_test(&base, &endpoint).await {
                                                 Ok(()) => line.set(Some(StatusLine::Success(
-                                                    "Test sent to this device.".into(),
+                                                    push_test_success_message().into(),
                                                 ))),
-                                                Err(err) => line.set(Some(StatusLine::Error(err))),
+                                                Err(err) => {
+                                                    line.set(Some(StatusLine::Error(err)));
+                                                    if let Ok(bundle) = refresh_and_reconcile(&base).await {
+                                                        apply_refresh_bundle(
+                                                            &mut status,
+                                                            &mut subs,
+                                                            &mut device_state,
+                                                            &mut line,
+                                                            bundle,
+                                                        );
+                                                    }
+                                                }
                                             }
                                         });
                                     },
@@ -166,10 +202,14 @@ pub fn Notifications(api_base: String) -> Element {
                                                     line.set(Some(StatusLine::Success(
                                                         "Push turned off on this device.".into(),
                                                     )));
-                                                    if let Ok((row, rows, device)) = refresh_all(&base).await {
-                                                        status.set(row);
-                                                        subs.set(rows);
-                                                        device_state.set(device);
+                                                    if let Ok(bundle) = refresh_and_reconcile(&base).await {
+                                                        apply_refresh_bundle(
+                                                            &mut status,
+                                                            &mut subs,
+                                                            &mut device_state,
+                                                            &mut line,
+                                                            bundle,
+                                                        );
                                                     }
                                                 }
                                                 Err(err) => line.set(Some(StatusLine::Error(err))),

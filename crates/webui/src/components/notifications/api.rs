@@ -1,10 +1,19 @@
 //! HTTP and browser calls for the Notifications page.
 
 use super::model::{
-    DevicePushState, PushStatus, SubscriptionRow, api_error_message, parse_device_state,
-    parse_status, parse_subscriptions,
+    DeleteSubscriptionOutcome, DevicePushState, PushStatus, PushTestOutcome, ReconcileAction,
+    SubscriptionRow, api_error_message, classify_delete_subscription_status,
+    classify_push_test_response, parse_device_state, parse_status, parse_subscriptions,
+    re_register_failure_message, reconcile_action,
 };
 use crate::device_label::derive_device_label;
+
+pub(super) struct RefreshBundle {
+    pub status: PushStatus,
+    pub subs: Vec<SubscriptionRow>,
+    pub device: DevicePushState,
+    pub reconcile_error: Option<String>,
+}
 
 pub(super) async fn fetch_status(api_base: &str) -> Result<PushStatus, String> {
     let url = format!("{api_base}/api/push/status");
@@ -61,6 +70,52 @@ pub(super) async fn refresh_all(
 }
 
 #[cfg(target_arch = "wasm32")]
+async fn reregister_browser_subscription(api_base: &str) -> Result<(), String> {
+    use crate::push::{fetch_device_label_hints, reregister_existing_push_on_server};
+
+    let hints = fetch_device_label_hints().await.unwrap_or_default();
+    let label = derive_device_label(&hints);
+    reregister_existing_push_on_server(api_base, &label).await
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+async fn reregister_browser_subscription(_api_base: &str) -> Result<(), String> {
+    Ok(())
+}
+
+pub(super) async fn refresh_and_reconcile(api_base: &str) -> Result<RefreshBundle, String> {
+    let (status, subs, device) = refresh_all(api_base).await?;
+    if reconcile_action(&device, status.vapid_configured, &subs)
+        != ReconcileAction::ReRegisterOnServer
+    {
+        return Ok(RefreshBundle {
+            status,
+            subs,
+            device,
+            reconcile_error: None,
+        });
+    }
+
+    match reregister_browser_subscription(api_base).await {
+        Ok(()) => {
+            let (status, subs, device) = refresh_all(api_base).await?;
+            Ok(RefreshBundle {
+                status,
+                subs,
+                device,
+                reconcile_error: None,
+            })
+        }
+        Err(_) => Ok(RefreshBundle {
+            status,
+            subs,
+            device,
+            reconcile_error: Some(re_register_failure_message().into()),
+        }),
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
 pub(super) async fn enable_push(api_base: &str) -> Result<(), String> {
     use crate::push::{enable_push_subscribe, fetch_device_label_hints, js_value_to_error_text};
 
@@ -95,20 +150,56 @@ pub(super) async fn enable_push(_api_base: &str) -> Result<(), String> {
     Err("Enable push from the installed WebUI in a browser.".into())
 }
 
+enum PostPushTestResult {
+    Queued,
+    NotSubscribed,
+    Failed(String),
+}
+
+async fn post_push_test(api_base: &str, endpoint: &str) -> PostPushTestResult {
+    let url = format!("{api_base}/api/push/test");
+    let resp =
+        match crate::http::post_json(&url, &serde_json::json!({ "endpoint": endpoint })).await {
+            Ok(resp) => resp,
+            Err(e) => return PostPushTestResult::Failed(format!("Failed to reach daemon: {e}")),
+        };
+    let status = resp.status().as_u16();
+    let body = resp.text().await.unwrap_or_default();
+    match classify_push_test_response(status, &body) {
+        PushTestOutcome::Queued => PostPushTestResult::Queued,
+        PushTestOutcome::NotSubscribed => PostPushTestResult::NotSubscribed,
+        PushTestOutcome::OtherFailure => {
+            PostPushTestResult::Failed(api_error_message(status, &body))
+        }
+    }
+}
+
 pub(super) async fn send_test(api_base: &str, endpoint: &str) -> Result<(), String> {
     if endpoint.is_empty() {
         return Err("this device is not subscribed — turn push on first".into());
     }
-    let url = format!("{api_base}/api/push/test");
-    let resp = crate::http::post_json(&url, &serde_json::json!({ "endpoint": endpoint }))
+
+    match post_push_test(api_base, endpoint).await {
+        PostPushTestResult::Queued => return Ok(()),
+        PostPushTestResult::Failed(msg) => return Err(msg),
+        PostPushTestResult::NotSubscribed => {}
+    }
+
+    reregister_browser_subscription(api_base)
         .await
-        .map_err(|e| format!("Failed to reach daemon: {e}"))?;
-    if resp.status().is_success() {
-        Ok(())
-    } else {
-        let status = resp.status().as_u16();
-        let body = resp.text().await.unwrap_or_default();
-        Err(api_error_message(status, &body))
+        .map_err(|e| e)?;
+
+    let (_, _subs, device) = refresh_all(api_base).await?;
+    let endpoint = device.subscription_endpoint;
+    if endpoint.is_empty() {
+        return Err(re_register_failure_message().into());
+    }
+
+    match post_push_test(api_base, &endpoint).await {
+        PostPushTestResult::Queued => Ok(()),
+        PostPushTestResult::NotSubscribed | PostPushTestResult::Failed(_) => {
+            Err(re_register_failure_message().into())
+        }
     }
 }
 
@@ -117,12 +208,13 @@ pub(super) async fn remove_subscription(api_base: &str, endpoint: &str) -> Resul
     let resp = crate::http::delete_json(&url, &serde_json::json!({ "endpoint": endpoint }))
         .await
         .map_err(|e| format!("Failed to reach daemon: {e}"))?;
-    if resp.status().is_success() {
-        Ok(())
-    } else {
-        let status = resp.status().as_u16();
-        let body = resp.text().await.unwrap_or_default();
-        Err(api_error_message(status, &body))
+    let status = resp.status().as_u16();
+    match classify_delete_subscription_status(status) {
+        DeleteSubscriptionOutcome::Removed | DeleteSubscriptionOutcome::AlreadyAbsent => Ok(()),
+        DeleteSubscriptionOutcome::Failed => {
+            let body = resp.text().await.unwrap_or_default();
+            Err(api_error_message(status, &body))
+        }
     }
 }
 
