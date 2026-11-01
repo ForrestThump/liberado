@@ -74,7 +74,10 @@ pub async fn login(
         Ok(v) => v,
         Err(_) => return internal_error("could not create session"),
     };
-    let live = guard.sessions.touch(&session_id).expect("just created");
+    let live = match guard.sessions.touch(&session_id) {
+        Some(l) => l,
+        None => return internal_error("could not create session"),
+    };
     let max_age = session_max_age(&live.expires_at);
     let mut out = HeaderMap::new();
     set_session_cookies(&mut out, &session_id, &csrf, max_age);
