@@ -14,18 +14,10 @@ struct LimiterState {
     global: Window,
 }
 
+#[derive(Default)]
 struct Window {
     started: Option<Instant>,
     count: u32,
-}
-
-impl Default for Window {
-    fn default() -> Self {
-        Self {
-            started: None,
-            count: 0,
-        }
-    }
 }
 
 /// Rate limit failed auth attempts (token login, passkey finish, register finish).

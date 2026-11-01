@@ -33,14 +33,6 @@ impl Default for ChallengeStore {
 }
 
 impl ChallengeStore {
-    #[cfg(test)]
-    pub fn with_clock(now: fn() -> Instant) -> Self {
-        Self {
-            entries: Mutex::new(HashMap::new()),
-            now,
-        }
-    }
-
     pub fn insert(&self, ceremony_id: String, kind: CeremonyKind) {
         let mut map = self.entries.lock().unwrap_or_else(|e| e.into_inner());
         prune(&mut map, (self.now)());

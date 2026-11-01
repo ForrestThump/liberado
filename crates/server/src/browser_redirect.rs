@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use axum::{
     extract::{Request, State},
-    http::{Method, StatusCode, Uri, header},
+    http::{Method, Uri, header},
     middleware::Next,
     response::{IntoResponse, Redirect, Response},
 };

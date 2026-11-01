@@ -15,7 +15,7 @@ pub fn resolve_api_guard(
     outbox: Arc<Outbox>,
 ) -> Result<auth::ApiGuard, Box<dyn std::error::Error>> {
     let resolved = auth::ApiAuth::resolve(api).map_err(|e| format!("API auth: {e}"))?;
-    auth::ApiGuard::new(resolved, api, outbox).map_err(Into::into)
+    auth::ApiGuard::new(resolved, api, outbox)
 }
 
 /// Open the shared SQLite file used for reminders and auth sessions.

@@ -208,10 +208,6 @@ pub async fn require_owner(request: Request, next: Next) -> Response {
     }
 }
 
-pub fn principal_from_request(request: &Request) -> Option<Principal> {
-    request.extensions().get::<Principal>().cloned()
-}
-
 pub fn can_register_passkeys(guard: &ApiGuard, headers: &HeaderMap) -> bool {
     if let Some(token) = bearer(headers) {
         return guard.auth.is_human_token(token);

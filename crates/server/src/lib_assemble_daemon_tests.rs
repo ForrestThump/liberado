@@ -3,7 +3,6 @@
 use super::boot_helper_tests::ENV_LOCK;
 use super::*;
 use std::collections::BTreeMap;
-use std::sync::Arc;
 
 const FAKE_PROVIDER_KEY_ENV: &str = "LIBERADO_TEST_ASSEMBLE_PROVIDER_KEY";
 

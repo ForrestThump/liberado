@@ -37,19 +37,18 @@ pub async fn passkey_login_start(
     if !origin_ok(&guard, &headers) {
         return bad_origin();
     }
-    let passkeys = match load_passkeys(&guard) {
-        Ok(p) if !p.is_empty() => p,
-        Ok(_) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(ApiError {
-                    error: "no passkeys are registered yet".to_string(),
-                }),
-            )
-                .into_response();
-        }
-        Err(resp) => return resp,
+    let Some(passkeys) = load_passkeys(&guard) else {
+        return internal_error("passkey store error");
     };
+    if passkeys.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ApiError {
+                error: "no passkeys are registered yet".to_string(),
+            }),
+        )
+            .into_response();
+    }
     let (rcr, state) = match webauthn.webauthn.start_passkey_authentication(&passkeys) {
         Ok(v) => v,
         Err(err) => {
@@ -258,23 +257,18 @@ pub async fn passkey_register_finish(
     mint_full_session(&guard, &headers, "passkey")
 }
 
-fn load_passkeys(guard: &ApiGuard) -> Result<Vec<Passkey>, Response> {
-    let jsons = guard
-        .sessions
-        .outbox()
-        .passkey_json_values(1)
-        .map_err(|_| internal_error("passkey store error"))?;
+fn load_passkeys(guard: &ApiGuard) -> Option<Vec<Passkey>> {
+    let jsons = guard.sessions.outbox().passkey_json_values(1).ok()?;
     let mut out = Vec::with_capacity(jsons.len());
     for json in jsons {
-        let pk: Passkey =
-            serde_json::from_str(&json).map_err(|_| internal_error("passkey store corrupt"))?;
+        let pk: Passkey = serde_json::from_str(&json).ok()?;
         out.push(pk);
     }
-    Ok(out)
+    Some(out)
 }
 
 fn existing_credential_ids(guard: &ApiGuard) -> Option<Vec<webauthn_rs::prelude::CredentialID>> {
-    let passkeys = load_passkeys(guard).ok()?;
+    let passkeys = load_passkeys(guard)?;
     Some(passkeys.iter().map(|p| p.cred_id().clone()).collect())
 }
 

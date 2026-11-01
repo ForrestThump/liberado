@@ -304,8 +304,10 @@ async fn a_write_from_our_own_origin_is_allowed() {
 #[tokio::test]
 async fn a_listed_origin_is_allowed() {
     let auth = ApiAuth::from_values(Some(HUMAN), &[]);
-    let mut api = ApiConfig::default();
-    api.allowed_origins = vec!["http://127.0.0.1:8080".to_string()];
+    let api = ApiConfig {
+        allowed_origins: vec!["http://127.0.0.1:8080".to_string()],
+        ..Default::default()
+    };
     let guard = ApiGuard::with_api(auth, api);
     let (id, csrf) = guard.sessions.create(1, "token", None).unwrap();
     let sent = send(
