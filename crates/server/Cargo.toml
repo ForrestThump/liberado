@@ -86,6 +86,9 @@ http-body-util = "0.1"
 tokio = { workspace = true, features = ["test-util"] }
 webauthn-authenticator-rs = { version = "=0.5.5", features = ["softpasskey"] }
 
+[target.'cfg(windows)'.dependencies]
+openssl = { version = "=0.10.81", features = ["vendored"] }
+
 [package.metadata.liberado]
 # Layer role for the layer-rules test + crate-map generator (docs/architecture/contracts.md)
 role = "root"
