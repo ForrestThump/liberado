@@ -101,6 +101,7 @@ fn App() -> Element {
     let base = api_base();
     let mut auth_ready = use_signal(|| false);
     let mut need_login = use_signal(|| false);
+    #[cfg(target_arch = "wasm32")]
     let base_for_session = base.clone();
     use_effect(move || {
         #[cfg(target_arch = "wasm32")]
@@ -109,9 +110,6 @@ fn App() -> Element {
             crate::http::set_unauthenticated_handler(std::rc::Rc::new(move || {
                 on_expired.call(());
             }));
-        }
-        #[cfg(target_arch = "wasm32")]
-        {
             let base = base_for_session.clone();
             wasm_bindgen_futures::spawn_local(async move {
                 match components::login_gate::probe_session(&base).await {

@@ -13,8 +13,10 @@ thread_local! {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-static ON_UNAUTHENTICATED: std::sync::Mutex<Option<std::sync::Arc<dyn Fn() + Send + Sync>>> =
-    std::sync::Mutex::new(None);
+thread_local! {
+    static ON_UNAUTHENTICATED: std::cell::RefCell<Option<std::rc::Rc<dyn Fn()>>> =
+        const { std::cell::RefCell::new(None) };
+}
 
 pub fn set_unauthenticated_handler(handler: std::rc::Rc<dyn Fn()>) {
     #[cfg(target_arch = "wasm32")]
@@ -25,7 +27,9 @@ pub fn set_unauthenticated_handler(handler: std::rc::Rc<dyn Fn()>) {
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
-        *ON_UNAUTHENTICATED.lock().unwrap_or_else(|e| e.into_inner()) = Some(handler);
+        ON_UNAUTHENTICATED.with(|cell| {
+            *cell.borrow_mut() = Some(handler);
+        });
     }
 }
 
@@ -41,13 +45,11 @@ fn maybe_session_expired(resp: &Response, url: &str) {
             }
         });
         #[cfg(not(target_arch = "wasm32"))]
-        if let Some(h) = ON_UNAUTHENTICATED
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .as_ref()
-        {
-            h();
-        }
+        ON_UNAUTHENTICATED.with(|cell| {
+            if let Some(h) = cell.borrow().as_ref() {
+                h();
+            }
+        });
     }
 }
 
@@ -72,10 +74,10 @@ fn csrf_token_from_cookie() -> Option<String> {
     let cookie = doc.cookie().ok()?;
     for part in cookie.split(';') {
         let part = part.trim();
-        if let Some(value) = part.strip_prefix(&format!("{CSRF_COOKIE}=")) {
-            if !value.is_empty() {
-                return Some(value.to_string());
-            }
+        if let Some(value) = part.strip_prefix(&format!("{CSRF_COOKIE}="))
+            && !value.is_empty()
+        {
+            return Some(value.to_string());
         }
     }
     None
@@ -87,10 +89,8 @@ fn csrf_token_from_cookie() -> Option<String> {
 }
 
 fn prepare(mut builder: RequestBuilder, mutating: bool) -> RequestBuilder {
-    if mutating {
-        if let Some(csrf) = csrf_token_from_cookie() {
-            builder = builder.header(CSRF_HEADER, csrf);
-        }
+    if mutating && let Some(csrf) = csrf_token_from_cookie() {
+        builder = builder.header(CSRF_HEADER, csrf);
     }
     builder
 }

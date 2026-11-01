@@ -1,11 +1,14 @@
 //! HTTP and browser calls for the Notifications page.
 
+#[cfg(target_arch = "wasm32")]
+use super::model::parse_device_state;
 use super::model::{
     DeleteSubscriptionOutcome, DevicePushState, PushStatus, PushTestOutcome, ReconcileAction,
     SubscriptionRow, api_error_message, classify_delete_subscription_status,
-    classify_push_test_response, parse_device_state, parse_status, parse_subscriptions,
-    re_register_failure_message, reconcile_action,
+    classify_push_test_response, parse_status, parse_subscriptions, re_register_failure_message,
+    reconcile_action,
 };
+#[cfg(target_arch = "wasm32")]
 use crate::device_label::derive_device_label;
 
 pub(super) struct RefreshBundle {
@@ -185,9 +188,7 @@ pub(super) async fn send_test(api_base: &str, endpoint: &str) -> Result<(), Stri
         PostPushTestResult::NotSubscribed => {}
     }
 
-    reregister_browser_subscription(api_base)
-        .await
-        .map_err(|e| e)?;
+    reregister_browser_subscription(api_base).await?;
 
     let (_, _subs, device) = refresh_all(api_base).await?;
     let endpoint = device.subscription_endpoint;

@@ -1,6 +1,5 @@
+#[cfg(target_arch = "wasm32")]
 mod bindgen;
-
-use bindgen::{create_passkey_raw, get_passkey_raw};
 
 pub fn map_webauthn_error_name(name: &str, fallback_message: &str) -> String {
     match name {
@@ -13,6 +12,7 @@ pub fn map_webauthn_error_name(name: &str, fallback_message: &str) -> String {
     }
 }
 
+#[cfg(target_arch = "wasm32")]
 pub fn map_webauthn_error(value: &wasm_bindgen::JsValue) -> String {
     let name = js_sys::Reflect::get(value, &wasm_bindgen::JsValue::from_str("name"))
         .ok()
@@ -25,18 +25,34 @@ pub fn map_webauthn_error(value: &wasm_bindgen::JsValue) -> String {
     map_webauthn_error_name(&name, &message)
 }
 
+#[cfg(target_arch = "wasm32")]
 pub async fn create_passkey(options_json: &str) -> Result<String, String> {
+    use bindgen::create_passkey_raw;
+
     create_passkey_raw(options_json)
         .await
         .map(|v| v.as_string().unwrap_or_default())
         .map_err(|e| map_webauthn_error(&e))
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+pub async fn create_passkey(_options_json: &str) -> Result<String, String> {
+    Err("Create a passkey from the installed WebUI in a browser.".into())
+}
+
+#[cfg(target_arch = "wasm32")]
 pub async fn get_passkey(options_json: &str) -> Result<String, String> {
+    use bindgen::get_passkey_raw;
+
     get_passkey_raw(options_json)
         .await
         .map(|v| v.as_string().unwrap_or_default())
         .map_err(|e| map_webauthn_error(&e))
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub async fn get_passkey(_options_json: &str) -> Result<String, String> {
+    Err("Sign in with a passkey from the installed WebUI in a browser.".into())
 }
 
 #[cfg(test)]
