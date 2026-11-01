@@ -257,7 +257,7 @@ async fn passkey_sign_in(api_base: &str) -> Result<(), String> {
     }
 }
 
-async fn register_passkey(api_base: &str) -> Result<(), String> {
+pub(crate) async fn register_passkey(api_base: &str) -> Result<(), String> {
     let start = crate::http::post_empty(&format!("{api_base}/api/auth/passkey/register/start"))
         .await
         .map_err(|e| e.to_string())?;

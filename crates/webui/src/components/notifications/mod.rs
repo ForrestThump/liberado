@@ -1,7 +1,7 @@
 //! Owner notifications — Web Push subscriptions and outbox visibility.
 
 mod api;
-mod model;
+pub(crate) mod model;
 
 use dioxus::prelude::*;
 
@@ -230,6 +230,10 @@ pub fn Notifications(api_base: String) -> Element {
                             dd { "{value}" }
                         }
                     }
+                }
+                crate::components::auth_settings::AuthSettingsSection {
+                    api_base: api_base.clone(),
+                    line,
                 }
                 if !subs().is_empty() {
                     h2 { class: "notifications-section-title", "Devices" }

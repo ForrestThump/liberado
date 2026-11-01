@@ -14,6 +14,7 @@ pub mod mcp_panel;
 mod message_row;
 pub mod model_browser;
 mod model_chip;
+pub mod auth_settings;
 pub mod notifications;
 pub mod picker;
 pub mod plugins;

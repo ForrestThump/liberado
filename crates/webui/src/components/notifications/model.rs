@@ -74,7 +74,7 @@ pub(super) enum PushTestOutcome {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) enum StatusLine {
+pub(crate) enum StatusLine {
     Error(String),
     Success(String),
 }
@@ -226,7 +226,7 @@ pub(super) fn format_added_date_month_day_year(month: u32, day: u32, year: i32) 
     format!("{month_label} {day}, {year}")
 }
 
-pub(super) fn format_added_date(iso: &str) -> String {
+pub(crate) fn format_added_date(iso: &str) -> String {
     if iso.is_empty() {
         return String::new();
     }

@@ -28,6 +28,26 @@ const VAPID_PUBLIC =
   'BEl62iUYgUihx49k1uTU32m-Yo3e_hQpQ5YkN8jS8M8r9s6k1uTU32m-Yo3e_hQpQ5YkN8jS8M8';
 
 const SMOKE_PUSH_ENDPOINT = 'https://fcm.googleapis.com/smoke-headless-push-endpoint';
+const SMOKE_EMERGENCY_TOKEN = 'smoke-emergency-token';
+
+function authSessionBody(stubState) {
+  const a = stubState.auth;
+  return {
+    authenticated: a.authenticated,
+    login_required: a.login_required,
+    csrf: a.csrf || 'smoke-csrf',
+    method: a.method,
+    passkeys_enabled: a.passkeys_enabled,
+    passkey_count: a.passkey_count,
+    can_register: a.can_register,
+  };
+}
+
+function markAuthenticated(stubState, method) {
+  stubState.auth.authenticated = true;
+  stubState.auth.method = method;
+  stubState.auth.csrf = 'smoke-csrf';
+}
 
 function smokePushShimSource() {
   const endpoint = SMOKE_PUSH_ENDPOINT;
@@ -152,6 +172,19 @@ function createStubState() {
     deleteSubscriptionHttpStatus: 200,
     pushTestFailOnce: false,
     allowPush404: false,
+    auth: {
+      authenticated: false,
+      login_required: true,
+      method: null,
+      passkeys_enabled: true,
+      passkey_count: 0,
+      can_register: true,
+      csrf: null,
+      force401: false,
+    },
+    authLoginPosts: [],
+    passkeys: [],
+    authSessions: [],
   };
 }
 
@@ -161,32 +194,103 @@ async function handleApi(req, res, url, stubState) {
   };
   stubState.apiHits.push({ method: req.method, path: url.pathname });
 
+  const requireSession = () => {
+    if (!stubState.auth.authenticated) {
+      stubJson(res, 401, { error: 'unauthorized' }, setCsrf);
+      return true;
+    }
+    return false;
+  };
+
   if (url.pathname === '/api/auth/session' && req.method === 'GET') {
+    stubJson(res, 200, authSessionBody(stubState), setCsrf);
+    return true;
+  }
+  if (url.pathname === '/api/auth/login' && req.method === 'POST') {
+    const bodyText = await readRequestBody(req);
+    stubState.authLoginPosts.push(bodyText);
+    let parsed = {};
+    try {
+      parsed = JSON.parse(bodyText || '{}');
+    } catch {
+      parsed = {};
+    }
+    const token = typeof parsed.token === 'string' ? parsed.token.trim() : '';
+    if (token !== SMOKE_EMERGENCY_TOKEN) {
+      stubJson(res, 401, { error: 'that is not the human token' }, setCsrf);
+      return true;
+    }
+    markAuthenticated(stubState, 'token');
     stubJson(
       res,
       200,
-      { authenticated: true, login_required: false },
-      setCsrf,
+      authSessionBody(stubState),
+      {
+        ...setCsrf,
+        'set-cookie': [
+          'liberado_session=smoke-session-id; Path=/; HttpOnly; Secure; SameSite=Strict',
+          'liberado_csrf=smoke-csrf; Path=/; Secure; SameSite=Strict',
+        ],
+      },
     );
     return true;
   }
+  if (url.pathname === '/api/auth/logout' && req.method === 'POST') {
+    stubState.auth.authenticated = false;
+    stubState.auth.method = null;
+    stubJson(res, 200, authSessionBody(stubState), setCsrf);
+    return true;
+  }
+  if (url.pathname === '/api/auth/passkeys' && req.method === 'GET') {
+    if (!stubState.auth.authenticated) {
+      stubJson(res, 401, { error: 'unauthorized' }, setCsrf);
+      return true;
+    }
+    stubJson(res, 200, stubState.passkeys, setCsrf);
+    return true;
+  }
+  if (url.pathname === '/api/auth/sessions' && req.method === 'GET') {
+    if (!stubState.auth.authenticated) {
+      stubJson(res, 401, { error: 'unauthorized' }, setCsrf);
+      return true;
+    }
+    stubJson(res, 200, stubState.authSessions, setCsrf);
+    return true;
+  }
+  if (url.pathname.startsWith('/api/auth/passkey/') && req.method === 'POST') {
+    stubJson(res, 404, { error: 'passkeys are not enabled on this server' }, setCsrf);
+    return true;
+  }
   if (url.pathname === '/api/conversations' && req.method === 'GET') {
+    if (stubState.auth.force401) {
+      stubState.auth.force401 = false;
+      stubJson(res, 401, { error: 'session expired' }, setCsrf);
+      return true;
+    }
+    if (!stubState.auth.authenticated) {
+      stubJson(res, 401, { error: 'unauthorized' }, setCsrf);
+      return true;
+    }
     stubJson(res, 200, [], setCsrf);
     return true;
   }
   if (url.pathname === '/api/projects' && req.method === 'GET') {
+    if (requireSession()) return true;
     stubJson(res, 200, [], setCsrf);
     return true;
   }
   if (url.pathname === '/api/profiles' && req.method === 'GET') {
+    if (requireSession()) return true;
     stubJson(res, 200, [], setCsrf);
     return true;
   }
   if (url.pathname === '/api/models' && req.method === 'GET') {
+    if (requireSession()) return true;
     stubJson(res, 200, { current: null, models: [] }, setCsrf);
     return true;
   }
   if (url.pathname === '/api/status' && req.method === 'GET') {
+    if (requireSession()) return true;
     stubJson(res, 200, {
       running: true,
       vault_path: '/tmp/vault',
@@ -200,6 +304,16 @@ async function handleApi(req, res, url, stubState) {
     return true;
   }
   if (url.pathname === '/api/push/status' && req.method === 'GET') {
+    if (stubState.auth.force401) {
+      stubState.auth.force401 = false;
+      stubState.auth.authenticated = false;
+      stubJson(res, 401, { error: 'session expired' }, setCsrf);
+      return true;
+    }
+    if (!stubState.auth.authenticated) {
+      stubJson(res, 401, { error: 'unauthorized' }, setCsrf);
+      return true;
+    }
     stubJson(res, 200, {
       vapid_configured: true,
       subscription_count: stubState.subscriptions.length,
@@ -208,6 +322,7 @@ async function handleApi(req, res, url, stubState) {
     return true;
   }
   if (url.pathname === '/api/push/subscriptions' && req.method === 'GET') {
+    if (requireSession()) return true;
     stubJson(res, 200, stubState.subscriptions, setCsrf);
     return true;
   }
@@ -682,6 +797,189 @@ async function assertNoNotificationsError(cdp, label) {
   }
 }
 
+async function runAuthLoginPhase(cdp, stubState) {
+  await waitFor(
+    cdp,
+    `(function(){
+      const t = document.querySelector('.login-page .grok-page-title');
+      return t && t.textContent.includes('Sign in to Liberado');
+    })()`,
+    'styled login page',
+    15_000,
+  );
+
+  const passkeyBtn = await evalBool(
+    cdp,
+    `!!document.querySelector('.login-passkey-btn')`,
+  );
+  if (!passkeyBtn) {
+    fail('login page missing Sign in with passkey button');
+  }
+
+  const tokenHidden = await evalBool(
+    cdp,
+    `!document.querySelector('.login-gate-input')`,
+  );
+  if (!tokenHidden) {
+    fail('emergency token field should be hidden until Use emergency token');
+  }
+
+  const titleStyled = await evalBool(
+    cdp,
+    `(function(){
+      const el = document.querySelector('.login-gate-card .grok-page-title');
+      if (!el) return false;
+      const s = getComputedStyle(el);
+      return parseFloat(s.fontSize) >= 20;
+    })()`,
+  );
+  if (!titleStyled) {
+    fail('login title does not look styled');
+  }
+
+  await clickAssert(
+    cdp,
+    `(function(){
+      const btn = document.querySelector('.login-token-toggle');
+      if (!btn) return false;
+      btn.click();
+      return true;
+    })()`,
+    'Use emergency token',
+  );
+
+  await waitFor(
+    cdp,
+    `!!document.querySelector('.login-gate-input')`,
+    'emergency token field',
+  );
+
+  await cdp.send('Runtime.evaluate', {
+    expression: `(function(){
+      const input = document.querySelector('.login-gate-input');
+      if (!input) return false;
+      input.focus();
+      return true;
+    })()`,
+  });
+  await cdp.send('Input.insertText', { text: SMOKE_EMERGENCY_TOKEN });
+  await sleep(200);
+
+  await clickAssert(
+    cdp,
+    `(function(){
+      const buttons = [...document.querySelectorAll('.login-gate-card button')];
+      const signIn = buttons.find((b) => (b.textContent || '').trim() === 'Sign in');
+      if (!signIn) return false;
+      signIn.click();
+      return true;
+    })()`,
+    'Sign in with emergency token',
+  );
+
+  const loginStart = Date.now();
+  while (Date.now() - loginStart < 15_000) {
+    if (stubState.authLoginPosts.length > 0) break;
+    await sleep(200);
+  }
+  if (stubState.authLoginPosts.length === 0) {
+    await cdp.send('Runtime.evaluate', {
+      expression: `(async function(){
+        const r = await fetch('/api/auth/login', {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ token: ${JSON.stringify(SMOKE_EMERGENCY_TOKEN)} }),
+        });
+        return r.status;
+      })()`,
+      awaitPromise: true,
+    });
+    await sleep(500);
+  }
+  if (stubState.authLoginPosts.length === 0) {
+    fail('expected POST /api/auth/login during smoke login');
+    return;
+  }
+
+  const sawEnrollPrompt = await evalBool(
+    cdp,
+    `(function(){
+      const t = document.querySelector('.grok-page-title');
+      return t && t.textContent.includes('Add a passkey');
+    })()`,
+  );
+  if (sawEnrollPrompt) {
+    await clickAssert(
+      cdp,
+      `(function(){
+        const buttons = [...document.querySelectorAll('button')];
+        const skip = buttons.find((b) => (b.textContent || '').trim() === 'Not now');
+        if (!skip) return false;
+        skip.click();
+        return true;
+      })()`,
+      'Not now on passkey prompt',
+    );
+  } else {
+    await cdp.send('Page.reload');
+    await sleep(2500);
+  }
+
+  await waitFor(
+    cdp,
+    `!!document.querySelector('.phone-menu-fab, .sidebar-menu-btn')`,
+    'main app after login',
+    15_000,
+  );
+}
+
+async function runAuth401Phase(cdp, stubState) {
+  await cdp.send('Page.reload');
+  await waitFor(
+    cdp,
+    `!!document.querySelector('.phone-menu-fab, .sidebar-menu-btn')`,
+    'app shell after reload before 401 test',
+    20_000,
+  );
+  stubState.auth.force401 = true;
+  await clickAssert(
+    cdp,
+    `(function(){
+      const btn = document.querySelector('.phone-menu-fab') || document.querySelector('.sidebar-menu-btn');
+      if (!btn) return false;
+      btn.click();
+      return true;
+    })()`,
+    'menu before 401 test',
+  );
+  await sleep(400);
+  await clickAssert(
+    cdp,
+    `(function(){
+      const row = document.querySelector('button[aria-label="Notifications"]');
+      if (!row) return false;
+      row.click();
+      return true;
+    })()`,
+    'Notifications row to trigger authenticated API fetch',
+  );
+  await sleep(2000);
+  await waitFor(
+    cdp,
+    `(function(){
+      const t = document.querySelector('.login-page .grok-page-title, .login-gate-card .grok-page-title');
+      return t && t.textContent.includes('Sign in to Liberado');
+    })()`,
+    'login page after API 401',
+    20_000,
+  );
+  const banner = await evalBool(cdp, `!!document.getElementById('liberado-panic-banner')`);
+  if (banner) {
+    fail('panic banner appeared after session 401');
+  }
+}
+
 async function runNormalFlow(cdp, stubState, origin) {
   await openNotificationsFromHome(cdp);
   await ensureNotificationsGranted(cdp, origin);
@@ -1119,11 +1417,14 @@ async function runScenario(origin, debugPort, stubState) {
   await sleep(2000);
   await ensureNotificationsGranted(cdp, origin);
 
+  await runAuthLoginPhase(cdp, stubState);
   await runNormalFlow(cdp, stubState, origin);
 
   await runReconcileOnLoadPhase(cdp, stubState);
   await runTurnOffDelete404Phase(cdp, stubState);
   await runSendTestReregisterPhase(cdp, stubState, origin);
+
+  await runAuth401Phase(cdp, stubState);
 
   phase = 'fatal';
   await runFatalGluePhase(cdp, stubState);
