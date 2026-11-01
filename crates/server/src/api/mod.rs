@@ -50,3 +50,7 @@ pub use status::{catalog, models, reactions, reload_mcp_peers, select_model, sta
 #[cfg(test)]
 #[path = "auth_router_http_tests.rs"]
 mod auth_router_http_tests;
+
+#[cfg(test)]
+#[path = "auth_management_http_tests.rs"]
+mod auth_management_http_tests;

@@ -323,3 +323,409 @@ async fn register_finish_rejects_reused_ceremony_cookie_after_success() {
     .await;
     assert_eq!(reuse.status, StatusCode::BAD_REQUEST, "{}", reuse.body);
 }
+
+#[tokio::test]
+async fn login_finish_without_ceremony_cookie_is_bad_request() {
+    let guard = ApiGuard::with_api(ApiAuth::from_values(Some(HUMAN), &[]), webauthn_api());
+    let app = app(guard);
+    let resp = send(
+        &app,
+        Request::builder()
+            .method("POST")
+            .uri("/api/auth/passkey/login/finish")
+            .header("content-type", "application/json")
+            .body(Body::from(r#"{"credential":{}}"#))
+            .unwrap(),
+        &mut String::new(),
+    )
+    .await;
+    assert_eq!(resp.status, StatusCode::BAD_REQUEST, "{}", resp.body);
+    assert!(resp.body.contains("ceremony"), "{}", resp.body);
+}
+
+#[tokio::test]
+async fn login_finish_rejects_malformed_credential_json() {
+    let guard = ApiGuard::with_api(ApiAuth::from_values(Some(HUMAN), &[]), webauthn_api());
+    let app = app(guard.clone());
+    let mut jar = String::new();
+    let _ = register_one_passkey(&app, &guard, &mut jar).await;
+    let start = send(
+        &app,
+        Request::builder()
+            .method("POST")
+            .uri("/api/auth/passkey/login/start")
+            .body(Body::empty())
+            .unwrap(),
+        &mut String::new(),
+    )
+    .await;
+    assert_eq!(start.status, StatusCode::OK);
+    let mut ceremony_jar = merge_cookies("", &start.cookies);
+
+    let bad = send(
+        &app,
+        Request::builder()
+            .method("POST")
+            .uri("/api/auth/passkey/login/finish")
+            .header("content-type", "application/json")
+            .body(Body::from(r#"{"credential":"not-an-object"}"#))
+            .unwrap(),
+        &mut ceremony_jar,
+    )
+    .await;
+    assert_eq!(bad.status, StatusCode::BAD_REQUEST, "{}", bad.body);
+    assert!(bad.body.contains("malformed"), "{}", bad.body);
+}
+
+#[tokio::test]
+async fn login_finish_rejects_a_credential_that_does_not_match_the_challenge() {
+    let guard = ApiGuard::with_api(ApiAuth::from_values(Some(HUMAN), &[]), webauthn_api());
+    let app = app(guard.clone());
+    let mut jar = String::new();
+    let mut wa = WebauthnAuthenticator::new(SoftPasskey::new(true));
+    register_one_passkey_with_authenticator(&app, &guard, &mut jar, &mut wa).await;
+    let start = send(
+        &app,
+        Request::builder()
+            .method("POST")
+            .uri("/api/auth/passkey/login/start")
+            .body(Body::empty())
+            .unwrap(),
+        &mut String::new(),
+    )
+    .await;
+    assert_eq!(start.status, StatusCode::OK);
+    let login_options: serde_json::Value = serde_json::from_str(&start.body).unwrap();
+    let auth_challenge: RequestChallengeResponse =
+        serde_json::from_value(login_options.get("options").unwrap().clone()).unwrap();
+    let mut ceremony_jar = merge_cookies("", &start.cookies);
+
+    let auth_cred = wa
+        .do_authentication(AuthUrl::parse(ORIGIN).unwrap(), auth_challenge)
+        .expect("soft authentication");
+    let mut auth_json = serde_json::to_value(&auth_cred).unwrap();
+    auth_json["response"]["signature"] = serde_json::json!("AQID");
+
+    let bad = send(
+        &app,
+        Request::builder()
+            .method("POST")
+            .uri("/api/auth/passkey/login/finish")
+            .header("content-type", "application/json")
+            .body(Body::from(
+                serde_json::json!({ "credential": auth_json }).to_string(),
+            ))
+            .unwrap(),
+        &mut ceremony_jar,
+    )
+    .await;
+    assert_eq!(bad.status, StatusCode::UNAUTHORIZED, "{}", bad.body);
+    assert!(bad.body.contains("sign-in failed"), "{}", bad.body);
+}
+
+#[tokio::test]
+async fn login_finish_reports_unknown_passkey_when_row_was_removed() {
+    let guard = ApiGuard::with_api(ApiAuth::from_values(Some(HUMAN), &[]), webauthn_api());
+    let app = app(guard.clone());
+    let mut jar = String::new();
+    let mut wa = WebauthnAuthenticator::new(SoftPasskey::new(true));
+    let passkey_id = register_one_passkey_with_authenticator(&app, &guard, &mut jar, &mut wa).await;
+    let start = send(
+        &app,
+        Request::builder()
+            .method("POST")
+            .uri("/api/auth/passkey/login/start")
+            .body(Body::empty())
+            .unwrap(),
+        &mut String::new(),
+    )
+    .await;
+    assert_eq!(start.status, StatusCode::OK);
+    let login_options: serde_json::Value = serde_json::from_str(&start.body).unwrap();
+    let auth_challenge: RequestChallengeResponse =
+        serde_json::from_value(login_options.get("options").unwrap().clone()).unwrap();
+    let mut ceremony_jar = merge_cookies("", &start.cookies);
+
+    let auth_cred = wa
+        .do_authentication(AuthUrl::parse(ORIGIN).unwrap(), auth_challenge)
+        .expect("soft authentication");
+    let auth_json = serde_json::to_value(&auth_cred).unwrap();
+
+    guard
+        .sessions
+        .outbox()
+        .delete_passkey(1, passkey_id)
+        .expect("delete");
+
+    let finish = send(
+        &app,
+        Request::builder()
+            .method("POST")
+            .uri("/api/auth/passkey/login/finish")
+            .header("content-type", "application/json")
+            .body(Body::from(
+                serde_json::json!({ "credential": auth_json }).to_string(),
+            ))
+            .unwrap(),
+        &mut ceremony_jar,
+    )
+    .await;
+    assert_eq!(finish.status, StatusCode::UNAUTHORIZED, "{}", finish.body);
+    assert!(finish.body.contains("unknown passkey"), "{}", finish.body);
+}
+
+#[tokio::test]
+async fn login_finish_when_passkeys_are_disabled_is_not_found() {
+    let guard = ApiGuard::with_auth(ApiAuth::from_values(Some(HUMAN), &[]));
+    let app = app(guard);
+    let resp = send(
+        &app,
+        Request::builder()
+            .method("POST")
+            .uri("/api/auth/passkey/login/finish")
+            .header("content-type", "application/json")
+            .body(Body::from(r#"{"credential":{}}"#))
+            .unwrap(),
+        &mut String::new(),
+    )
+    .await;
+    assert_eq!(resp.status, StatusCode::NOT_FOUND, "{}", resp.body);
+}
+
+#[tokio::test]
+async fn register_finish_without_credential_is_unauthorized() {
+    let guard = ApiGuard::with_api(ApiAuth::from_values(Some(HUMAN), &[]), webauthn_api());
+    let app = app(guard);
+    let resp = send(
+        &app,
+        Request::builder()
+            .method("POST")
+            .uri("/api/auth/passkey/register/finish")
+            .header("content-type", "application/json")
+            .body(Body::from(r#"{"credential":{}}"#))
+            .unwrap(),
+        &mut String::new(),
+    )
+    .await;
+    assert_eq!(resp.status, StatusCode::UNAUTHORIZED, "{}", resp.body);
+}
+
+#[tokio::test]
+async fn register_finish_from_passkey_session_is_forbidden() {
+    let guard = ApiGuard::with_api(ApiAuth::from_values(Some(HUMAN), &[]), webauthn_api());
+    let app = app(guard.clone());
+    let (session_id, _csrf) = guard
+        .sessions
+        .create(1, "passkey", Some("test"))
+        .expect("session");
+    let mut passkey_jar = format!("liberado_session={session_id}");
+
+    let resp = send(
+        &app,
+        Request::builder()
+            .method("POST")
+            .uri("/api/auth/passkey/register/finish")
+            .header("content-type", "application/json")
+            .body(Body::from(r#"{"credential":{}}"#))
+            .unwrap(),
+        &mut passkey_jar,
+    )
+    .await;
+    assert_eq!(resp.status, StatusCode::FORBIDDEN, "{}", resp.body);
+    assert!(resp.body.contains("emergency token"), "{}", resp.body);
+}
+
+#[tokio::test]
+async fn register_finish_without_ceremony_cookie_is_bad_request() {
+    let guard = ApiGuard::with_api(ApiAuth::from_values(Some(HUMAN), &[]), webauthn_api());
+    let app = app(guard);
+    let mut jar = String::new();
+    let _ = send(
+        &app,
+        Request::builder()
+            .method("POST")
+            .uri("/api/auth/login")
+            .header("content-type", "application/json")
+            .body(Body::from(format!(r#"{{"token":"{HUMAN}"}}"#)))
+            .unwrap(),
+        &mut jar,
+    )
+    .await;
+
+    let resp = send(
+        &app,
+        Request::builder()
+            .method("POST")
+            .uri("/api/auth/passkey/register/finish")
+            .header("content-type", "application/json")
+            .body(Body::from(r#"{"credential":{}}"#))
+            .unwrap(),
+        &mut jar,
+    )
+    .await;
+    assert_eq!(resp.status, StatusCode::BAD_REQUEST, "{}", resp.body);
+}
+
+#[tokio::test]
+async fn register_finish_rejects_malformed_credential_json() {
+    let guard = ApiGuard::with_api(ApiAuth::from_values(Some(HUMAN), &[]), webauthn_api());
+    let app = app(guard);
+    let mut jar = String::new();
+    let _ = send(
+        &app,
+        Request::builder()
+            .method("POST")
+            .uri("/api/auth/login")
+            .header("content-type", "application/json")
+            .body(Body::from(format!(r#"{{"token":"{HUMAN}"}}"#)))
+            .unwrap(),
+        &mut jar,
+    )
+    .await;
+    let start = send(
+        &app,
+        Request::builder()
+            .method("POST")
+            .uri("/api/auth/passkey/register/start")
+            .body(Body::empty())
+            .unwrap(),
+        &mut jar,
+    )
+    .await;
+    assert_eq!(start.status, StatusCode::OK);
+    let mut ceremony_jar = jar.clone();
+
+    let bad = send(
+        &app,
+        Request::builder()
+            .method("POST")
+            .uri("/api/auth/passkey/register/finish")
+            .header("content-type", "application/json")
+            .body(Body::from(r#"{"credential":[]}"#))
+            .unwrap(),
+        &mut ceremony_jar,
+    )
+    .await;
+    assert_eq!(bad.status, StatusCode::BAD_REQUEST, "{}", bad.body);
+}
+
+#[tokio::test]
+async fn register_finish_rejects_a_credential_that_does_not_match_the_challenge() {
+    let guard = ApiGuard::with_api(ApiAuth::from_values(Some(HUMAN), &[]), webauthn_api());
+    let app = app(guard);
+    let mut jar = String::new();
+    let _ = send(
+        &app,
+        Request::builder()
+            .method("POST")
+            .uri("/api/auth/login")
+            .header("content-type", "application/json")
+            .body(Body::from(format!(r#"{{"token":"{HUMAN}"}}"#)))
+            .unwrap(),
+        &mut jar,
+    )
+    .await;
+    let start = send(
+        &app,
+        Request::builder()
+            .method("POST")
+            .uri("/api/auth/passkey/register/start")
+            .body(Body::empty())
+            .unwrap(),
+        &mut jar,
+    )
+    .await;
+    assert_eq!(start.status, StatusCode::OK);
+    let start_json: serde_json::Value = serde_json::from_str(&start.body).unwrap();
+    let options: CreationChallengeResponse =
+        serde_json::from_value(start_json.get("options").unwrap().clone()).unwrap();
+    let mut ceremony_jar = jar.clone();
+    let mut wa = WebauthnAuthenticator::new(SoftPasskey::new(true));
+    let cred = wa
+        .do_registration(AuthUrl::parse(ORIGIN).unwrap(), options)
+        .expect("registration");
+    let mut cred_json = serde_json::to_value(&cred).unwrap();
+    cred_json["response"]["attestationObject"] = serde_json::json!("AQID");
+
+    let bad = send(
+        &app,
+        Request::builder()
+            .method("POST")
+            .uri("/api/auth/passkey/register/finish")
+            .header("content-type", "application/json")
+            .body(Body::from(
+                serde_json::json!({ "credential": cred_json }).to_string(),
+            ))
+            .unwrap(),
+        &mut ceremony_jar,
+    )
+    .await;
+    assert_eq!(bad.status, StatusCode::BAD_REQUEST, "{}", bad.body);
+    assert!(bad.body.contains("registration failed"), "{}", bad.body);
+}
+
+/// Register one passkey through the HTTP flow; returns the SQLite row id.
+async fn register_one_passkey(app: &Router, guard: &ApiGuard, jar: &mut String) -> i64 {
+    let mut wa = WebauthnAuthenticator::new(SoftPasskey::new(true));
+    register_one_passkey_with_authenticator(app, guard, jar, &mut wa).await
+}
+
+async fn register_one_passkey_with_authenticator(
+    app: &Router,
+    guard: &ApiGuard,
+    jar: &mut String,
+    wa: &mut WebauthnAuthenticator<SoftPasskey>,
+) -> i64 {
+    let _ = send(
+        app,
+        Request::builder()
+            .method("POST")
+            .uri("/api/auth/login")
+            .header("content-type", "application/json")
+            .body(Body::from(format!(r#"{{"token":"{HUMAN}"}}"#)))
+            .unwrap(),
+        jar,
+    )
+    .await;
+    let reg_start = send(
+        app,
+        Request::builder()
+            .method("POST")
+            .uri("/api/auth/passkey/register/start")
+            .body(Body::empty())
+            .unwrap(),
+        jar,
+    )
+    .await;
+    assert_eq!(reg_start.status, StatusCode::OK, "{}", reg_start.body);
+    let options: serde_json::Value = serde_json::from_str(&reg_start.body).unwrap();
+    let challenge: CreationChallengeResponse =
+        serde_json::from_value(options.get("options").unwrap().clone()).unwrap();
+    let cred = wa
+        .do_registration(AuthUrl::parse(ORIGIN).unwrap(), challenge)
+        .expect("registration");
+    let cred_json = serde_json::to_value(&cred).unwrap();
+    let reg_finish = send(
+        app,
+        Request::builder()
+            .method("POST")
+            .uri("/api/auth/passkey/register/finish")
+            .header("content-type", "application/json")
+            .body(Body::from(
+                serde_json::json!({ "credential": cred_json }).to_string(),
+            ))
+            .unwrap(),
+        jar,
+    )
+    .await;
+    assert_eq!(reg_finish.status, StatusCode::OK, "{}", reg_finish.body);
+    guard
+        .sessions
+        .outbox()
+        .list_passkeys(1)
+        .expect("list")
+        .into_iter()
+        .next()
+        .expect("one passkey")
+        .id
+}
