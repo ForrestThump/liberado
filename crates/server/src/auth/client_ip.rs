@@ -21,8 +21,7 @@ pub fn client_ip(headers: &HeaderMap, peer: Option<SocketAddr>) -> String {
 }
 
 pub fn is_loopback_ip(ip: &str) -> bool {
-    ip.parse::<IpAddr>()
-        .is_ok_and(|a| a.is_loopback())
+    ip.parse::<IpAddr>().is_ok_and(|a| a.is_loopback())
 }
 
 #[cfg(test)]
