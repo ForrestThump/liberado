@@ -13,12 +13,7 @@ pub fn session_max_age(expires_at: &str) -> i64 {
     remaining.num_seconds().max(0)
 }
 
-pub fn set_session_cookies(
-    headers: &mut HeaderMap,
-    session_id: &str,
-    csrf: &str,
-    max_age: i64,
-) {
+pub fn set_session_cookies(headers: &mut HeaderMap, session_id: &str, csrf: &str, max_age: i64) {
     append_cookie(
         headers,
         &format!(

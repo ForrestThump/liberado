@@ -56,10 +56,7 @@ impl ApiGuard {
     pub fn open_for_test() -> Arc<Self> {
         let dir = tempfile::tempdir().expect("tempdir");
         let outbox = Arc::new(Outbox::open(&dir.path().join("liberado.db")).expect("outbox"));
-        Arc::new(
-            Self::new(ApiAuth::default(), &ApiConfig::default(), outbox)
-                .expect("open guard"),
-        )
+        Arc::new(Self::new(ApiAuth::default(), &ApiConfig::default(), outbox).expect("open guard"))
     }
 
     #[cfg(test)]

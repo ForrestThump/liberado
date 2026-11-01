@@ -60,7 +60,9 @@ fn set_version(conn: &Connection, version: i64) -> Result<()> {
 }
 
 fn seed_owner_account(conn: &Connection) -> Result<()> {
-    let exists: i64 = conn.query_row("SELECT COUNT(*) FROM accounts WHERE id = 1", [], |r| r.get(0))?;
+    let exists: i64 = conn.query_row("SELECT COUNT(*) FROM accounts WHERE id = 1", [], |r| {
+        r.get(0)
+    })?;
     if exists > 0 {
         return Ok(());
     }

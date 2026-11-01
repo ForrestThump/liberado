@@ -5,10 +5,10 @@ mod api;
 use dioxus::prelude::*;
 
 use self::api::{
-    delete_passkey, fetch_passkeys, fetch_sessions, format_session_method, revoke_session,
-    session_method, AuthSessionRow, PasskeyRow,
+    AuthSessionRow, PasskeyRow, delete_passkey, fetch_passkeys, fetch_sessions,
+    format_session_method, revoke_session, session_method,
 };
-use crate::components::notifications::model::{format_added_date, StatusLine};
+use crate::components::notifications::model::{StatusLine, format_added_date};
 
 #[component]
 fn PasskeyRemoveButton(

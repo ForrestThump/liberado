@@ -165,7 +165,9 @@ fn origin_problem(origin: &str, rp_id: &str) -> Option<String> {
         return Some("api.webauthn origins must not contain empty entries".to_string());
     }
     let Some((scheme, authority)) = split_origin(trimmed) else {
-        return Some(format!("api.webauthn origin '{trimmed}' is not a valid URL"));
+        return Some(format!(
+            "api.webauthn origin '{trimmed}' is not a valid URL"
+        ));
     };
     let host = authority_host(&authority);
     if scheme == "http" {
@@ -192,7 +194,13 @@ fn split_origin(origin: &str) -> Option<(String, String)> {
     if scheme.is_empty() || rest.is_empty() {
         return None;
     }
-    let authority = rest.split('/').next()?.split('?').next()?.split('#').next()?;
+    let authority = rest
+        .split('/')
+        .next()?
+        .split('?')
+        .next()?
+        .split('#')
+        .next()?;
     if authority.is_empty() {
         return None;
     }
@@ -205,11 +213,7 @@ fn authority_host(authority: &str) -> String {
             return authority[..=end].to_string();
         }
     }
-    authority
-        .split(':')
-        .next()
-        .unwrap_or(authority)
-        .to_string()
+    authority.split(':').next().unwrap_or(authority).to_string()
 }
 
 fn host_is_rp_or_subdomain(host: &str, rp_id: &str) -> bool {

@@ -52,7 +52,8 @@ pub fn authority_from_origin(origin: &str) -> String {
 }
 
 pub fn is_loopback_host(host: &str) -> bool {
-    matches!(host, "localhost" | "127.0.0.1" | "[::1]") || host.starts_with("127.0.0.1:")
+    matches!(host, "localhost" | "127.0.0.1" | "[::1]")
+        || host.starts_with("127.0.0.1:")
         || host.starts_with("[::1]:")
         || host.starts_with("localhost:")
 }

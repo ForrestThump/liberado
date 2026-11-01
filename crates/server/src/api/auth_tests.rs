@@ -240,10 +240,7 @@ async fn repeated_bad_logins_are_rate_limited() {
     let limited = send(&app, login_request("wrong-token")).await;
     assert_eq!(limited.status, StatusCode::TOO_MANY_REQUESTS);
     assert!(
-        limited
-            .cookies
-            .is_empty()
-            && limited.body.contains("too many sign-in attempts"),
+        limited.cookies.is_empty() && limited.body.contains("too many sign-in attempts"),
         "{}",
         limited.body
     );

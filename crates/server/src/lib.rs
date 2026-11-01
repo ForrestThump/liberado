@@ -404,18 +404,18 @@ async fn serve_with_drain(
         listener,
         app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
     )
-        .with_graceful_shutdown(async move {
-            shutdown::wait_for_shutdown_signal().await;
-            let outcome = shutdown::drain_for_shutdown(&drain_state, grace).await;
-            info!(
-                idle = outcome.idle_within_grace,
-                aborted = outcome.aborted,
-                parked_goals = outcome.parked_goals,
-                waited_ms = outcome.waited.as_millis() as u64,
-                "shutdown drain complete; stopping HTTP accept"
-            );
-        })
-        .await?;
+    .with_graceful_shutdown(async move {
+        shutdown::wait_for_shutdown_signal().await;
+        let outcome = shutdown::drain_for_shutdown(&drain_state, grace).await;
+        info!(
+            idle = outcome.idle_within_grace,
+            aborted = outcome.aborted,
+            parked_goals = outcome.parked_goals,
+            waited_ms = outcome.waited.as_millis() as u64,
+            "shutdown drain complete; stopping HTTP accept"
+        );
+    })
+    .await?;
     Ok(())
 }
 

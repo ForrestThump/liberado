@@ -102,7 +102,9 @@ impl Outbox {
     pub fn rename_passkey(&self, account_id: i64, id: i64, name: &str) -> Result<bool> {
         let trimmed = name.trim();
         if trimmed.is_empty() || trimmed.len() > 80 {
-            return Err(Error::Invalid("passkey name must be 1–80 characters".into()));
+            return Err(Error::Invalid(
+                "passkey name must be 1–80 characters".into(),
+            ));
         }
         let changed = self.lock().execute(
             "UPDATE passkeys SET name = ?3 WHERE id = ?1 AND account_id = ?2",
@@ -134,7 +136,10 @@ impl Outbox {
         Ok(conn.last_insert_rowid())
     }
 
-    pub fn passkey_by_credential_id(&self, credential_id: &[u8]) -> Result<Option<PasskeyCredential>> {
+    pub fn passkey_by_credential_id(
+        &self,
+        credential_id: &[u8],
+    ) -> Result<Option<PasskeyCredential>> {
         let conn = self.lock();
         conn.query_row(
             "SELECT id, credential_id, passkey_json, sign_count FROM passkeys WHERE credential_id = ?1",
@@ -197,7 +202,9 @@ impl Outbox {
         let csrf = random_hex(32);
         let public_id = random_hex(8);
         let id_hash = hash_session_id(&raw_id);
-        let expires = now + chrono::Duration::from_std(SESSION_ABSOLUTE).unwrap_or_else(|_| chrono::Duration::days(30));
+        let expires = now
+            + chrono::Duration::from_std(SESSION_ABSOLUTE)
+                .unwrap_or_else(|_| chrono::Duration::days(30));
         let conn = self.lock();
         prune_sessions(&conn, now)?;
         conn.execute(
@@ -313,7 +320,8 @@ impl Outbox {
 }
 
 fn prune_sessions(conn: &rusqlite::Connection, now: DateTime<Utc>) -> Result<()> {
-    let idle_cutoff = now - chrono::Duration::from_std(SESSION_IDLE).unwrap_or_else(|_| chrono::Duration::days(14));
+    let idle_cutoff = now
+        - chrono::Duration::from_std(SESSION_IDLE).unwrap_or_else(|_| chrono::Duration::days(14));
     conn.execute(
         "DELETE FROM auth_sessions WHERE expires_at < ?1 OR last_seen_at < ?2",
         params![stamp(now), stamp(idle_cutoff)],
@@ -331,9 +339,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let outbox = Outbox::open(&dir.path().join("liberado.db")).unwrap();
         let now = Utc::now();
-        let (raw, _) = outbox
-            .create_auth_session(1, "token", None, now)
-            .unwrap();
+        let (raw, _) = outbox.create_auth_session(1, "token", None, now).unwrap();
         let bytes = std::fs::read(dir.path().join("liberado.db")).unwrap();
         assert!(
             !bytes.windows(raw.len()).any(|w| w == raw.as_bytes()),
@@ -368,9 +374,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let outbox = Outbox::open(&dir.path().join("liberado.db")).unwrap();
         let now = Utc::now();
-        let (raw, _) = outbox
-            .create_auth_session(1, "token", None, now)
-            .unwrap();
+        let (raw, _) = outbox.create_auth_session(1, "token", None, now).unwrap();
         outbox.revoke_auth_session(&raw).unwrap();
         assert!(outbox.touch_auth_session(&raw, now).is_none());
     }

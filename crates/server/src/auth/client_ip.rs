@@ -7,9 +7,7 @@ use axum::http::HeaderMap;
 pub fn client_ip(headers: &HeaderMap, peer: Option<SocketAddr>) -> String {
     if let Some(peer) = peer {
         if peer.ip().is_loopback()
-            && let Some(forwarded) = headers
-                .get("x-forwarded-for")
-                .and_then(|v| v.to_str().ok())
+            && let Some(forwarded) = headers.get("x-forwarded-for").and_then(|v| v.to_str().ok())
         {
             if let Some(first) = forwarded.split(',').next() {
                 let trimmed = first.trim();

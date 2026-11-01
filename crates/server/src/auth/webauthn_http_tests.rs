@@ -2,10 +2,10 @@
 
 use std::sync::Arc;
 
+use axum::Router;
 use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
 use axum::routing::post;
-use axum::Router;
 use liberado_config::{ApiConfig, WebAuthnConfig};
 use tower::ServiceExt;
 use webauthn_authenticator_rs::prelude::{Url as AuthUrl, WebauthnAuthenticator};
@@ -43,14 +43,8 @@ fn app(guard: Arc<ApiGuard>) -> Router {
             "/api/auth/passkey/register/finish",
             post(passkey_register_finish),
         )
-        .route(
-            "/api/auth/passkey/login/start",
-            post(passkey_login_start),
-        )
-        .route(
-            "/api/auth/passkey/login/finish",
-            post(passkey_login_finish),
-        )
+        .route("/api/auth/passkey/login/start", post(passkey_login_start))
+        .route("/api/auth/passkey/login/finish", post(passkey_login_finish))
         .with_state(guard)
 }
 
@@ -107,10 +101,7 @@ async fn send(app: &Router, mut req: Request<Body>, jar: &mut String) -> Respons
 
 #[tokio::test]
 async fn software_authenticator_registers_and_signs_in() {
-    let guard = ApiGuard::with_api(
-        ApiAuth::from_values(Some(HUMAN), &[]),
-        webauthn_api(),
-    );
+    let guard = ApiGuard::with_api(ApiAuth::from_values(Some(HUMAN), &[]), webauthn_api());
     let app = app(guard);
     let mut jar = String::new();
 
@@ -178,10 +169,9 @@ async fn software_authenticator_registers_and_signs_in() {
     assert_eq!(login_start.status, StatusCode::OK, "{}", login_start.body);
     let login_options: serde_json::Value =
         serde_json::from_str(&login_start.body).expect("login start json");
-    let auth_challenge: RequestChallengeResponse = serde_json::from_value(
-        login_options.get("options").unwrap().clone(),
-    )
-    .expect("login options shape");
+    let auth_challenge: RequestChallengeResponse =
+        serde_json::from_value(login_options.get("options").unwrap().clone())
+            .expect("login options shape");
     let mut login_jar = merge_cookies("", &login_start.cookies);
 
     let auth_cred = wa
@@ -207,10 +197,7 @@ async fn software_authenticator_registers_and_signs_in() {
 
 #[tokio::test]
 async fn passkey_session_cannot_start_registration() {
-    let guard = ApiGuard::with_api(
-        ApiAuth::from_values(Some(HUMAN), &[]),
-        webauthn_api(),
-    );
+    let guard = ApiGuard::with_api(ApiAuth::from_values(Some(HUMAN), &[]), webauthn_api());
     let app = app(guard.clone());
 
     let (session_id, _csrf) = guard
@@ -235,10 +222,7 @@ async fn passkey_session_cannot_start_registration() {
 
 #[tokio::test]
 async fn bearer_human_can_start_registration_without_cookie_session() {
-    let guard = ApiGuard::with_api(
-        ApiAuth::from_values(Some(HUMAN), &[]),
-        webauthn_api(),
-    );
+    let guard = ApiGuard::with_api(ApiAuth::from_values(Some(HUMAN), &[]), webauthn_api());
     let app = app(guard);
     let mut jar = String::new();
     let resp = send(
@@ -257,10 +241,7 @@ async fn bearer_human_can_start_registration_without_cookie_session() {
 
 #[tokio::test]
 async fn wrong_origin_is_rejected_for_passkey_login_start() {
-    let guard = ApiGuard::with_api(
-        ApiAuth::from_values(Some(HUMAN), &[]),
-        webauthn_api(),
-    );
+    let guard = ApiGuard::with_api(ApiAuth::from_values(Some(HUMAN), &[]), webauthn_api());
     let app = app(guard);
     let response = app
         .oneshot(
@@ -278,10 +259,7 @@ async fn wrong_origin_is_rejected_for_passkey_login_start() {
 
 #[tokio::test]
 async fn register_finish_rejects_reused_ceremony_cookie_after_success() {
-    let guard = ApiGuard::with_api(
-        ApiAuth::from_values(Some(HUMAN), &[]),
-        webauthn_api(),
-    );
+    let guard = ApiGuard::with_api(ApiAuth::from_values(Some(HUMAN), &[]), webauthn_api());
     let app = app(guard);
     let mut jar = String::new();
     let _ = send(
@@ -307,16 +285,11 @@ async fn register_finish_rejects_reused_ceremony_cookie_after_success() {
     .await;
     assert_eq!(start.status, StatusCode::OK);
     let start_json: serde_json::Value = serde_json::from_str(&start.body).unwrap();
-    let options: CreationChallengeResponse = serde_json::from_value(
-        start_json.get("options").unwrap().clone(),
-    )
-    .unwrap();
+    let options: CreationChallengeResponse =
+        serde_json::from_value(start_json.get("options").unwrap().clone()).unwrap();
     let mut wa = WebauthnAuthenticator::new(SoftPasskey::new(true));
     let cred = wa
-        .do_registration(
-            AuthUrl::parse(ORIGIN).unwrap(),
-            options,
-        )
+        .do_registration(AuthUrl::parse(ORIGIN).unwrap(), options)
         .unwrap();
     let cred_json = serde_json::to_value(&cred).unwrap();
     let body = serde_json::json!({ "credential": cred_json.clone() }).to_string();

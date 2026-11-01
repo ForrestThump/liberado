@@ -122,9 +122,7 @@ fn webauthn_origin_must_match_rp_id_or_subdomain() {
         rp_name: "Liberado".into(),
     };
     assert!(
-        cfg.problems()
-            .iter()
-            .any(|p| p.contains("subdomain")),
+        cfg.problems().iter().any(|p| p.contains("subdomain")),
         "{:?}",
         cfg.problems()
     );

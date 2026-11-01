@@ -66,11 +66,11 @@ pub async fn redirect_browser_origin(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::Router;
     use axum::body::Body;
     use axum::http::{Request, StatusCode, header};
     use axum::middleware::from_fn_with_state;
     use axum::routing::get;
-    use axum::Router;
     use liberado_config::{ApiConfig, WebAuthnConfig};
     use tower::ServiceExt;
 
@@ -82,9 +82,7 @@ mod tests {
             ApiConfig {
                 webauthn: Some(WebAuthnConfig {
                     rp_id: "homelab-node-ai.mermaid-halfbeak.ts.net".into(),
-                    origins: vec![
-                        "https://homelab-node-ai.mermaid-halfbeak.ts.net:8444".into(),
-                    ],
+                    origins: vec!["https://homelab-node-ai.mermaid-halfbeak.ts.net:8444".into()],
                     rp_name: "Liberado".into(),
                 }),
                 ..ApiConfig::default()

@@ -80,7 +80,12 @@ pub async fn login(
     set_session_cookies(&mut out, &session_id, &csrf, max_age);
     (
         out,
-        Json(session_body(&guard, Some(csrf.clone()), Some("token".into()), true)),
+        Json(session_body(
+            &guard,
+            Some(csrf.clone()),
+            Some("token".into()),
+            true,
+        )),
     )
         .into_response()
 }
@@ -94,13 +99,7 @@ pub async fn session(State(guard): State<Arc<ApiGuard>>, headers: HeaderMap) -> 
     let authenticated = live.is_some();
     let csrf = live.as_ref().map(|l| l.csrf.clone());
     let method = live.map(|l| l.method);
-    Json(session_body(
-        &guard,
-        csrf,
-        method,
-        authenticated,
-    ))
-    .into_response()
+    Json(session_body(&guard, csrf, method, authenticated)).into_response()
 }
 
 pub async fn logout(State(guard): State<Arc<ApiGuard>>, headers: HeaderMap) -> Response {
@@ -114,11 +113,7 @@ pub async fn logout(State(guard): State<Arc<ApiGuard>>, headers: HeaderMap) -> R
     let mut out = HeaderMap::new();
     clear_cookie(&mut out, SESSION_COOKIE);
     clear_cookie(&mut out, CSRF_COOKIE);
-    (
-        out,
-        Json(session_body(&guard, None, None, false)),
-    )
-        .into_response()
+    (out, Json(session_body(&guard, None, None, false))).into_response()
 }
 
 pub async fn list_passkeys(
@@ -244,11 +239,7 @@ fn session_body(
     authenticated: bool,
 ) -> SessionResponse {
     let passkeys_enabled = guard.webauthn.is_some();
-    let passkey_count = guard
-        .sessions
-        .outbox()
-        .passkey_count(1)
-        .unwrap_or(0);
+    let passkey_count = guard.sessions.outbox().passkey_count(1).unwrap_or(0);
     SessionResponse {
         authenticated,
         login_required: !guard.auth.is_open(),

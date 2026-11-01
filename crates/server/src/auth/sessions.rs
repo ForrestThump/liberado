@@ -51,13 +51,15 @@ impl SessionStore {
 
     /// Refresh idle clock and return session metadata. `None` if unknown or expired.
     pub fn touch(&self, raw_id: &str) -> Option<LiveSession> {
-        self.outbox.touch_auth_session(raw_id, Utc::now()).map(|r| LiveSession {
-            csrf: r.csrf,
-            account_id: r.account_id,
-            method: r.method,
-            public_id: r.public_id,
-            expires_at: r.expires_at,
-        })
+        self.outbox
+            .touch_auth_session(raw_id, Utc::now())
+            .map(|r| LiveSession {
+                csrf: r.csrf,
+                account_id: r.account_id,
+                method: r.method,
+                public_id: r.public_id,
+                expires_at: r.expires_at,
+            })
     }
 
     pub fn revoke(&self, raw_id: &str) {
@@ -91,7 +93,10 @@ mod tests {
     fn a_new_session_is_looked_up_by_its_id_and_yields_its_csrf_token() {
         let store = store();
         let (id, csrf) = store.create(1, "token", None).unwrap();
-        assert_eq!(store.touch(&id).as_ref().map(|s| s.csrf.as_str()), Some(csrf.as_str()));
+        assert_eq!(
+            store.touch(&id).as_ref().map(|s| s.csrf.as_str()),
+            Some(csrf.as_str())
+        );
     }
 
     #[test]

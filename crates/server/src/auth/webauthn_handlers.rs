@@ -14,10 +14,10 @@ use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use webauthn_rs::prelude::{Passkey, PublicKeyCredential, RegisterPublicKeyCredential, Uuid};
 
-use crate::auth::cookies::{append_cookie, clear_cookie, session_max_age, set_session_cookies};
 use crate::auth::challenges::{CeremonyKind, ChallengeStore};
 use crate::auth::client_ip;
-use crate::auth::guard::{self, can_register_passkeys, ApiGuard};
+use crate::auth::cookies::{append_cookie, clear_cookie, session_max_age, set_session_cookies};
+use crate::auth::guard::{self, ApiGuard, can_register_passkeys};
 use crate::auth::sessions::{CEREMONY_COOKIE, SESSION_COOKIE, cookie_value};
 use crate::auth::ua_label::passkey_name_from_user_agent;
 use crate::auth::webauthn_config;
@@ -86,7 +86,10 @@ pub async fn passkey_login_finish(
             return bad_request("malformed passkey response");
         }
     };
-    let result = match webauthn.webauthn.finish_passkey_authentication(&reg, &auth_state) {
+    let result = match webauthn
+        .webauthn
+        .finish_passkey_authentication(&reg, &auth_state)
+    {
         Ok(r) => r,
         Err(err) => {
             tracing::warn!(?err, client = %ip, "passkey login finish failed");
@@ -151,8 +154,9 @@ pub async fn passkey_register_start(
         return (
             StatusCode::UNAUTHORIZED,
             Json(ApiError {
-                error: "passkey registration requires the emergency token or a token-method session"
-                    .to_string(),
+                error:
+                    "passkey registration requires the emergency token or a token-method session"
+                        .to_string(),
             }),
         )
             .into_response();
@@ -163,15 +167,17 @@ pub async fn passkey_register_start(
     if !origin_ok(&guard, &headers) {
         return bad_origin();
     }
-    let user_bytes = guard.sessions.outbox().owner_webauthn_user_id().unwrap_or_default();
+    let user_bytes = guard
+        .sessions
+        .outbox()
+        .owner_webauthn_user_id()
+        .unwrap_or_default();
     let user_uuid = uuid_from_bytes(&user_bytes);
     let exclude = existing_credential_ids(&guard);
-    let (ccr, state) = match webauthn.webauthn.start_passkey_registration(
-        user_uuid,
-        "owner",
-        "Owner",
-        exclude,
-    ) {
+    let (ccr, state) = match webauthn
+        .webauthn
+        .start_passkey_registration(user_uuid, "owner", "Owner", exclude)
+    {
         Ok(v) => v,
         Err(err) => {
             tracing::warn!(?err, "passkey register start failed");
@@ -200,8 +206,9 @@ pub async fn passkey_register_finish(
         return (
             StatusCode::UNAUTHORIZED,
             Json(ApiError {
-                error: "passkey registration requires the emergency token or a token-method session"
-                    .to_string(),
+                error:
+                    "passkey registration requires the emergency token or a token-method session"
+                        .to_string(),
             }),
         )
             .into_response();
@@ -226,7 +233,10 @@ pub async fn passkey_register_finish(
             return bad_request("malformed passkey response");
         }
     };
-    let passkey = match webauthn.webauthn.finish_passkey_registration(&reg, &reg_state) {
+    let passkey = match webauthn
+        .webauthn
+        .finish_passkey_registration(&reg, &reg_state)
+    {
         Ok(p) => p,
         Err(err) => {
             tracing::warn!(?err, client = %ip, "passkey register finish failed");
@@ -263,9 +273,7 @@ fn load_passkeys(guard: &ApiGuard) -> Result<Vec<Passkey>, Response> {
     Ok(out)
 }
 
-fn existing_credential_ids(
-    guard: &ApiGuard,
-) -> Option<Vec<webauthn_rs::prelude::CredentialID>> {
+fn existing_credential_ids(guard: &ApiGuard) -> Option<Vec<webauthn_rs::prelude::CredentialID>> {
     let passkeys = load_passkeys(guard).ok()?;
     Some(passkeys.iter().map(|p| p.cred_id().clone()).collect())
 }
@@ -284,7 +292,10 @@ fn respond_with_options<T: Serialize>(
 ) -> Response {
     let mut ceremony = [0u8; 16];
     rand::rngs::OsRng.fill_bytes(&mut ceremony);
-    let ceremony_id = ceremony.iter().map(|b| format!("{b:02x}")).collect::<String>();
+    let ceremony_id = ceremony
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect::<String>();
     store.insert(ceremony_id.clone(), kind);
     let mut headers = HeaderMap::new();
     append_cookie(
@@ -293,11 +304,7 @@ fn respond_with_options<T: Serialize>(
             "{CEREMONY_COOKIE}={ceremony_id}; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=300"
         ),
     );
-    (
-        headers,
-        Json(serde_json::json!({ "options": challenge })),
-    )
-        .into_response()
+    (headers, Json(serde_json::json!({ "options": challenge }))).into_response()
 }
 
 fn mint_full_session(guard: &ApiGuard, headers: &HeaderMap, method: &str) -> Response {
@@ -350,7 +357,10 @@ fn origin_ok(guard: &ApiGuard, headers: &HeaderMap) -> bool {
     let Some(webauthn) = guard.webauthn.as_ref() else {
         return true;
     };
-    if let Some(origin) = headers.get(axum::http::header::ORIGIN).and_then(|v| v.to_str().ok()) {
+    if let Some(origin) = headers
+        .get(axum::http::header::ORIGIN)
+        .and_then(|v| v.to_str().ok())
+    {
         return webauthn_config::origin_allowed(origin, &webauthn.origins);
     }
     if let Some(host) = headers

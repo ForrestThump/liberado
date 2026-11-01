@@ -11,11 +11,11 @@ mod http;
 mod icons;
 mod panic_hook;
 mod push;
-mod webauthn;
 #[cfg(test)]
 mod pwa;
 mod shell;
 mod theme;
+mod webauthn;
 
 use components::chat::Chat;
 use components::sidebar::{Route, Sidebar};

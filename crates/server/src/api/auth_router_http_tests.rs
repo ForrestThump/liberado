@@ -31,10 +31,7 @@ async fn harness() -> Harness {
     let dir = tempfile::tempdir().unwrap();
     let sessions = Arc::new(SessionStore::open(dir.path()).await);
     let state = Arc::new(AppState::for_test(sessions, None, dir.path().to_path_buf()));
-    let guard = ApiGuard::with_auth(ApiAuth::from_values(
-        Some(HUMAN),
-        &[("coder", AGENT)],
-    ));
+    let guard = ApiGuard::with_auth(ApiAuth::from_values(Some(HUMAN), &[("coder", AGENT)]));
     let app = crate::build_app_router(&state, &guard);
     Harness {
         app,

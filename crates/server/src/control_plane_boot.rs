@@ -21,7 +21,9 @@ pub fn resolve_api_guard(
 /// Open the shared SQLite file used for reminders and auth sessions.
 pub fn open_shared_outbox() -> Result<Arc<Outbox>, Box<dyn std::error::Error>> {
     let path = liberado_config::data_dir().join(liberado_outbox::DB_FILE);
-    Ok(Arc::new(Outbox::open(&path).map_err(|e| format!("outbox: {e}"))?))
+    Ok(Arc::new(
+        Outbox::open(&path).map_err(|e| format!("outbox: {e}"))?,
+    ))
 }
 
 /// One startup line saying how closed the control plane actually is.

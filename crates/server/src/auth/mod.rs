@@ -22,10 +22,10 @@
 //! post a chat turn and read its own approvals; nothing an agent does should be able to decide
 //! them.
 
-pub mod cookies;
 pub mod bind;
 pub mod challenges;
 pub mod client_ip;
+pub mod cookies;
 pub mod guard;
 pub mod rate_limit;
 pub mod sessions;

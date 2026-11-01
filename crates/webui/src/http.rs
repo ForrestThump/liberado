@@ -102,11 +102,7 @@ pub async fn get(url: &str) -> Result<Response, reqwest::Error> {
 
 /// `GET` with query parameters.
 pub async fn get_query(url: &str, query: &[(&str, &str)]) -> Result<Response, reqwest::Error> {
-    send(
-        prepare(shared_client().get(url).query(query), false),
-        url,
-    )
-    .await
+    send(prepare(shared_client().get(url).query(query), false), url).await
 }
 
 /// `POST` with JSON body and CSRF when the browser holds a session.
