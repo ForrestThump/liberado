@@ -11,6 +11,7 @@ mod http;
 mod icons;
 mod panic_hook;
 mod push;
+mod webauthn;
 #[cfg(test)]
 mod pwa;
 mod shell;
@@ -102,6 +103,13 @@ fn App() -> Element {
     let mut need_login = use_signal(|| false);
     let base_for_session = base.clone();
     use_effect(move || {
+        #[cfg(target_arch = "wasm32")]
+        {
+            let on_expired = Callback::new(move |_| need_login.set(true));
+            crate::http::set_unauthenticated_handler(std::rc::Rc::new(move || {
+                on_expired.call(());
+            }));
+        }
         #[cfg(target_arch = "wasm32")]
         {
             let base = base_for_session.clone();
@@ -242,6 +250,7 @@ fn App() -> Element {
     rsx! {
         style { {crate::theme::theme_css_vars(&crate::theme::theme_by_name(&theme_name()))} }
         style { {include_str!("./styles/main.css")} }
+        style { {include_str!("./styles/login.css")} }
 
         if !auth_ready() {
             div { class: "login-gate-shell",

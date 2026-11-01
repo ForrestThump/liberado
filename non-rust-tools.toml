@@ -56,6 +56,12 @@ purpose = "Static Web Push subscribe and device-state helpers imported by the WA
 justification = "Push subscription requires browser APIs and async service-worker timing that must stay in JavaScript; wasm-bindgen catch bindings surface errors without aborting the Dioxus app."
 
 [[tool]]
+path = "crates/webui/js/webauthn.js"
+owner = "web UI"
+purpose = "WebAuthn create/get helpers for passkey sign-in and registration (wasm-bindgen)."
+justification = "WebAuthn requires browser credential APIs and manual base64url handling; Rust/WASM calls these through catch bindings."
+
+[[tool]]
 path = "crates/webui/public/sw.js"
 owner = "web UI"
 purpose = "Provide the browser-managed origin-root service worker required by the PWA install shell."

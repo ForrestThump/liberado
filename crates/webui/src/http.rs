@@ -6,6 +6,57 @@ use serde::Serialize;
 pub const CSRF_HEADER: &str = "x-liberado-csrf";
 const CSRF_COOKIE: &str = "liberado_csrf";
 
+#[cfg(target_arch = "wasm32")]
+thread_local! {
+    static ON_UNAUTHENTICATED: std::cell::RefCell<Option<std::rc::Rc<dyn Fn()>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+static ON_UNAUTHENTICATED: std::sync::Mutex<Option<std::sync::Arc<dyn Fn() + Send + Sync>>> =
+    std::sync::Mutex::new(None);
+
+pub fn set_unauthenticated_handler(handler: std::rc::Rc<dyn Fn()>) {
+    #[cfg(target_arch = "wasm32")]
+    {
+        ON_UNAUTHENTICATED.with(|cell| {
+            *cell.borrow_mut() = Some(handler);
+        });
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        *ON_UNAUTHENTICATED.lock().unwrap_or_else(|e| e.into_inner()) = Some(handler);
+    }
+}
+
+fn maybe_session_expired(resp: &Response, url: &str) {
+    if url.contains("/api/auth/login") || url.contains("/api/auth/session") {
+        return;
+    }
+    if is_unauthenticated(resp.status()) {
+        #[cfg(target_arch = "wasm32")]
+        ON_UNAUTHENTICATED.with(|cell| {
+            if let Some(h) = cell.borrow().as_ref() {
+                h();
+            }
+        });
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(h) = ON_UNAUTHENTICATED
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+        {
+            h();
+        }
+    }
+}
+
+async fn send(builder: RequestBuilder, url_hint: &str) -> Result<Response, reqwest::Error> {
+    let resp = builder.send().await?;
+    maybe_session_expired(&resp, url_hint);
+    Ok(resp)
+}
+
 fn shared_client() -> Client {
     Client::new()
 }
@@ -46,76 +97,83 @@ fn prepare(mut builder: RequestBuilder, mutating: bool) -> RequestBuilder {
 
 /// `GET` with session cookies (same-origin).
 pub async fn get(url: &str) -> Result<Response, reqwest::Error> {
-    prepare(shared_client().get(url), false).send().await
+    send(prepare(shared_client().get(url), false), url).await
 }
 
 /// `GET` with query parameters.
 pub async fn get_query(url: &str, query: &[(&str, &str)]) -> Result<Response, reqwest::Error> {
-    prepare(shared_client().get(url).query(query), false)
-        .send()
-        .await
+    send(
+        prepare(shared_client().get(url).query(query), false),
+        url,
+    )
+    .await
 }
 
 /// `POST` with JSON body and CSRF when the browser holds a session.
 pub async fn post_json(url: &str, body: &impl Serialize) -> Result<Response, reqwest::Error> {
-    prepare(
-        shared_client()
-            .post(url)
-            .header("content-type", "application/json"),
-        true,
+    send(
+        prepare(
+            shared_client()
+                .post(url)
+                .header("content-type", "application/json"),
+            true,
+        )
+        .json(body),
+        url,
     )
-    .json(body)
-    .send()
     .await
 }
 
 /// `POST` with no body (cancel, discard, …).
 pub async fn post_empty(url: &str) -> Result<Response, reqwest::Error> {
-    prepare(shared_client().post(url), true).send().await
+    send(prepare(shared_client().post(url), true), url).await
 }
 
 /// `PATCH` with JSON body.
 pub async fn patch_json(url: &str, body: &impl Serialize) -> Result<Response, reqwest::Error> {
-    prepare(
-        shared_client()
-            .patch(url)
-            .header("content-type", "application/json"),
-        true,
+    send(
+        prepare(
+            shared_client()
+                .patch(url)
+                .header("content-type", "application/json"),
+            true,
+        )
+        .json(body),
+        url,
     )
-    .json(body)
-    .send()
     .await
 }
 
-/// `PUT` with JSON body.
 pub async fn put_json(url: &str, body: &impl Serialize) -> Result<Response, reqwest::Error> {
-    prepare(
-        shared_client()
-            .put(url)
-            .header("content-type", "application/json"),
-        true,
+    send(
+        prepare(
+            shared_client()
+                .put(url)
+                .header("content-type", "application/json"),
+            true,
+        )
+        .json(body),
+        url,
     )
-    .json(body)
-    .send()
     .await
 }
 
-/// `DELETE` with JSON body (push subscription removal).
 pub async fn delete_json(url: &str, body: &impl Serialize) -> Result<Response, reqwest::Error> {
-    prepare(
-        shared_client()
-            .delete(url)
-            .header("content-type", "application/json"),
-        true,
+    send(
+        prepare(
+            shared_client()
+                .delete(url)
+                .header("content-type", "application/json"),
+            true,
+        )
+        .json(body),
+        url,
     )
-    .json(body)
-    .send()
     .await
 }
 
-/// `DELETE` (profile removal, …).
 pub async fn delete(url: &str) -> Result<Response, reqwest::Error> {
-    prepare(shared_client().delete(url), true).send().await
+    send(prepare(shared_client().delete(url), true), url).await
 }
 
 /// `POST /api/auth/login` — sets cookies; returns the session JSON.

@@ -62,6 +62,12 @@ token = { env = "LIBERADO_API_TOKEN" }     # native clients listed below
 
 # Optional: exact origins for cross-origin dev (e.g. `dx serve` on :8080 → API on :4201)
 # allowed_origins = ["http://127.0.0.1:8080"]
+
+# Optional: passkey sign-in for the WebUI (requires https or localhost in the browser).
+# [api.webauthn]
+# rp_id = "homelab-node-ai.mermaid-halfbeak.ts.net"
+# origins = ["https://homelab-node-ai.mermaid-halfbeak.ts.net:8444"]
+# rp_name = "Liberado"
 ```
 
 Never put token values in TOML — only `env` or `file` references. `GET /api/health` stays
