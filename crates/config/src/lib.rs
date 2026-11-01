@@ -1085,6 +1085,7 @@ transport = { kind = "stdio", command = "tasks-mcp", args = [] }
         // directory nothing had written to since, so the agent's own history search quietly returned
         // a frozen archive and nothing the human had said since. Every reader of the session logs
         // must come through this one function.
+        let _env_guard = crate::survivor_tests::env_lock().lock().unwrap();
         assert_eq!(sessions_dir(), data_dir().join("sessions"));
     }
 
