@@ -290,6 +290,9 @@ webui-build *args: # Build and start the daemon that serves the WebUI.
 webui-dev *args: # Start Dioxus WebUI hot reload.
     cargo run --locked --quiet -p liberado-cli -- dev webui-start {{args}}
 
+webui-smoke: # Headless Chrome smoke against the release WebUI bundle.
+    node scripts/webui-smoke.js
+
 stop-webui *args: # Stop the detached daemon.
     cargo run --locked --quiet -p liberado-cli -- dev stop {{args}}
 

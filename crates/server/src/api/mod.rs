@@ -38,7 +38,7 @@ pub use plugins::set_plugin_enabled;
 pub use profiles::{delete_profile, rename_profile};
 pub use reminders::{
     delete_subscription, list_outbox, list_subscriptions, outbox_ack_with_state, push_status,
-    push_test, retry_outbox, upsert_subscription, vapid_public_key,
+    push_test, report_client_error, retry_outbox, upsert_subscription, vapid_public_key,
 };
 pub use search::search_conversations;
 pub use sessions::{session_fork, sessions_list};

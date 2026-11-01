@@ -38,10 +38,22 @@ purpose = "Reproduce a Windows child-process hang from the Node runtime."
 justification = "A Rust rewrite would remove the Node and Windows spawn interaction under diagnosis."
 
 [[tool]]
+path = "scripts/webui-smoke.js"
+owner = "web UI"
+purpose = "Drive the release WebUI bundle in headless Chrome with stub API routes."
+justification = "Browser CDP and service-worker timing belong at the JavaScript shell boundary; Rust cannot replace Chrome's push and glue runtime."
+
+[[tool]]
 path = "deploy/homelab/setup.sh"
 owner = "homelab deploy"
 purpose = "Pull the GHCR image for the current checkout and recreate the host Compose service."
 justification = "The operator runs this from a branch checkout against live Docker Compose; it must stay a host shell boundary that never writes config or secrets."
+
+[[tool]]
+path = "crates/webui/js/push.js"
+owner = "web UI"
+purpose = "Static Web Push subscribe and device-state helpers imported by the WASM build through wasm-bindgen inline_js."
+justification = "Push subscription requires browser APIs and async service-worker timing that must stay in JavaScript; wasm-bindgen catch bindings surface errors without aborting the Dioxus app."
 
 [[tool]]
 path = "crates/webui/public/sw.js"

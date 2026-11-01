@@ -11,6 +11,7 @@ use axum::{
 use chrono::Utc;
 use liberado_outbox::NewSubscription;
 use serde::Deserialize;
+use tracing::{info, warn};
 
 use crate::state::AppState;
 
@@ -90,6 +91,7 @@ pub async fn upsert_subscription(
     let Some(outbox) = state.outbox.as_ref() else {
         return fail(StatusCode::SERVICE_UNAVAILABLE, "outbox is not available");
     };
+    let push_host = endpoint_host(&body.endpoint);
     match outbox.upsert_subscription(
         &NewSubscription {
             endpoint: body.endpoint,
@@ -99,8 +101,24 @@ pub async fn upsert_subscription(
         },
         Utc::now(),
     ) {
-        Ok(id) => Json(serde_json::json!({ "ok": true, "id": id })).into_response(),
-        Err(err) => fail(StatusCode::BAD_REQUEST, &err.to_string()),
+        Ok(id) => {
+            let count = outbox.subscription_count().unwrap_or(0);
+            info!(
+                push_host = %push_host,
+                subscription_id = id,
+                subscription_count = count,
+                "push subscription upserted"
+            );
+            Json(serde_json::json!({ "ok": true, "id": id })).into_response()
+        }
+        Err(err) => {
+            warn!(
+                push_host = %push_host,
+                error = %err,
+                "push subscription upsert failed"
+            );
+            fail(StatusCode::BAD_REQUEST, &err.to_string())
+        }
     }
 }
 
@@ -111,10 +129,29 @@ pub async fn delete_subscription(
     let Some(outbox) = state.outbox.as_ref() else {
         return fail(StatusCode::SERVICE_UNAVAILABLE, "outbox is not available");
     };
+    let push_host = endpoint_host(&body.endpoint);
     match outbox.delete_subscription_endpoint(&body.endpoint) {
-        Ok(true) => Json(serde_json::json!({ "ok": true })).into_response(),
-        Ok(false) => fail(StatusCode::NOT_FOUND, "subscription not found"),
-        Err(err) => fail(StatusCode::BAD_REQUEST, &err.to_string()),
+        Ok(true) => {
+            let count = outbox.subscription_count().unwrap_or(0);
+            info!(
+                push_host = %push_host,
+                subscription_count = count,
+                "push subscription removed"
+            );
+            Json(serde_json::json!({ "ok": true })).into_response()
+        }
+        Ok(false) => {
+            warn!(push_host = %push_host, "push subscription delete not found");
+            fail(StatusCode::NOT_FOUND, "subscription not found")
+        }
+        Err(err) => {
+            warn!(
+                push_host = %push_host,
+                error = %err,
+                "push subscription delete failed"
+            );
+            fail(StatusCode::BAD_REQUEST, &err.to_string())
+        }
     }
 }
 
@@ -150,8 +187,20 @@ pub async fn push_test(State(state): State<Arc<AppState>>, Json(body): Json<Test
         },
         now,
     ) {
+        warn!(error = %err, "push test enqueue failed");
         return fail(StatusCode::BAD_REQUEST, &err.to_string());
     }
+    let count = outbox.subscription_count().unwrap_or(0);
+    let push_host = outbox
+        .list_subscriptions()
+        .ok()
+        .and_then(|subs| subs.first().map(|row| row.host.clone()))
+        .unwrap_or_else(|| "none".into());
+    info!(
+        subscription_count = count,
+        push_host = %push_host,
+        "push test notification enqueued"
+    );
     Json(serde_json::json!({ "ok": true })).into_response()
 }
 
@@ -190,6 +239,30 @@ fn fail(status: StatusCode, message: &str) -> Response {
     (status, Json(serde_json::json!({ "error": message }))).into_response()
 }
 
+#[derive(Deserialize)]
+pub struct ClientErrorBody {
+    message: String,
+}
+
+pub(crate) fn truncate_client_error_message(message: &str) -> String {
+    message.chars().take(500).collect()
+}
+
+pub async fn report_client_error(Json(body): Json<ClientErrorBody>) -> impl IntoResponse {
+    let truncated = truncate_client_error_message(&body.message);
+    warn!(client_error = %truncated, "webui client error");
+    StatusCode::NO_CONTENT
+}
+
+fn endpoint_host(endpoint: &str) -> String {
+    endpoint
+        .strip_prefix("https://")
+        .or_else(|| endpoint.strip_prefix("http://"))
+        .and_then(|rest| rest.split('/').next())
+        .unwrap_or("unknown")
+        .to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use liberado_outbox::VisibleReminder;
@@ -208,5 +281,13 @@ mod tests {
         };
         let json = serde_json::to_value(&row).unwrap();
         assert!(json.get("id").is_some());
+    }
+
+    #[test]
+    fn client_error_message_truncates_at_five_hundred_chars() {
+        let long = "x".repeat(600);
+        let out = super::truncate_client_error_message(&long);
+        assert_eq!(out.len(), 500);
+        assert_eq!(out.chars().count(), 500);
     }
 }

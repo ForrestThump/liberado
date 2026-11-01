@@ -20,6 +20,7 @@ mod coding_pack;
 mod cron_delivery;
 mod dispatcher_guidance;
 mod main_agent_budget;
+mod request_log;
 mod schedule_card_text;
 mod schedule_cards;
 mod schedule_timing;

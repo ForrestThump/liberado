@@ -5285,6 +5285,12 @@
     "functions": 1,
     "cyclomatic": 3
   },
+  "crates/server/src/request_log.rs": {
+    "ploc": 182,
+    "lloc": 53,
+    "functions": 14,
+    "cyclomatic": 29
+  },
   "crates/server/src/schedule_card_text.rs": {
     "ploc": 363,
     "lloc": 123,
@@ -6287,6 +6293,12 @@
     "functions": 6,
     "cyclomatic": 10
   },
+  "crates/webui/src/fatal_classifier.rs": {
+    "ploc": 94,
+    "lloc": 19,
+    "functions": 11,
+    "cyclomatic": 28
+  },
   "crates/webui/src/http.rs": {
     "ploc": 100,
     "lloc": 13,
@@ -6304,6 +6316,30 @@
     "lloc": 66,
     "functions": 31,
     "cyclomatic": 51
+  },
+  "crates/webui/src/panic_hook.rs": {
+    "ploc": 135,
+    "lloc": 64,
+    "functions": 10,
+    "cyclomatic": 29
+  },
+  "crates/webui/src/push/bindgen.rs": {
+    "ploc": 13,
+    "lloc": 0,
+    "functions": 0,
+    "cyclomatic": 1
+  },
+  "crates/webui/src/push/errors.rs": {
+    "ploc": 99,
+    "lloc": 32,
+    "functions": 9,
+    "cyclomatic": 26
+  },
+  "crates/webui/src/push/mod.rs": {
+    "ploc": 67,
+    "lloc": 16,
+    "functions": 10,
+    "cyclomatic": 14
   },
   "crates/webui/src/pwa.rs": {
     "ploc": 297,

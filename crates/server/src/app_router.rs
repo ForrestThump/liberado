@@ -53,6 +53,10 @@ pub(crate) fn owner_only_routes(state: &Arc<AppState>) -> Router {
                 .delete(api::delete_subscription),
         )
         .route("/api/push/test", axum::routing::post(api::push_test))
+        .route(
+            "/api/client-errors",
+            axum::routing::post(api::report_client_error),
+        )
         .route("/api/outbox", axum::routing::get(api::list_outbox))
         .route(
             "/api/outbox/{id}/retry",
@@ -207,7 +211,10 @@ pub(crate) fn build_app_router(state: &Arc<AppState>, guard: &Arc<auth::ApiGuard
             guard.clone(),
             auth::require_credential,
         ))
-        .merge(unauthenticated_routes(state, guard));
+        .merge(unauthenticated_routes(state, guard))
+        .layer(axum::middleware::from_fn(
+            crate::request_log::log_api_request,
+        ));
 
     let app = match cors_layer(guard) {
         Some(cors) => api_surface.layer(cors),
