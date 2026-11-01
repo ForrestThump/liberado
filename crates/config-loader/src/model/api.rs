@@ -208,10 +208,10 @@ fn split_origin(origin: &str) -> Option<(String, String)> {
 }
 
 fn authority_host(authority: &str) -> String {
-    if authority.starts_with('[') {
-        if let Some(end) = authority.find(']') {
-            return authority[..=end].to_string();
-        }
+    if authority.starts_with('[')
+        && let Some(end) = authority.find(']')
+    {
+        return authority[..=end].to_string();
     }
     authority.split(':').next().unwrap_or(authority).to_string()
 }
