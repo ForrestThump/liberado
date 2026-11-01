@@ -27,6 +27,64 @@ const CHROME = opt('--chrome', process.env.CHROME_BIN || '/usr/bin/google-chrome
 const VAPID_PUBLIC =
   'BEl62iUYgUihx49k1uTU32m-Yo3e_hQpQ5YkN8jS8M8r9s6k1uTU32m-Yo3e_hQpQ5YkN8jS8M8';
 
+const SMOKE_PUSH_ENDPOINT = 'https://fcm.googleapis.com/smoke-headless-push-endpoint';
+
+function smokePushShimSource() {
+  const endpoint = SMOKE_PUSH_ENDPOINT;
+  return `(function(){
+    if (window.__liberadoSmokePushShim) return;
+    window.__liberadoSmokePushShim = true;
+    const endpoint = ${JSON.stringify(endpoint)};
+    const storageKey = 'liberado-smoke-push-on';
+    function subscribed() {
+      try { return sessionStorage.getItem(storageKey) === '1'; } catch (_e) { return false; }
+    }
+    function setSubscribed(on) {
+      try {
+        if (on) sessionStorage.setItem(storageKey, '1');
+        else sessionStorage.removeItem(storageKey);
+      } catch (_e) {}
+    }
+    function fakeSubscription() {
+      return {
+        endpoint: endpoint,
+        getKey: function() { return new Uint8Array([4, 5, 6]); },
+        toJSON: function() {
+          return { endpoint: endpoint, keys: { p256dh: 'c256', auth: 'auth' } };
+        },
+        unsubscribe: async function() {
+          setSubscribed(false);
+          return true;
+        },
+      };
+    }
+    if (typeof Notification !== 'undefined') {
+      Notification.requestPermission = async function() { return 'granted'; };
+      try {
+        Object.defineProperty(Notification, 'permission', {
+          configurable: true,
+          get: function() { return 'granted'; },
+        });
+      } catch (_e) {}
+    }
+    if (typeof PushManager !== 'undefined' && PushManager.prototype) {
+      PushManager.prototype.subscribe = async function() {
+        setSubscribed(true);
+        return fakeSubscription();
+      };
+      PushManager.prototype.getSubscription = async function() {
+        return subscribed() ? fakeSubscription() : null;
+      };
+    }
+  })();`;
+}
+
+async function installSmokePushShim(cdp) {
+  await cdp.send('Page.addScriptToEvaluateOnNewDocument', {
+    source: smokePushShimSource(),
+  });
+}
+
 const failures = [];
 const consoleErrors = [];
 const notFoundUrls = [];
@@ -86,8 +144,14 @@ function readRequestBody(req) {
 function createStubState() {
   return {
     pushTestPostCount: 0,
+    pushTestBodies: [],
+    subscriptions: [],
+    subscriptionPosts: [],
     clientErrorReports: [],
     apiHits: [],
+    deleteSubscriptionHttpStatus: 200,
+    pushTestFailOnce: false,
+    allowPush404: false,
   };
 }
 
@@ -138,13 +202,13 @@ async function handleApi(req, res, url, stubState) {
   if (url.pathname === '/api/push/status' && req.method === 'GET') {
     stubJson(res, 200, {
       vapid_configured: true,
-      subscription_count: 0,
+      subscription_count: stubState.subscriptions.length,
       public_key: VAPID_PUBLIC,
     });
     return true;
   }
   if (url.pathname === '/api/push/subscriptions' && req.method === 'GET') {
-    stubJson(res, 200, [], setCsrf);
+    stubJson(res, 200, stubState.subscriptions, setCsrf);
     return true;
   }
   if (url.pathname === '/api/push/vapid-public-key' && req.method === 'GET') {
@@ -153,10 +217,87 @@ async function handleApi(req, res, url, stubState) {
   }
   if (url.pathname === '/api/push/test' && req.method === 'POST') {
     stubState.pushTestPostCount += 1;
+    const bodyText = await readRequestBody(req);
+    let parsed = {};
+    try {
+      parsed = JSON.parse(bodyText || '{}');
+    } catch {
+      parsed = {};
+    }
+    stubState.pushTestBodies.push(parsed);
+    const endpoint = parsed.endpoint;
+    if (stubState.pushTestFailOnce) {
+      stubState.pushTestFailOnce = false;
+      stubJson(
+        res,
+        404,
+        { error: 'this device is not subscribed — turn push on for this browser' },
+        setCsrf,
+      );
+      return true;
+    }
+    if (!endpoint || typeof endpoint !== 'string') {
+      stubJson(
+        res,
+        404,
+        { error: 'this device is not subscribed — turn push on for this browser' },
+        setCsrf,
+      );
+      return true;
+    }
+    const known = stubState.subscriptions.some((row) => row.endpoint === endpoint);
+    if (!known) {
+      stubJson(
+        res,
+        404,
+        { error: 'this device is not subscribed — turn push on for this browser' },
+        setCsrf,
+      );
+      return true;
+    }
     stubJson(res, 200, { ok: true }, setCsrf);
     return true;
   }
   if (url.pathname === '/api/push/subscriptions' && req.method === 'POST') {
+    const bodyText = await readRequestBody(req);
+    let parsed = {};
+    try {
+      parsed = JSON.parse(bodyText || '{}');
+    } catch {
+      parsed = {};
+    }
+    stubState.subscriptionPosts.push(parsed);
+    const endpoint = parsed.endpoint || 'https://fcm.googleapis.com/smoke-stub';
+    const label = parsed.label || 'Smoke device';
+    const existing = stubState.subscriptions.find((row) => row.endpoint === endpoint);
+    if (!existing) {
+      stubState.subscriptions.push({
+        id: stubState.subscriptions.length + 1,
+        label,
+        host: 'fcm.googleapis.com',
+        endpoint,
+        created_at: '2026-01-15T12:00:00Z',
+      });
+    }
+    stubJson(res, 200, { ok: true, id: stubState.subscriptions.length }, setCsrf);
+    return true;
+  }
+  if (url.pathname === '/api/push/subscriptions' && req.method === 'DELETE') {
+    const bodyText = await readRequestBody(req);
+    let parsed = {};
+    try {
+      parsed = JSON.parse(bodyText || '{}');
+    } catch {
+      parsed = {};
+    }
+    if (stubState.deleteSubscriptionHttpStatus === 404) {
+      stubJson(res, 404, { error: 'push subscription delete not found' }, setCsrf);
+      return true;
+    }
+    const endpoint = parsed.endpoint;
+    stubState.subscriptions = stubState.subscriptions.filter(
+      (row) => row.endpoint !== endpoint,
+    );
     stubJson(res, 200, { ok: true }, setCsrf);
     return true;
   }
@@ -348,22 +489,138 @@ async function waitFor(cdp, expression, label, timeoutMs = 30_000) {
   throw new Error(`timeout waiting for ${label}`);
 }
 
-function notificationsMessageExpr() {
+function notificationsStatusTextExpr() {
   return `(function(){
-    const el = document.querySelector('.notifications-error');
-    if (!el) return '';
-    return (el.textContent || '').trim();
+    const err = document.querySelector('.notifications-inline-error');
+    if (err && err.textContent.trim()) return err.textContent.trim();
+    const ok = document.querySelector('.notifications-inline-success');
+    if (ok && ok.textContent.trim()) return ok.textContent.trim();
+    return '';
   })()`;
+}
+
+function notificationsStatusVisibleExpr() {
+  return `(function(){
+    return ${notificationsStatusTextExpr()}.length > 0;
+  })()`;
+}
+
+async function assertCssClassesResolve(cdp, classNames, label) {
+  const classJson = JSON.stringify(classNames);
+  const ok = await evalBool(
+    cdp,
+    `(function(){
+      const names = ${classJson};
+      function sheetHasClass(sheet, className) {
+        let rules;
+        try { rules = sheet.cssRules; } catch (_e) { return false; }
+        if (!rules) return false;
+        for (let i = 0; i < rules.length; i++) {
+          const sel = rules[i].selectorText;
+          if (sel && sel.includes('.' + className)) return true;
+        }
+        return false;
+      }
+      for (const name of names) {
+        let found = false;
+        for (const sheet of document.styleSheets) {
+          if (sheetHasClass(sheet, name)) { found = true; break; }
+        }
+        if (!found) return false;
+      }
+      return true;
+    })()`,
+  );
+  if (!ok) {
+    fail(`${label}: missing CSS rules for ${classNames.join(', ')}`);
+  }
+}
+
+async function assertNotificationsLayout(cdp) {
+  const hasHeader = await evalBool(
+    cdp,
+    `!!document.querySelector('.notifications-page .grok-page-header')`,
+  );
+  if (!hasHeader) {
+    fail('Notifications page missing .grok-page-header');
+  }
+  const titleStyled = await evalBool(
+    cdp,
+    `(function(){
+      const el = document.querySelector('.notifications-page .grok-page-title');
+      if (!el) return false;
+      const s = getComputedStyle(el);
+      return parseFloat(s.fontSize) >= 20 && parseInt(s.fontWeight, 10) >= 500;
+    })()`,
+  );
+  if (!titleStyled) {
+    fail('Notifications title does not look styled (font-size/weight)');
+  }
+  const cardStyled = await evalBool(
+    cdp,
+    `(function(){
+      const el = document.querySelector('.notifications-device-card');
+      if (!el) return false;
+      const s = getComputedStyle(el);
+      return s.paddingTop !== '0px' || s.borderWidth !== '0px';
+    })()`,
+  );
+  if (!cardStyled) {
+    fail('Notifications device card missing styled surface (border/padding)');
+  }
+  await assertCssClassesResolve(
+    cdp,
+    [
+      'grok-page-header',
+      'grok-page-title',
+      'lib-status-pill',
+      'lib-btn',
+      'login-gate-shell',
+      'login-gate-card',
+      'login-gate-input',
+    ],
+    'notifications/login CSS classes',
+  );
+  const hasLabelInput = await evalBool(
+    cdp,
+    `(function(){
+      const labels = [...document.querySelectorAll('label')];
+      return labels.some((l) => /device label/i.test(l.textContent || ''));
+    })()`,
+  );
+  if (hasLabelInput) {
+    fail('Device label input should not be present');
+  }
+  const detailsClosed = await evalBool(
+    cdp,
+    `(function(){
+      const d = document.querySelector('.notifications-troubleshooting');
+      return d && !d.open;
+    })()`,
+  );
+  if (!detailsClosed) {
+    fail('Troubleshooting details should start closed');
+  }
+  const primaryCount = await evalString(
+    cdp,
+    `(function(){
+      return document.querySelectorAll('.notifications-device-actions .lib-btn.primary').length;
+    })()`,
+  );
+  if (primaryCount !== '1') {
+    fail(`expected exactly one primary action in This device card, got ${primaryCount}`);
+  }
+}
+
+function notificationsMessageExpr() {
+  return notificationsStatusTextExpr();
 }
 
 function notificationsMessageVisibleExpr() {
-  return `(function(){
-    const t = ${notificationsMessageExpr()};
-    return t.length > 0 && t !== '{}';
-  })()`;
+  return notificationsStatusVisibleExpr();
 }
 
-async function runNormalFlow(cdp, stubState) {
+async function openNotificationsFromHome(cdp) {
   await waitFor(
     cdp,
     `!!document.querySelector('.phone-menu-fab, .sidebar-menu-btn')`,
@@ -395,10 +652,52 @@ async function runNormalFlow(cdp, stubState) {
 
   await waitFor(
     cdp,
-    `!!document.querySelector('.notifications-page h1') && document.querySelector('.notifications-page h1').textContent.includes('Notifications')`,
+    `!!document.querySelector('.notifications-page .grok-page-title') && document.querySelector('.notifications-page .grok-page-title').textContent.includes('Notifications')`,
     'Notifications page',
   );
   await sleep(1000);
+}
+
+async function assertNotificationsPill(cdp, expected) {
+  const pillText = await evalString(
+    cdp,
+    `(function(){
+      const el = document.querySelector('.notifications-device-body .lib-status-pill');
+      return el ? el.textContent.trim() : '';
+    })()`,
+  );
+  if (pillText !== expected) {
+    fail(`expected status pill ${JSON.stringify(expected)}, got ${JSON.stringify(pillText)}`);
+  }
+}
+
+async function assertNoNotificationsError(cdp, label) {
+  const hasErr = await evalBool(
+    cdp,
+    `!!document.querySelector('.notifications-inline-error')`,
+  );
+  if (hasErr) {
+    const text = await evalString(cdp, notificationsMessageExpr());
+    fail(`${label}: unexpected error line ${JSON.stringify(text)}`);
+  }
+}
+
+async function runNormalFlow(cdp, stubState, origin) {
+  await openNotificationsFromHome(cdp);
+  await ensureNotificationsGranted(cdp, origin);
+
+  await assertNotificationsLayout(cdp);
+
+  const pillText = await evalString(
+    cdp,
+    `(function(){
+      const el = document.querySelector('.notifications-device-body .lib-status-pill');
+      return el ? el.textContent.trim() : '';
+    })()`,
+  );
+  if (!pillText) {
+    fail('missing status pill on This device card');
+  }
 
   const banner = await evalBool(cdp, `!!document.getElementById('liberado-panic-banner')`);
   if (banner) {
@@ -409,68 +708,94 @@ async function runNormalFlow(cdp, stubState) {
     cdp,
     `(function(){
       const buttons = [...document.querySelectorAll('button')];
-      const enable = buttons.find(b => b.textContent.includes('Enable push on this device'));
+      const enable = buttons.find(b => b.textContent.includes('Turn on'));
       if (!enable) return false;
       enable.click();
       return true;
     })()`,
-    'Enable push on this device',
+    'Turn on',
   );
 
-  await waitFor(
-    cdp,
-    notificationsMessageVisibleExpr(),
-    'visible status or error after Enable push',
-    15_000,
-  );
-
-  const enableMsg = await evalString(cdp, notificationsMessageExpr());
-  if (enableMsg === '{}' || enableMsg.length === 0) {
-    fail(`Notifications message empty after Enable (got ${JSON.stringify(enableMsg)})`);
-  }
-
-  const pushTestBefore = stubState.pushTestPostCount;
-
-  await clickAssert(
-    cdp,
-    `(function(){
-      const buttons = [...document.querySelectorAll('button')];
-      const test = buttons.find(b => b.textContent.includes('Send test'));
-      if (!test) return false;
-      test.click();
-      return true;
-    })()`,
-    'Send test',
-  );
-
-  const sendStart = Date.now();
-  while (Date.now() - sendStart < 15_000) {
-    if (stubState.pushTestPostCount > pushTestBefore) {
+  const turnOnStart = Date.now();
+  while (Date.now() - turnOnStart < 15_000) {
+    if (stubState.subscriptionPosts.length > 0) {
       break;
     }
-    const sendMsgNow = await evalString(cdp, notificationsMessageExpr());
-    if (
-      sendMsgNow.includes('Test notification queued') ||
-      sendMsgNow.includes('Test send failed')
-    ) {
+    if (await evalBool(cdp, notificationsStatusVisibleExpr())) {
       break;
     }
     await sleep(250);
   }
 
-  await sleep(500);
-
-  const pushTestHit = stubState.pushTestPostCount > pushTestBefore;
-  const sendMsg = await evalString(cdp, notificationsMessageExpr());
-  if (!pushTestHit && !sendMsg.includes('Test notification queued') && !sendMsg.includes('Test send failed')) {
+  const enableMsg = await evalString(cdp, notificationsMessageExpr());
+  const subscribed = stubState.subscriptionPosts.length > 0;
+  if (!subscribed) {
     fail(
-      `Send test: expected POST /api/push/test or visible outcome; posts=${stubState.pushTestPostCount}, message=${JSON.stringify(sendMsg)}`,
+      `Turn on: expected POST /api/push/subscriptions (posts=${stubState.subscriptionPosts.length}, message=${JSON.stringify(enableMsg)})`,
     );
+    return;
+  }
+
+  const pushTestBefore = stubState.pushTestPostCount;
+  const sendVisible = await evalBool(
+    cdp,
+    `(function(){
+      return [...document.querySelectorAll('button')].some((b) => b.textContent.includes('Send test'));
+    })()`,
+  );
+
+  if (sendVisible) {
+    await clickAssert(
+      cdp,
+      `(function(){
+        const buttons = [...document.querySelectorAll('button')];
+        const test = buttons.find(b => b.textContent.includes('Send test'));
+        if (!test) return false;
+        test.click();
+        return true;
+      })()`,
+      'Send test',
+    );
+
+    const sendStart = Date.now();
+    while (Date.now() - sendStart < 15_000) {
+      if (stubState.pushTestPostCount > pushTestBefore) {
+        break;
+      }
+      const sendMsgNow = await evalString(cdp, notificationsMessageExpr());
+      if (
+        sendMsgNow.includes('Test queued for this device') ||
+        sendMsgNow.includes('not subscribed') ||
+        sendMsgNow.includes('Request failed')
+      ) {
+        break;
+      }
+      await sleep(250);
+    }
+
+    await sleep(500);
+
+    const sendMsg = await evalString(cdp, notificationsMessageExpr());
+    if (stubState.pushTestPostCount > pushTestBefore) {
+      const body = stubState.pushTestBodies[stubState.pushTestBodies.length - 1];
+      if (!body || typeof body.endpoint !== 'string' || !body.endpoint) {
+        fail(`Send test POST missing endpoint in body: ${JSON.stringify(body)}`);
+      }
+    } else if (
+      !sendMsg.includes('Test queued for this device') &&
+      !sendMsg.includes('not subscribed')
+    ) {
+      fail(
+        `Send test: expected POST /api/push/test with endpoint or error message; posts=${stubState.pushTestPostCount}, message=${JSON.stringify(sendMsg)}`,
+      );
+    }
+  } else if (subscribed) {
+    fail('Send test button missing after successful subscription POST');
   }
 
   const stillThere = await evalBool(
     cdp,
-    `!!document.querySelector('.notifications-page h1')`,
+    `!!document.querySelector('.notifications-page .grok-page-title')`,
   );
   if (!stillThere) {
     fail('Notifications page unmounted after interactions');
@@ -507,6 +832,161 @@ async function runNormalFlow(cdp, stubState) {
   if (!drawerRow) {
     fail('Notifications row not visible in opened menu after push flow');
   }
+}
+
+async function runReconcileOnLoadPhase(cdp, stubState) {
+  if (stubState.subscriptionPosts.length === 0) {
+    fail('reconcile phase: need browser subscription from Turn on first');
+    return;
+  }
+  const postsBefore = stubState.subscriptionPosts.length;
+  stubState.subscriptions = [];
+  await cdp.send('Page.reload');
+  await sleep(2500);
+  await openNotificationsFromHome(cdp);
+
+  const reconcileStart = Date.now();
+  while (Date.now() - reconcileStart < 15_000) {
+    if (stubState.subscriptionPosts.length > postsBefore) {
+      break;
+    }
+    await sleep(250);
+  }
+  if (stubState.subscriptionPosts.length <= postsBefore) {
+    fail(
+      `reconcile on load: expected POST /api/push/subscriptions (posts=${stubState.subscriptionPosts.length}, before=${postsBefore})`,
+    );
+    return;
+  }
+  await assertNotificationsPill(cdp, 'On');
+  await assertNoNotificationsError(cdp, 'reconcile on load');
+}
+
+async function runTurnOffDelete404Phase(cdp, stubState) {
+  const turnOffVisible = await evalBool(
+    cdp,
+    `(function(){
+      return [...document.querySelectorAll('button')].some((b) => b.textContent.includes('Turn off'));
+    })()`,
+  );
+  if (!turnOffVisible) {
+    fail('turn off 404 phase: Turn off button missing (expected push On)');
+    return;
+  }
+  stubState.deleteSubscriptionHttpStatus = 404;
+  stubState.allowPush404 = true;
+  await clickAssert(
+    cdp,
+    `(function(){
+      const buttons = [...document.querySelectorAll('button')];
+      const off = buttons.find((b) => b.textContent.includes('Turn off'));
+      if (!off) return false;
+      off.click();
+      return true;
+    })()`,
+    'Turn off',
+  );
+  const offStart = Date.now();
+  while (Date.now() - offStart < 15_000) {
+    const turnOn = await evalBool(
+      cdp,
+      `(function(){
+        return [...document.querySelectorAll('button')].some((b) => b.textContent.includes('Turn on'));
+      })()`,
+    );
+    if (turnOn) {
+      break;
+    }
+    await sleep(250);
+  }
+  stubState.allowPush404 = false;
+  stubState.deleteSubscriptionHttpStatus = 200;
+  await assertNotificationsPill(cdp, 'Off');
+  await assertNoNotificationsError(cdp, 'turn off with DELETE 404');
+  const turnOnBtn = await evalBool(
+    cdp,
+    `(function(){
+      return [...document.querySelectorAll('button')].some((b) => b.textContent.includes('Turn on'));
+    })()`,
+  );
+  if (!turnOnBtn) {
+    fail('turn off 404 phase: Turn on button missing after turn off');
+  }
+}
+
+async function runSendTestReregisterPhase(cdp, stubState, origin) {
+  await ensureNotificationsGranted(cdp, origin);
+  await clickAssert(
+    cdp,
+    `(function(){
+      const buttons = [...document.querySelectorAll('button')];
+      const enable = buttons.find((b) => b.textContent.includes('Turn on'));
+      if (!enable) return false;
+      enable.click();
+      return true;
+    })()`,
+    'Turn on (before send-test retry phase)',
+  );
+  const enableStart = Date.now();
+  while (Date.now() - enableStart < 15_000) {
+    const send = await evalBool(
+      cdp,
+      `(function(){
+        return [...document.querySelectorAll('button')].some((b) => b.textContent.includes('Send test'));
+      })()`,
+    );
+    if (send) {
+      break;
+    }
+    await sleep(250);
+  }
+  const postsBefore = stubState.subscriptionPosts.length;
+  const testsBefore = stubState.pushTestPostCount;
+  stubState.pushTestFailOnce = true;
+  stubState.allowPush404 = true;
+  await clickAssert(
+    cdp,
+    `(function(){
+      const buttons = [...document.querySelectorAll('button')];
+      const test = buttons.find((b) => b.textContent.includes('Send test'));
+      if (!test) return false;
+      test.click();
+      return true;
+    })()`,
+    'Send test (expect 404 then retry)',
+  );
+  const retryStart = Date.now();
+  while (Date.now() - retryStart < 15_000) {
+    if (
+      stubState.pushTestPostCount >= testsBefore + 2 &&
+      stubState.subscriptionPosts.length > postsBefore
+    ) {
+      break;
+    }
+    const msg = await evalString(cdp, notificationsMessageExpr());
+    if (msg.includes('Test queued for this device')) {
+      break;
+    }
+    await sleep(250);
+  }
+  stubState.allowPush404 = false;
+  if (stubState.pushTestPostCount < testsBefore + 2) {
+    fail(
+      `send test retry: expected at least 2 POST /api/push/test (count=${stubState.pushTestPostCount}, before=${testsBefore})`,
+    );
+  }
+  if (stubState.subscriptionPosts.length <= postsBefore) {
+    fail(
+      `send test retry: expected re-register POST /api/push/subscriptions (posts=${stubState.subscriptionPosts.length}, before=${postsBefore})`,
+    );
+  }
+  const sendMsg = await evalString(cdp, notificationsMessageExpr());
+  if (!sendMsg.includes('Test queued for this device')) {
+    fail(
+      `send test retry: expected success message; got ${JSON.stringify(sendMsg)}`,
+    );
+  }
+  await assertNotificationsPill(cdp, 'On');
 }
 
 async function runFatalGluePhase(cdp, stubState) {
@@ -567,6 +1047,26 @@ async function runFatalGluePhase(cdp, stubState) {
   }
 }
 
+async function ensureNotificationsGranted(cdp, origin) {
+  try {
+    await cdp.send('Browser.grantPermissions', {
+      origin,
+      permissions: ['notifications'],
+    });
+  } catch (_err) {
+    // Older Chrome builds may omit the Browser domain.
+  }
+  try {
+    await cdp.send('Page.setPermissionOverride', {
+      permission: 'notifications',
+      setting: 'granted',
+      origin: origin.endsWith('/') ? origin : `${origin}/`,
+    });
+  } catch (_err) {
+    // Optional on older Chrome.
+  }
+}
+
 async function runScenario(origin, debugPort, stubState) {
   const cdp = await connectCdp(debugPort, origin);
   let phase = 'normal';
@@ -575,7 +1075,9 @@ async function runScenario(origin, debugPort, stubState) {
     if (msg.method === 'Network.responseReceived') {
       const status = msg.params.response.status;
       if (status === 404) {
-        notFoundUrls.push(msg.params.response.url);
+        if (!stubState.allowPush404) {
+          notFoundUrls.push(msg.params.response.url);
+        }
       }
     }
     if (msg.method === 'Runtime.exceptionThrown') {
@@ -603,6 +1105,8 @@ async function runScenario(origin, debugPort, stubState) {
   await cdp.send('Log.enable');
   await cdp.send('Page.enable');
   await cdp.send('Network.enable');
+  await installSmokePushShim(cdp);
+  await ensureNotificationsGranted(cdp, origin);
 
   await cdp.send('Emulation.setDeviceMetricsOverride', {
     width: 412,
@@ -613,8 +1117,13 @@ async function runScenario(origin, debugPort, stubState) {
 
   await cdp.send('Page.navigate', { url: `${origin}/` });
   await sleep(2000);
+  await ensureNotificationsGranted(cdp, origin);
 
-  await runNormalFlow(cdp, stubState);
+  await runNormalFlow(cdp, stubState, origin);
+
+  await runReconcileOnLoadPhase(cdp, stubState);
+  await runTurnOffDelete404Phase(cdp, stubState);
+  await runSendTestReregisterPhase(cdp, stubState, origin);
 
   phase = 'fatal';
   await runFatalGluePhase(cdp, stubState);

@@ -5,6 +5,7 @@ use dioxus::prelude::*;
 
 mod back_nav;
 mod components;
+mod device_label;
 mod fatal_classifier;
 mod http;
 mod icons;
@@ -243,7 +244,9 @@ fn App() -> Element {
         style { {include_str!("./styles/main.css")} }
 
         if !auth_ready() {
-            div { class: "login-gate", "Loading session…" }
+            div { class: "login-gate-shell",
+                p { class: "login-gate-loading", "Loading session…" }
+            }
         } else if need_login() {
             components::login_gate::LoginGate {
                 api_base: base.clone(),

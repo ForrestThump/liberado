@@ -185,10 +185,14 @@ async fn push_handlers_keep_expected_statuses() {
 
     let test = app
         .clone()
-        .oneshot(owner_post("/api/push/test", "{}"))
+        .oneshot(owner_post(
+            "/api/push/test",
+            r#"{"endpoint":"https://fcm.googleapis.com/x"}"#,
+        ))
         .await
         .unwrap();
     assert_eq!(test.status(), StatusCode::OK);
+    assert_eq!(outbox.due_rows(Utc::now(), 10).unwrap().len(), 1);
 
     let removed = app
         .oneshot(
@@ -234,4 +238,56 @@ async fn client_errors_requires_owner_and_accepts_bearer() {
         .await
         .unwrap();
     assert_eq!(ok.status(), StatusCode::NO_CONTENT);
+}
+
+#[tokio::test]
+async fn push_test_without_subscriptions_does_not_enqueue() {
+    let path = tempfile::NamedTempFile::new()
+        .unwrap()
+        .into_temp_path()
+        .keep()
+        .unwrap();
+    let outbox = Arc::new(Outbox::open(&path).unwrap());
+    let app = owner_push_app(outbox.clone()).await;
+
+    let resp = app
+        .oneshot(owner_post(
+            "/api/push/test",
+            r#"{"endpoint":"https://fcm.googleapis.com/x"}"#,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::CONFLICT);
+    assert!(outbox.due_rows(Utc::now(), 10).unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn push_test_unknown_endpoint_does_not_enqueue() {
+    let path = tempfile::NamedTempFile::new()
+        .unwrap()
+        .into_temp_path()
+        .keep()
+        .unwrap();
+    let outbox = Arc::new(Outbox::open(&path).unwrap());
+    let app = owner_push_app(outbox.clone()).await;
+
+    app.clone()
+        .oneshot(owner_post(
+            "/api/push/subscriptions",
+            &format!(
+                r#"{{"endpoint":"https://fcm.googleapis.com/x","keys":{{"p256dh":"{TEST_P256DH}","auth":"{TEST_AUTH}"}},"label":"phone"}}"#
+            ),
+        ))
+        .await
+        .unwrap();
+
+    let resp = app
+        .oneshot(owner_post(
+            "/api/push/test",
+            r#"{"endpoint":"https://fcm.googleapis.com/unknown"}"#,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    assert!(outbox.due_rows(Utc::now(), 10).unwrap().is_empty());
 }

@@ -27,6 +27,7 @@ pub struct SubscriptionView {
     pub label: String,
     pub host: String,
     pub endpoint: String,
+    pub created_at: String,
 }
 
 #[derive(Debug, Clone)]
@@ -90,8 +91,9 @@ impl Outbox {
 
     pub fn list_subscriptions(&self) -> Result<Vec<SubscriptionView>> {
         let conn = self.lock();
-        let mut stmt =
-            conn.prepare("SELECT id, label, endpoint FROM push_subscriptions ORDER BY id")?;
+        let mut stmt = conn.prepare(
+            "SELECT id, label, endpoint, created_at FROM push_subscriptions ORDER BY id",
+        )?;
         let rows = stmt.query_map([], |row| {
             let endpoint: String = row.get(2)?;
             Ok(SubscriptionView {
@@ -99,6 +101,7 @@ impl Outbox {
                 label: row.get(1)?,
                 host: host_label(&endpoint),
                 endpoint,
+                created_at: row.get(3)?,
             })
         })?;
         rows.collect::<std::result::Result<Vec<_>, _>>()

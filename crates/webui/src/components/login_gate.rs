@@ -51,26 +51,28 @@ pub fn LoginGate(api_base: String, on_authenticated: EventHandler<()>) -> Elemen
     };
 
     rsx! {
-        div { class: "login-gate",
-            h1 { "Sign in" }
-            p { class: "login-gate-hint",
-                "Paste the human token from topology (`[api] human`). It is stored only in an HttpOnly cookie."
-            }
-            if let Some(msg) = error() {
-                p { class: "login-gate-error", "{msg}" }
-            }
-            textarea {
-                class: "login-gate-input",
-                placeholder: "human token",
-                value: "{token}",
-                disabled: busy(),
-                oninput: move |e| token.set(e.value()),
-            }
-            button {
-                class: "login-gate-submit",
-                disabled: busy(),
-                onclick: submit,
-                if busy() { "Signing in…" } else { "Sign in" }
+        div { class: "login-gate-shell",
+            div { class: "login-gate-card",
+                h1 { class: "login-gate-title", "Sign in" }
+                p { class: "login-gate-hint",
+                    "Paste the human token from topology (`[api] human`). It is stored only in an HttpOnly cookie."
+                }
+                if let Some(msg) = error() {
+                    p { class: "login-gate-error", "{msg}" }
+                }
+                textarea {
+                    class: "login-gate-input",
+                    placeholder: "human token",
+                    value: "{token}",
+                    disabled: busy(),
+                    oninput: move |e| token.set(e.value()),
+                }
+                button {
+                    class: "login-gate-submit lib-btn primary",
+                    disabled: busy(),
+                    onclick: submit,
+                    if busy() { "Signing in…" } else { "Sign in" }
+                }
             }
         }
     }
