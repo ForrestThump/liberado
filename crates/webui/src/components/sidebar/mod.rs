@@ -51,6 +51,7 @@ pub enum Route {
     Library,
     Automations,
     Notifications,
+    NotificationDetail(i64),
     Agents,
     Projects,
     Plugins,

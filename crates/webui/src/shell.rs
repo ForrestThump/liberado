@@ -112,6 +112,7 @@ pub(crate) fn shell_route_title(route: Route) -> &'static str {
         Route::Library => "Library",
         Route::Automations => "Automations",
         Route::Notifications => "Notifications",
+        Route::NotificationDetail(_) => "Notification",
         Route::Agents => "Agents",
         Route::Projects => "Projects",
         Route::Plugins => "Plugins",
