@@ -166,7 +166,9 @@ fn replace_open_checkbox(line: &str) -> Result<String, String> {
             return Ok(line.replacen(open, closed, 1));
         }
     }
-    if starts_with_ordered_task(line.trim_start()) && let Some(idx) = line.find("[ ]") {
+    if starts_with_ordered_task(line.trim_start())
+        && let Some(idx) = line.find("[ ]")
+    {
         let mut out = line.to_string();
         out.replace_range(idx..idx + 3, "[x]");
         return Ok(out);
