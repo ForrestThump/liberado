@@ -4391,6 +4391,12 @@
     "functions": 25,
     "cyclomatic": 51
   },
+  "crates/outbox/src/resolution.rs": {
+    "ploc": 15,
+    "lloc": 0,
+    "functions": 0,
+    "cyclomatic": 1
+  },
   "crates/outbox/src/row_detail.rs": {
     "ploc": 57,
     "lloc": 4,
@@ -4944,10 +4950,10 @@
     "cyclomatic": 1
   },
   "crates/server/src/api/outbox_detail.rs": {
-    "ploc": 308,
-    "lloc": 73,
-    "functions": 24,
-    "cyclomatic": 57
+    "ploc": 290,
+    "lloc": 48,
+    "functions": 23,
+    "cyclomatic": 55
   },
   "crates/server/src/api/outbox_detail_http_tests.rs": {
     "ploc": 250,
@@ -5038,6 +5044,12 @@
     "lloc": 34,
     "functions": 2,
     "cyclomatic": 3
+  },
+  "crates/server/src/api/vault_task_line.rs": {
+    "ploc": 210,
+    "lloc": 87,
+    "functions": 22,
+    "cyclomatic": 62
   },
   "crates/server/src/app_router.rs": {
     "ploc": 187,
