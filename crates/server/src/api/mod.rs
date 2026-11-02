@@ -21,6 +21,7 @@ pub(crate) mod schedule_description;
 mod search;
 mod sessions;
 mod status;
+mod vault_task_line;
 
 pub use approvals::{list_approvals, list_pending_approvals, resolve_approval};
 pub use auth::{

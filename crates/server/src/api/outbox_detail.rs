@@ -9,14 +9,18 @@ use axum::{
     http::StatusCode,
     response::{IntoResponse, Response},
 };
-use chrono::{Duration, Utc};
-use liberado_common::WriteProvenance;
-use liberado_outbox::{NewReminder, OpenRow, OutboxRecord, OutboxSource, TASK_DUE, copy};
+use chrono::Utc;
+use liberado_outbox::{
+    OpenRow, OutboxRecord, OutboxSource, OwnerResolveResult, OwnerSnoozeResult, RES_COMPLETED,
+    RES_DISMISSED, RES_SNOOZED, TASK_DUE,
+};
 use liberado_vault::Vault;
 use serde::Deserialize;
 use serde::Serialize;
 
 use crate::state::AppState;
+
+use super::vault_task_line::toggle_open_task_line;
 
 #[derive(Serialize)]
 pub struct OutboxDetailResponse {
@@ -32,6 +36,9 @@ pub struct OutboxDetailResponse {
     pub state: String,
     pub delivered: bool,
     pub acked: bool,
+    pub resolution: Option<String>,
+    pub resolved_at: Option<String>,
+    pub snooze_until_local: Option<String>,
     pub obsidian_url: Option<String>,
 }
 
@@ -56,7 +63,7 @@ pub async fn get_outbox_detail(
     let zone = operator_zone(&state);
     let now = Utc::now();
     let open = open_row_from_record(&record);
-    let (title, body, late) = copy::present_row(&open, now, &zone);
+    let (title, body, late) = liberado_outbox::copy::present_row(&open, now, &zone);
     Json(detail_json(
         &record,
         title,
@@ -64,6 +71,7 @@ pub async fn get_outbox_detail(
         late,
         &zone,
         obsidian_url_for(&state.config.topology, record.source.as_ref()),
+        snooze_until_local(&state, outbox.as_ref(), &record),
     ))
     .into_response()
 }
@@ -81,18 +89,34 @@ pub async fn complete_outbox(
     }) else {
         return fail(StatusCode::NOT_FOUND, "outbox row not found");
     };
-    if record.kind == TASK_DUE
+    let vault_task =
+        record.kind == TASK_DUE && matches!(&record.source, Some(OutboxSource::VaultNote { .. }));
+    let now = Utc::now();
+    if vault_task
         && let Some(OutboxSource::VaultNote { path, text, .. }) = &record.source
         && let Err(message) = complete_vault_task(&state.vault_path, path, text).await
     {
         return fail(StatusCode::CONFLICT, &message);
     }
-    let now = Utc::now();
-    match outbox.owner_ack(id, now) {
-        Ok(true) => StatusCode::NO_CONTENT.into_response(),
-        Ok(false) => fail(StatusCode::CONFLICT, "row already acked or not ackable"),
-        Err(err) => fail(StatusCode::INTERNAL_SERVER_ERROR, &err.to_string()),
+    let resolution = if vault_task {
+        RES_COMPLETED
+    } else {
+        RES_DISMISSED
+    };
+    match outbox.try_resolve(id, resolution, now) {
+        Ok(OwnerResolveResult::AlreadyResolved(existing)) => {
+            return fail(
+                StatusCode::CONFLICT,
+                &format!("row already resolved as {existing}"),
+            );
+        }
+        Ok(OwnerResolveResult::NotFound) => {
+            return fail(StatusCode::NOT_FOUND, "outbox row not found");
+        }
+        Ok(OwnerResolveResult::Applied) => {}
+        Err(err) => return fail(StatusCode::INTERNAL_SERVER_ERROR, &err.to_string()),
     }
+    StatusCode::NO_CONTENT.into_response()
 }
 
 pub async fn snooze_outbox(
@@ -109,33 +133,14 @@ pub async fn snooze_outbox(
     let Some(outbox) = state.outbox.as_ref() else {
         return fail(StatusCode::SERVICE_UNAVAILABLE, "outbox is not available");
     };
-    let Some(record) = (match outbox.fetch_record(id) {
-        Ok(row) => row,
-        Err(err) => return fail(StatusCode::INTERNAL_SERVER_ERROR, &err.to_string()),
-    }) else {
-        return fail(StatusCode::NOT_FOUND, "outbox row not found");
-    };
     let now = Utc::now();
-    let due = now + Duration::minutes(body.minutes);
-    let title = format!("Snoozed: {}", record.title);
-    let key = format!("snooze/{}/{}", id, now.timestamp());
-    let reminder = NewReminder {
-        idempotency_key: key,
-        channel: record.channel,
-        target: record.target,
-        title,
-        body: record.body,
-        due_at: due,
-        catch_up: false,
-        kind: Some(record.kind),
-        source: record.source,
-    };
-    if let Err(err) = outbox.enqueue(&reminder, now) {
-        return fail(StatusCode::BAD_REQUEST, &err.to_string());
-    }
-    match outbox.owner_ack(id, now) {
-        Ok(true) => StatusCode::NO_CONTENT.into_response(),
-        Ok(false) => fail(StatusCode::CONFLICT, "row already acked or not ackable"),
+    match outbox.owner_snooze(id, body.minutes, now) {
+        Ok(OwnerSnoozeResult::Applied { .. }) => StatusCode::NO_CONTENT.into_response(),
+        Ok(OwnerSnoozeResult::AlreadyResolved(existing)) => fail(
+            StatusCode::CONFLICT,
+            &format!("row already resolved as {existing}"),
+        ),
+        Ok(OwnerSnoozeResult::NotFound) => fail(StatusCode::NOT_FOUND, "outbox row not found"),
         Err(err) => fail(StatusCode::INTERNAL_SERVER_ERROR, &err.to_string()),
     }
 }
@@ -151,14 +156,25 @@ pub fn obsidian_vault_display_name(vault_path: &Path, configured: Option<&str>) 
         .to_string()
 }
 
+pub fn encode_uri_component(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for byte in value.as_bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(*byte as char);
+            }
+            _ => out.push_str(&format!("%{byte:02X}")),
+        }
+    }
+    out
+}
+
 pub fn obsidian_open_url(vault_name: &str, rel_path: &str) -> String {
-    let Ok(mut url) = url::Url::parse("obsidian://open") else {
-        return String::new();
-    };
-    url.query_pairs_mut()
-        .append_pair("vault", vault_name)
-        .append_pair("file", rel_path);
-    url.to_string()
+    format!(
+        "obsidian://open?vault={}&file={}",
+        encode_uri_component(vault_name),
+        encode_uri_component(rel_path)
+    )
 }
 
 pub fn obsidian_url_for(
@@ -175,6 +191,20 @@ pub fn obsidian_url_for(
     Some(obsidian_open_url(&name, path))
 }
 
+fn snooze_until_local(
+    state: &AppState,
+    outbox: &liberado_outbox::Outbox,
+    record: &OutboxRecord,
+) -> Option<String> {
+    if record.resolution.as_deref() != Some(RES_SNOOZED) {
+        return None;
+    }
+    let key = format!("snooze/{}", record.id);
+    let due = outbox.due_at_by_idempotency(&key).ok()??;
+    let zone = operator_zone(state);
+    Some(liberado_outbox::copy::format_time_12h_for_zone(&zone, due))
+}
+
 fn detail_json(
     record: &OutboxRecord,
     title: String,
@@ -182,6 +212,7 @@ fn detail_json(
     late: bool,
     zone_name: &str,
     obsidian_url: Option<String>,
+    snooze_until_local: Option<String>,
 ) -> OutboxDetailResponse {
     OutboxDetailResponse {
         id: record.id,
@@ -189,13 +220,16 @@ fn detail_json(
         body,
         kind: record.kind.clone(),
         due_at: record.due_at.to_rfc3339(),
-        due_at_local: copy::format_time_12h_for_zone(zone_name, record.due_at),
+        due_at_local: liberado_outbox::copy::format_time_12h_for_zone(zone_name, record.due_at),
         late,
         catch_up: record.catch_up,
         source: record.source.clone(),
         state: record.state.clone(),
         delivered: record.state == "delivered",
         acked: record.acked,
+        resolution: record.resolution.clone(),
+        resolved_at: record.resolved_at.map(|at| at.to_rfc3339()),
+        snooze_until_local,
         obsidian_url,
     }
 }
@@ -241,42 +275,15 @@ async fn complete_vault_task(
     let updated = toggle_open_task_line(&content, task_text)?;
     let hash = Vault::content_hash(&content);
     vault
-        .write(rel_path, &updated, Some(&hash), &WriteProvenance::human())
+        .write(
+            rel_path,
+            &updated,
+            Some(&hash),
+            &liberado_common::WriteProvenance::human(),
+        )
         .await
         .map_err(|err| err.to_string())?;
     Ok(())
-}
-
-fn toggle_open_task_line(content: &str, task_text: &str) -> Result<String, String> {
-    let needle = task_text.trim();
-    if needle.is_empty() {
-        return Err("task text is empty".into());
-    }
-    let mut hits = Vec::new();
-    for (index, line) in content.lines().enumerate() {
-        if line.contains("- [ ]") && line_contains_task(line, needle) {
-            hits.push(index);
-        }
-    }
-    if hits.is_empty() {
-        return Err("no matching open task line".into());
-    }
-    if hits.len() > 1 {
-        return Err("task line is ambiguous".into());
-    }
-    let idx = hits[0];
-    let mut lines: Vec<String> = content.lines().map(str::to_string).collect();
-    lines[idx] = lines[idx].replacen("- [ ]", "- [x]", 1);
-    let mut out = lines.join("\n");
-    if content.ends_with('\n') {
-        out.push('\n');
-    }
-    Ok(out)
-}
-
-fn line_contains_task(line: &str, task_text: &str) -> bool {
-    let stripped = line.split("- [ ]").nth(1).unwrap_or(line).trim();
-    stripped.contains(task_text) || task_text.contains(stripped)
 }
 
 fn fail(status: StatusCode, message: &str) -> Response {
@@ -286,27 +293,14 @@ fn fail(status: StatusCode, message: &str) -> Response {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
 
     #[test]
-    fn obsidian_url_encodes_spaces_and_slashes() {
-        let topology = liberado_config::Topology {
-            vault_path: PathBuf::from("/data/My Vault"),
-            obsidian_vault_name: Some("Personal".into()),
-            ..liberado_config::Topology::default()
-        };
-        let url = obsidian_url_for(
-            &topology,
-            Some(&OutboxSource::VaultNote {
-                path: "Tasks/Inbox Note.md".into(),
-                label: "due".into(),
-                text: "Call dentist".into(),
-            }),
-        )
-        .expect("url");
-        assert!(url.starts_with("obsidian://open?"));
-        assert!(url.contains("vault=Personal"));
-        assert!(url.contains("Tasks%2FInbox%20Note.md") || url.contains("Inbox+Note"));
+    fn obsidian_url_uses_uri_component_encoding() {
+        let url = obsidian_open_url("My Vault", "Tasks/Inbox Note é.md");
+        assert_eq!(
+            url,
+            "obsidian://open?vault=My%20Vault&file=Tasks%2FInbox%20Note%20%C3%A9.md"
+        );
     }
 
     #[test]
@@ -315,18 +309,5 @@ mod tests {
             obsidian_vault_display_name(Path::new("/vault/Notes"), None),
             "Notes"
         );
-    }
-
-    #[test]
-    fn toggle_task_line_refuses_ambiguous_matches() {
-        let note = "- [ ] one\n- [ ] one\n";
-        assert!(toggle_open_task_line(note, "one").is_err());
-    }
-
-    #[test]
-    fn toggle_task_line_updates_single_match() {
-        let note = "- [ ] Call dentist\n";
-        let out = toggle_open_task_line(note, "Call dentist").unwrap();
-        assert!(out.contains("- [x] Call dentist"));
     }
 }

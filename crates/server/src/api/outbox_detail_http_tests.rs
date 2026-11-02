@@ -8,7 +8,7 @@ use axum::{
     http::{Request, StatusCode},
 };
 use chrono::Utc;
-use liberado_outbox::{NewReminder, Outbox, OutboxSource, TASK_DUE};
+use liberado_outbox::{NewReminder, Outbox, OutboxSource, RES_COMPLETED, TASK_DUE};
 use tower::ServiceExt;
 
 use super::{complete_outbox, get_outbox_detail, snooze_outbox};
@@ -174,6 +174,8 @@ async fn complete_outbox_toggles_task_and_acks() {
         .unwrap();
     assert_eq!(response.status(), StatusCode::NO_CONTENT);
     assert!(outbox.acked(1).unwrap());
+    let record = outbox.fetch_record(1).unwrap().unwrap();
+    assert_eq!(record.resolution.as_deref(), Some(RES_COMPLETED));
     let text = std::fs::read_to_string(note).unwrap();
     assert!(text.contains("- [x] Call dentist"));
 }
@@ -224,7 +226,7 @@ async fn complete_outbox_refuses_ambiguous_task() {
 }
 
 #[tokio::test]
-async fn snooze_outbox_enqueues_followup_and_acks_original() {
+async fn snooze_outbox_enqueues_followup_not_due_immediately() {
     let path = tempfile::NamedTempFile::new()
         .unwrap()
         .into_temp_path()
@@ -254,11 +256,53 @@ async fn snooze_outbox_enqueues_followup_and_acks_original() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::NO_CONTENT);
-    assert!(outbox.acked(1).unwrap());
-    let rows = outbox.due_rows(Utc::now(), 10).unwrap();
+    let record = outbox.fetch_record(1).unwrap().unwrap();
+    assert_eq!(record.resolution.as_deref(), Some("snoozed"));
     assert!(
-        rows.iter().any(|row| row.title.starts_with("Snoozed:")),
-        "expected snoozed follow-up row, got: {:?}",
-        rows.iter().map(|r| r.title.as_str()).collect::<Vec<_>>()
+        outbox.due_rows(now, 10).unwrap().is_empty(),
+        "snoozed follow-up must not deliver before its due_at"
     );
+    let fire = now + chrono::Duration::minutes(15) + chrono::Duration::seconds(1);
+    let rows = outbox.due_rows(fire, 10).unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].title, "Snoozed: Due now: x");
+}
+
+#[tokio::test]
+async fn complete_after_deliver_and_push_ack_succeeds() {
+    let path = tempfile::NamedTempFile::new()
+        .unwrap()
+        .into_temp_path()
+        .keep()
+        .unwrap();
+    let outbox = Arc::new(Outbox::open(&path).unwrap());
+    let now = Utc::now();
+    outbox
+        .enqueue(
+            &NewReminder {
+                idempotency_key: "k5".into(),
+                channel: "webpush".into(),
+                target: "sub:1".into(),
+                title: "Habit".into(),
+                body: "body".into(),
+                due_at: now,
+                catch_up: false,
+                kind: Some("habit".into()),
+                source: None,
+            },
+            now,
+        )
+        .unwrap();
+    let token = outbox.due_rows(now, 10).unwrap()[0].token.clone();
+    outbox.lease(&[1], now).unwrap();
+    outbox.mark_accepted(&[1], now).unwrap();
+    outbox.ack(1, &token, now).unwrap();
+    let app = owner_outbox_app(outbox.clone(), std::path::PathBuf::from("/tmp/v")).await;
+    let response = app
+        .oneshot(owner_post("/api/outbox/1/complete", "{}"))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    let record = outbox.fetch_record(1).unwrap().unwrap();
+    assert_eq!(record.resolution.as_deref(), Some("dismissed"));
 }
