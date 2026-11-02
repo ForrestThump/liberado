@@ -107,6 +107,8 @@ async fn outbox_ack_without_owner_cookie_is_open_and_constant_time() {
                 body: "b".into(),
                 due_at: at,
                 catch_up: false,
+                kind: None,
+                source: None,
             },
             at,
         )

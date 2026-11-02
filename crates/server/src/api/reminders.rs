@@ -9,7 +9,8 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use chrono::Utc;
-use liberado_outbox::NewSubscription;
+use liberado_common::UserTimezone;
+use liberado_outbox::{NewSubscription, OutboxSource, TEST, copy};
 use serde::Deserialize;
 use tracing::{info, warn};
 
@@ -183,6 +184,13 @@ pub async fn push_test(State(state): State<Arc<AppState>>, Json(body): Json<Test
         );
     };
     let now = Utc::now();
+    let zone = state
+        .config
+        .topology
+        .user_timezone()
+        .ok()
+        .map(|tz| tz.iana_name().to_string())
+        .unwrap_or_else(|| UserTimezone::default_zone().iana_name().to_string());
     let target = format!("sub:{}", sub.id);
     let key = format!("test/{}", now.timestamp());
     if let Err(err) = outbox.enqueue(
@@ -191,9 +199,11 @@ pub async fn push_test(State(state): State<Arc<AppState>>, Json(body): Json<Test
             channel: "webpush".into(),
             target,
             title: "Liberado test".into(),
-            body: "Liberado test notification.".into(),
+            body: copy::test_notification_body(&zone, now),
             due_at: now,
             catch_up: false,
+            kind: Some(TEST.into()),
+            source: Some(OutboxSource::Settings),
         },
         now,
     ) {

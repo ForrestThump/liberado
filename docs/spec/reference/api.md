@@ -415,3 +415,7 @@ on loopback if it can reach the bind address — scope MCP grants accordingly.
 
 Click-ack is intentionally unauthenticated so an installed PWA can ack after the owner signs out.
 Subscription management stays owner-only.
+
+Web Push JSON is version `v: 2`. The service worker still reads `title`, `body`, `tag`, `rows`, and
+`url`. Additional fields include `kind`, `outbox_id`, `due_at` (RFC 3339 UTC), `late`, `source`, and
+digest `items`. Outbox rows store nullable `kind` and `source_json` (schema v3 in `liberado.db`).

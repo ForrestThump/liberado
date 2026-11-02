@@ -234,7 +234,20 @@ async fn assemble_daemon(
     // Every reaction is a hosted background session on the hub (E3) — joinable, cancellable.
     .with_goal_hub(goals.clone());
     if let (Some(outbox), Some(delivery)) = (daemon.outbox(), daemon.outbox_delivery()) {
-        liberado_daemon::reminders::spawn_worker(outbox, delivery, config.tuning.reminders.clone());
+        let display_zone = daemon
+            .user_timezone()
+            .map(|tz| tz.iana_name().to_string())
+            .unwrap_or_else(|| {
+                liberado_common::UserTimezone::default_zone()
+                    .iana_name()
+                    .to_string()
+            });
+        liberado_daemon::reminders::spawn_worker(
+            outbox,
+            delivery,
+            config.tuning.reminders.clone(),
+            display_zone,
+        );
     }
 
     // One binding map for cron delivery, the text bridge, and approval routing. Telegram is
