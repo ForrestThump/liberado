@@ -255,9 +255,10 @@ async fn snooze_outbox_enqueues_followup_and_acks_original() {
         .unwrap();
     assert_eq!(response.status(), StatusCode::NO_CONTENT);
     assert!(outbox.acked(1).unwrap());
-    let rows = outbox.due_rows(now, 10).unwrap();
+    let rows = outbox.due_rows(Utc::now(), 10).unwrap();
     assert!(
         rows.iter().any(|row| row.title.starts_with("Snoozed:")),
-        "expected snoozed follow-up row"
+        "expected snoozed follow-up row, got: {:?}",
+        rows.iter().map(|r| r.title.as_str()).collect::<Vec<_>>()
     );
 }
