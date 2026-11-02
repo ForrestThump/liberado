@@ -410,12 +410,18 @@ on loopback if it can reach the bind address — scope MCP grants accordingly.
 | `POST /api/push/test` | owner | Enqueue a test Web Push row for one subscription (`endpoint` or `id` in the JSON body; must match a registered device) |
 | `POST /api/client-errors` | owner | Truncated WebUI panic/client error text at WARN (no secrets) |
 | `GET /api/outbox` | owner | Visible pending/failed reminder rows |
+| `GET /api/outbox/{id}` | owner | One outbox row for the notification detail page (`title`, `body`, `kind`, `due_at`, `late`, `source`, delivery/ack state, optional `obsidian_url`) |
 | `POST /api/outbox/{id}/retry` | owner | Retry a failed row |
+| `POST /api/outbox/{id}/complete` | owner | Mark a vault task done (`task_due` + `vault_note` source) or dismiss other kinds; sets `acked_at` |
+| `POST /api/outbox/{id}/snooze` | owner | `{minutes}` — enqueue a snoozed copy and ack the original |
 | `POST /api/outbox/ack` | none | `{id, token}` from the push payload; sets `acked_at` only |
 
 Click-ack is intentionally unauthenticated so an installed PWA can ack after the owner signs out.
 Subscription management stays owner-only.
 
 Web Push JSON is version `v: 2`. The service worker still reads `title`, `body`, `tag`, `rows`, and
-`url`. Additional fields include `kind`, `outbox_id`, `due_at` (RFC 3339 UTC), `late`, `source`, and
+`url` (single rows → `/notifications/<id>`, digest → `/notifications`). Additional fields include `kind`, `outbox_id`, `due_at` (RFC 3339 UTC), `late`, `source`, and
 digest `items`. Outbox rows store nullable `kind` and `source_json` (schema v3 in `liberado.db`).
+
+`topology.obsidian_vault_name` (optional) overrides the vault name embedded in server-built
+`obsidian://open` links; when unset, the basename of `topology.vault_path` is used.
