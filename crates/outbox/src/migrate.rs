@@ -92,6 +92,12 @@ fn migrate_v2_to_v3(conn: &Connection) -> Result<()> {
     if !column_exists(conn, "outbox", "source_json")? {
         conn.execute("ALTER TABLE outbox ADD COLUMN source_json TEXT", [])?;
     }
+    if !column_exists(conn, "outbox", "resolved_at")? {
+        conn.execute("ALTER TABLE outbox ADD COLUMN resolved_at TEXT", [])?;
+    }
+    if !column_exists(conn, "outbox", "resolution")? {
+        conn.execute("ALTER TABLE outbox ADD COLUMN resolution TEXT", [])?;
+    }
     set_version(conn, SCHEMA_VERSION)?;
     Ok(())
 }
@@ -255,6 +261,8 @@ VALUES (1, 'owner', 'Owner', x'00', '2026-01-01T00:00:00Z');
             .query_row("SELECT kind FROM outbox WHERE id = 1", [], |r| r.get(0))
             .unwrap();
         assert!(kind_null.is_none());
+        assert!(column_exists(&conn, "outbox", "resolved_at").unwrap());
+        assert!(column_exists(&conn, "outbox", "resolution").unwrap());
     }
 
     #[test]

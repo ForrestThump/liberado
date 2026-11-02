@@ -50,38 +50,50 @@ pub struct OutboxCounts {
 
 impl Outbox {
     pub fn enqueue(&self, row: &NewReminder, now: DateTime<Utc>) -> Result<EnqueueOutcome> {
-        let token = new_token();
-        let hash = hash_token(&token);
-        let when = stamp(now);
-        let due = stamp(row.due_at);
-        let conn = self.lock();
-        let changed = conn.execute(
-            "INSERT OR IGNORE INTO outbox (
-                idempotency_key, channel, target, title, body, state, attempts,
-                next_attempt_at, created_at, due_at, catch_up, ack_token_hash, ack_token,
-                kind, source_json
-            ) VALUES (?1, ?2, ?3, ?4, ?5, 'pending', 0, ?6, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
-            params![
-                row.idempotency_key,
-                row.channel,
-                row.target,
-                crate::row_open::clip(&row.title, 180),
-                crate::row_open::clip(&row.body, 1800),
-                when,
-                due,
-                if row.catch_up { 1 } else { 0 },
-                hash.as_slice(),
-                token,
-                row.kind.as_deref(),
-                OutboxSource::encode(&row.source),
-            ],
-        )?;
-        if changed == 0 {
-            return Ok(EnqueueOutcome::Duplicate);
-        }
-        Ok(EnqueueOutcome::Inserted(conn.last_insert_rowid()))
+        insert_reminder(&self.lock(), row, now)
     }
+}
 
+pub(crate) fn insert_reminder(
+    conn: &rusqlite::Connection,
+    row: &NewReminder,
+    now: DateTime<Utc>,
+) -> Result<EnqueueOutcome> {
+    let token = new_token();
+    let hash = hash_token(&token);
+    let when = stamp(now);
+    let attempt_at = if row.due_at > now { row.due_at } else { now };
+    let next = stamp(attempt_at);
+    let due = stamp(row.due_at);
+    let changed = conn.execute(
+        "INSERT OR IGNORE INTO outbox (
+            idempotency_key, channel, target, title, body, state, attempts,
+            next_attempt_at, created_at, due_at, catch_up, ack_token_hash, ack_token,
+            kind, source_json
+        ) VALUES (?1, ?2, ?3, ?4, ?5, 'pending', 0, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+        params![
+            row.idempotency_key,
+            row.channel,
+            row.target,
+            crate::row_open::clip(&row.title, 180),
+            crate::row_open::clip(&row.body, 1800),
+            next,
+            when,
+            due,
+            if row.catch_up { 1 } else { 0 },
+            hash.as_slice(),
+            token,
+            row.kind.as_deref(),
+            OutboxSource::encode(&row.source),
+        ],
+    )?;
+    if changed == 0 {
+        return Ok(EnqueueOutcome::Duplicate);
+    }
+    Ok(EnqueueOutcome::Inserted(conn.last_insert_rowid()))
+}
+
+impl Outbox {
     pub fn due_rows(&self, now: DateTime<Utc>, max_catchup: u32) -> Result<Vec<OpenRow>> {
         let when = stamp(now);
         let conn = self.lock();
@@ -89,6 +101,7 @@ impl Outbox {
             "SELECT id, channel, target, title, body, catch_up, due_at, ack_token, kind, source_json
              FROM outbox
              WHERE ack_token IS NOT NULL
+               AND resolved_at IS NULL
                AND ((state IN ('pending', 'failed') AND next_attempt_at <= ?1)
                  OR (state = 'delivering' AND lease_until <= ?1))
              ORDER BY due_at ASC",

@@ -15,6 +15,7 @@ mod kind;
 mod migrate;
 mod pass;
 mod plan;
+mod resolution;
 mod row_detail;
 mod row_open;
 mod rows;
@@ -38,6 +39,9 @@ pub use pass::{DeliverySink, PassLimits, PassReport, run_pass};
 pub use plan::{
     FanoutInput, OpenRow, PlannedTarget, TelegramMode, coalesce, fallback_reason,
     in_catchup_window, plan_targets,
+};
+pub use resolution::{
+    OwnerResolveResult, OwnerSnoozeResult, RES_COMPLETED, RES_DISMISSED, RES_SNOOZED,
 };
 pub use row_detail::OutboxRecord;
 pub use rows::{EnqueueOutcome, NewReminder, OutboxCounts, VisibleReminder};
