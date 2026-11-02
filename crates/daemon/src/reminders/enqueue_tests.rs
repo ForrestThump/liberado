@@ -31,6 +31,8 @@ fn enqueue_mechanical_writes_telegram_row_in_fallback_mode() {
         body: "Do the thing".into(),
         due_at: now,
         catch_up: false,
+        kind: liberado_outbox::TASK_LIST.into(),
+        source: None,
     };
     enqueue_mechanical(
         &outbox,

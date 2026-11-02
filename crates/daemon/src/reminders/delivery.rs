@@ -142,9 +142,8 @@ impl OutboxDelivery {
         let Ok(Some(sub)) = self.outbox.subscription_keys(id) else {
             return DeliveryOutcome::Gone;
         };
-        let rows_json = serde_json::to_string(&batch.rows).unwrap_or_else(|_| "[]".to_string());
-        let payload =
-            web_push::reminder_payload(&batch.title, &batch.body, &batch.tag, &rows_json, "/");
+        let input = push_input_from_batch(batch);
+        let payload = web_push::reminder_payload(&input);
         let delivery = web_push::post_push(
             keys,
             web_push::PushRequest {
@@ -173,5 +172,32 @@ impl OutboxDelivery {
             Ok(()) => DeliveryOutcome::Accepted,
             Err(message) => DeliveryOutcome::Retryable(message),
         }
+    }
+}
+
+pub fn push_input_from_batch(batch: &DeliveryBatch) -> web_push::ReminderPushInput {
+    let source = batch
+        .source
+        .as_ref()
+        .and_then(|value| serde_json::to_value(value).ok());
+    web_push::ReminderPushInput {
+        title: batch.title.clone(),
+        body: batch.body.clone(),
+        tag: batch.tag.clone(),
+        rows: batch
+            .rows
+            .iter()
+            .map(|row| (row.id, row.token.clone()))
+            .collect(),
+        kind: batch.kind.clone(),
+        outbox_id: batch.outbox_id,
+        due_at: batch.due_at,
+        late: batch.late,
+        source,
+        items: batch
+            .items
+            .iter()
+            .map(|item| (item.outbox_id, item.kind.clone(), item.title.clone()))
+            .collect(),
     }
 }

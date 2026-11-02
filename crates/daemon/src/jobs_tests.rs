@@ -358,7 +358,7 @@ async fn a_snapshot_runs_without_a_dispatcher_and_a_habit_uses_the_reminder_chan
     assert!(daemon.handle_mechanical(&habit).is_some());
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     let messages = sent.lock().unwrap().clone();
-    assert_eq!(messages, vec!["Plan the day.".to_string()]);
+    assert_eq!(messages, vec!["Plan the day. · Plan routine".to_string()]);
 }
 
 #[tokio::test]

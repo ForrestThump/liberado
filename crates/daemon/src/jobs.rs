@@ -7,7 +7,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use chrono::{NaiveDate, NaiveDateTime};
+use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
 use liberado_common::process::std_command;
 use liberado_common::{Event, UserTimezone};
 
@@ -159,7 +159,11 @@ fn vault_reminder_tick_effect(
         if rows.is_empty() {
             return JobEffect::Quiet;
         }
-        return JobEffect::RemindRows(rows.into_iter().map(mechanical_from_vault).collect());
+        return JobEffect::RemindRows(
+            rows.into_iter()
+                .map(crate::reminders::mechanical::from_vault)
+                .collect(),
+        );
     }
     match crate::vault_pings::reminder_message(root, tick) {
         Some(text) => JobEffect::Remind(text),
@@ -222,9 +226,14 @@ impl Daemon {
         text: &str,
         job: &JobRequest,
         catch_up: bool,
-        fire_at: chrono::DateTime<chrono::Utc>,
+        fire_at: DateTime<Utc>,
     ) {
-        let item = mechanical_from_text(job, text, catch_up, fire_at);
+        let zone = self
+            .user_timezone
+            .as_ref()
+            .map(|tz| tz.iana_name().to_string())
+            .unwrap_or_else(|| UserTimezone::default_zone().iana_name().to_string());
+        let item = crate::reminders::mechanical::from_text(job, text, catch_up, fire_at, &zone);
         self.send_reminder_rows(std::slice::from_ref(&item), job, catch_up, fire_at);
     }
 
@@ -264,33 +273,6 @@ impl Daemon {
                 }
             });
         }
-    }
-}
-
-fn mechanical_from_text(
-    job: &JobRequest,
-    text: &str,
-    catch_up: bool,
-    fire_at: chrono::DateTime<chrono::Utc>,
-) -> crate::reminders::MechanicalReminder {
-    crate::reminders::MechanicalReminder {
-        idempotency_key: format!("job/{}/{}", job.kind, fire_at.to_rfc3339()),
-        title: job.name.clone(),
-        body: text.to_string(),
-        due_at: fire_at,
-        catch_up,
-    }
-}
-
-fn mechanical_from_vault(
-    row: crate::vault_pings::DueReminderRow,
-) -> crate::reminders::MechanicalReminder {
-    crate::reminders::MechanicalReminder {
-        idempotency_key: row.idempotency_key,
-        title: row.title,
-        body: row.body,
-        due_at: row.due_at,
-        catch_up: false,
     }
 }
 

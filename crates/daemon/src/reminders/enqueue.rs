@@ -20,6 +20,8 @@ pub struct MechanicalReminder {
     pub body: String,
     pub due_at: DateTime<Utc>,
     pub catch_up: bool,
+    pub kind: String,
+    pub source: Option<liberado_outbox::OutboxSource>,
 }
 
 pub fn enqueue_mechanical(
@@ -55,6 +57,8 @@ pub fn enqueue_mechanical(
                 body: item.body.clone(),
                 due_at: item.due_at,
                 catch_up: item.catch_up,
+                kind: Some(item.kind.clone()),
+                source: item.source.clone(),
             };
             outbox.enqueue(&row, now).map_err(|err| err.to_string())?;
         }
@@ -66,11 +70,13 @@ pub fn spawn_worker(
     outbox: Arc<Outbox>,
     delivery: Arc<OutboxDelivery>,
     config: RemindersConfig,
+    display_zone: String,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         let limits = PassLimits {
             max_catchup: config.max_catchup_per_boot,
             max_attempts: i64::from(config.max_attempts),
+            display_zone: &display_zone,
         };
         let sink: &dyn liberado_outbox::DeliverySink = delivery.as_ref();
         loop {
