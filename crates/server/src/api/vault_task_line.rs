@@ -112,25 +112,16 @@ fn checkbox_tail(line: &str) -> Option<(CheckboxState, usize)> {
             return Some((state, idx + marker.len()));
         }
     }
-    ordered_checkbox_tail(line, CheckboxState::Open)
-        .or_else(|| ordered_checkbox_tail(line, CheckboxState::Closed))
-}
-
-fn ordered_checkbox_tail(line: &str, want: CheckboxState) -> Option<(CheckboxState, usize)> {
     if !starts_with_ordered_task(line) {
         return None;
     }
-    let bracket = line.find('[')?;
-    let tail = &line[bracket..];
-    let (marker, state) = match want {
-        CheckboxState::Open if tail.starts_with("[ ]") => ("[ ]", CheckboxState::Open),
-        CheckboxState::Closed if tail.starts_with("[x]") || tail.starts_with("[X]") => {
-            let marker = &tail[..3];
-            (marker, CheckboxState::Closed)
-        }
-        _ => return None,
-    };
-    Some((state, bracket + marker.len()))
+    if let Some(idx) = line.find("[ ]") {
+        return Some((CheckboxState::Open, idx + 3));
+    }
+    if let Some(idx) = line.find("[x]") {
+        return Some((CheckboxState::Closed, idx + 3));
+    }
+    line.find("[X]").map(|idx| (CheckboxState::Closed, idx + 3))
 }
 
 fn strip_task_metadata(body: &str) -> &str {
@@ -223,5 +214,19 @@ mod tests {
         let note = "- [ ] Call dentist 📅 2026-11-01\n";
         let out = toggle_open_task_line(note, "Call dentist").unwrap();
         assert!(out.contains("- [x] Call dentist"));
+    }
+
+    #[test]
+    fn ordered_list_open_task_matches() {
+        let note = "1. [ ] Call dentist\n";
+        let out = toggle_open_task_line(note, "Call dentist").unwrap();
+        assert!(out.contains("1. [x] Call dentist"));
+    }
+
+    #[test]
+    fn star_bullet_task_matches() {
+        let note = "* [ ] Call dentist\n";
+        let out = toggle_open_task_line(note, "Call dentist").unwrap();
+        assert!(out.contains("* [x] Call dentist"));
     }
 }
