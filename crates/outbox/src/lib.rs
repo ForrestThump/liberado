@@ -15,6 +15,7 @@ mod kind;
 mod migrate;
 mod pass;
 mod plan;
+mod row_detail;
 mod row_open;
 mod rows;
 mod source;
@@ -38,7 +39,8 @@ pub use plan::{
     FanoutInput, OpenRow, PlannedTarget, TelegramMode, coalesce, fallback_reason,
     in_catchup_window, plan_targets,
 };
-pub use rows::{EnqueueOutcome, NewReminder, OutboxCounts, OutboxRecord, VisibleReminder};
+pub use row_detail::OutboxRecord;
+pub use rows::{EnqueueOutcome, NewReminder, OutboxCounts, VisibleReminder};
 pub use source::OutboxSource;
 pub use store::Outbox;
 pub use subs::{NewSubscription, SubscriptionKeys, SubscriptionView};
