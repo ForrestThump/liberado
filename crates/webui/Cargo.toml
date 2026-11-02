@@ -14,7 +14,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 chrono = { workspace = true }
 reqwest = { version = "0.12", default-features = false, features = ["json"] }
-pulldown-cmark = "0.13"
+pulldown-cmark = "0.13.6"
 chat-client-contract = { workspace = true }
 liberado-commands = { workspace = true }
 liberado-theme = { workspace = true }
