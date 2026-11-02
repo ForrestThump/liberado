@@ -8,6 +8,7 @@ use std::time::Duration;
 
 use aws_lc_rs::rand::{SecureRandom, SystemRandom};
 use chrono::{DateTime, SecondsFormat, Utc};
+use liberado_outbox::DIGEST;
 use serde::Serialize;
 
 use super::aesgcm::{self, SealParts};
@@ -31,9 +32,12 @@ pub struct PushRequest<'a> {
     pub urgency: &'a str,
 }
 
-/// Slice 2 will return `/notifications/<id>` for actionable kinds; keep `/` until that route ships.
-pub fn notification_url(_kind: &str, _outbox_id: i64) -> String {
-    "/".to_string()
+/// Landing URL for notification click navigation (service worker `payload.url`).
+pub fn notification_url(kind: &str, outbox_id: i64) -> String {
+    if kind == DIGEST {
+        return "/notifications".to_string();
+    }
+    format!("/notifications/{outbox_id}")
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -338,7 +342,7 @@ mod tests {
         assert_eq!(value["title"], "Due now: Call dentist");
         assert_eq!(value["body"], "Task due 2:00 PM · Tasks/Inbox.md");
         assert_eq!(value["tag"], "row-42");
-        assert_eq!(value["url"], "/");
+        assert_eq!(value["url"], "/notifications/42");
         assert!(value.get("rows").is_some());
     }
 
@@ -440,6 +444,7 @@ mod tests {
         });
         let value = parse_payload(&digest);
         assert_eq!(value["title"], "4 missed reminders");
+        assert_eq!(value["url"], "/notifications");
         assert!(value.get("items").is_some());
     }
 

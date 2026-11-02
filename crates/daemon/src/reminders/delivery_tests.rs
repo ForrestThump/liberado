@@ -170,4 +170,5 @@ fn web_push_payload_carries_outbox_id_and_kind() {
     let value: serde_json::Value = serde_json::from_str(&json).unwrap();
     assert_eq!(value["kind"], TASK_DUE);
     assert_eq!(value["outbox_id"], 42);
+    assert_eq!(value["url"], "/notifications/42");
 }

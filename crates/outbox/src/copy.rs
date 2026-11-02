@@ -42,6 +42,10 @@ pub fn format_time_12h(zone: Tz, at: DateTime<Utc>) -> String {
     format!("{hour12}:{minute:02} {suffix}")
 }
 
+pub fn format_time_12h_for_zone(zone_name: &str, at: DateTime<Utc>) -> String {
+    format_time_12h(parse_zone(zone_name), at)
+}
+
 pub fn task_due_title(label: &str, task_text: &str) -> String {
     let prefix = match label {
         "scheduled" => "Scheduled now",
