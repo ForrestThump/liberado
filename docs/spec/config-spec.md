@@ -55,8 +55,8 @@ Split by **concern**, not per-module (avoids file proliferation):
 - **Format**: TOML (Rust-idiomatic, unambiguous typing — avoids YAML's coercion surprises). Not in
   the vault, so consistency with Obsidian's YAML frontmatter is not a concern.
 - **Table scope is positional.** A header such as `[main_agent]` owns every key after it until the
-  next table header. Keep top-level keys such as `vault_path`, `daemon_socket`, and `provider`
-  before the first table. This is wrong:
+  next table header. Keep top-level keys such as `vault_path`, `obsidian_vault_name`,
+  `daemon_socket`, and `provider` before the first table. This is wrong:
 
   ```toml
   [main_agent]
@@ -341,6 +341,12 @@ is set, in which case they are civil time in that zone. Set `deliver = false` on
 `LIBERADO_REMINDER_BOT_TOKEN` and `LIBERADO_REMINDER_CHAT_ID`. It does not append to the
 Telegram-bound chat, and it does not start a session. If the reminder variables are unset, the
 job still runs and the text is logged.
+
+### Obsidian deep links — `obsidian_vault_name`
+
+Optional top-level string in `topology.toml`. The notification detail API and WebUI embed it in
+`obsidian://open?vault=…` links for vault-sourced reminders. When omitted, the basename of
+`vault_path` is used.
 
 ### Timed tick — `[vault_reminders]`
 
