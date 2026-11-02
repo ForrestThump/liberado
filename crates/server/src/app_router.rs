@@ -277,8 +277,7 @@ pub(crate) fn build_app_router(state: &Arc<AppState>, guard: &Arc<auth::ApiGuard
         None => api_surface,
     };
 
-    app
-        .route("/notifications", get(notifications_shell))
+    app.route("/notifications", get(notifications_shell))
         .route("/notifications/{id}", get(notifications_shell))
         // Compression is scoped to the static fallback, deliberately not applied to the router as
         // a whole. The payload that needs it is the release .wasm (multi-MB, ~4x compressible, and
@@ -300,11 +299,7 @@ pub(crate) fn build_app_router(state: &Arc<AppState>, guard: &Arc<auth::ApiGuard
 async fn notifications_shell() -> Response {
     let path = format!("{}/index.html", dist_dir());
     match tokio::fs::read(&path).await {
-        Ok(bytes) => (
-            [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
-            bytes,
-        )
-            .into_response(),
+        Ok(bytes) => ([(header::CONTENT_TYPE, "text/html; charset=utf-8")], bytes).into_response(),
         Err(_) => axum::http::StatusCode::NOT_FOUND.into_response(),
     }
 }

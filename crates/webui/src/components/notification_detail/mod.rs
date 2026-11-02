@@ -44,12 +44,10 @@ pub fn NotificationDetailPage(api_base: String, outbox_id: i64, route: Signal<Ro
     let actions = row_snapshot
         .as_ref()
         .map(|row| detail_actions(&row.kind, source_type));
-    let why = row_snapshot.as_ref().map(|row| {
-        why_now_text(row.late, row.catch_up, &row.due_at_local)
-    });
-    let kind_label = row_snapshot
+    let why = row_snapshot
         .as_ref()
-        .map(|row| what_kind_label(&row.kind));
+        .map(|row| why_now_text(row.late, row.catch_up, &row.due_at_local));
+    let kind_label = row_snapshot.as_ref().map(|row| what_kind_label(&row.kind));
     let source_path = row_snapshot
         .as_ref()
         .and_then(|row| source_note_path(&row.source));

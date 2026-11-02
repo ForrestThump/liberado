@@ -101,7 +101,10 @@ pub async fn snooze_outbox(
     Json(body): Json<SnoozeBody>,
 ) -> Response {
     if body.minutes <= 0 || body.minutes > 60 * 24 * 7 {
-        return fail(StatusCode::BAD_REQUEST, "minutes must be between 1 and 10080");
+        return fail(
+            StatusCode::BAD_REQUEST,
+            "minutes must be between 1 and 10080",
+        );
     }
     let Some(outbox) = state.outbox.as_ref() else {
         return fail(StatusCode::SERVICE_UNAVAILABLE, "outbox is not available");
@@ -137,10 +140,7 @@ pub async fn snooze_outbox(
     }
 }
 
-pub fn obsidian_vault_display_name(
-    vault_path: &Path,
-    configured: Option<&str>,
-) -> String {
+pub fn obsidian_vault_display_name(vault_path: &Path, configured: Option<&str>) -> String {
     if let Some(name) = configured.map(str::trim).filter(|value| !value.is_empty()) {
         return name.to_string();
     }
@@ -159,7 +159,10 @@ pub fn obsidian_open_url(vault_name: &str, rel_path: &str) -> String {
     url.to_string()
 }
 
-pub fn obsidian_url_for(topology: &liberado_config::Topology, source: Option<&OutboxSource>) -> Option<String> {
+pub fn obsidian_url_for(
+    topology: &liberado_config::Topology,
+    source: Option<&OutboxSource>,
+) -> Option<String> {
     let OutboxSource::VaultNote { path, .. } = source? else {
         return None;
     };
@@ -202,7 +205,11 @@ fn operator_zone(state: &AppState) -> String {
         .user_timezone()
         .ok()
         .map(|tz| tz.iana_name().to_string())
-        .unwrap_or_else(|| liberado_common::UserTimezone::default_zone().iana_name().to_string())
+        .unwrap_or_else(|| {
+            liberado_common::UserTimezone::default_zone()
+                .iana_name()
+                .to_string()
+        })
 }
 
 fn open_row_from_record(record: &OutboxRecord) -> OpenRow {
@@ -220,23 +227,19 @@ fn open_row_from_record(record: &OutboxRecord) -> OpenRow {
     }
 }
 
-async fn complete_vault_task(vault_path: &str, rel_path: &str, task_text: &str) -> Result<(), String> {
+async fn complete_vault_task(
+    vault_path: &str,
+    rel_path: &str,
+    task_text: &str,
+) -> Result<(), String> {
     let vault = Vault::open("outbox-complete", vault_path)
         .await
         .map_err(|err| err.to_string())?;
-    let content = vault
-        .read(rel_path)
-        .await
-        .map_err(|err| err.to_string())?;
+    let content = vault.read(rel_path).await.map_err(|err| err.to_string())?;
     let updated = toggle_open_task_line(&content, task_text)?;
     let hash = Vault::content_hash(&content);
     vault
-        .write(
-            rel_path,
-            &updated,
-            Some(&hash),
-            &WriteProvenance::human(),
-        )
+        .write(rel_path, &updated, Some(&hash), &WriteProvenance::human())
         .await
         .map_err(|err| err.to_string())?;
     Ok(())
@@ -270,11 +273,7 @@ fn toggle_open_task_line(content: &str, task_text: &str) -> Result<String, Strin
 }
 
 fn line_contains_task(line: &str, task_text: &str) -> bool {
-    let stripped = line
-        .split("- [ ]")
-        .nth(1)
-        .unwrap_or(line)
-        .trim();
+    let stripped = line.split("- [ ]").nth(1).unwrap_or(line).trim();
     stripped.contains(task_text) || task_text.contains(stripped)
 }
 

@@ -9,12 +9,12 @@ mod goals;
 mod grants;
 mod library;
 mod mcp_status;
-mod plugins;
-mod profiles;
-mod reminders;
 mod outbox_detail;
 #[cfg(test)]
 mod outbox_detail_http_tests;
+mod plugins;
+mod profiles;
+mod reminders;
 #[cfg(test)]
 mod reminders_http_tests;
 pub(crate) mod schedule_description;
@@ -40,9 +40,9 @@ pub use goals::{
 };
 pub use grants::{conversation_grants, get_header_grant};
 pub use library::list_library;
+pub use outbox_detail::{complete_outbox, get_outbox_detail, snooze_outbox};
 pub use plugins::set_plugin_enabled;
 pub use profiles::{delete_profile, rename_profile};
-pub use outbox_detail::{complete_outbox, get_outbox_detail, snooze_outbox};
 pub use reminders::{
     delete_subscription, list_outbox, list_subscriptions, outbox_ack_with_state, push_status,
     push_test, report_client_error, retry_outbox, upsert_subscription, vapid_public_key,

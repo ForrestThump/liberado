@@ -30,7 +30,10 @@ async fn owner_outbox_app(outbox: Arc<Outbox>, vault_path: std::path::PathBuf) -
             "/api/outbox/{id}/complete",
             axum::routing::post(complete_outbox),
         )
-        .route("/api/outbox/{id}/snooze", axum::routing::post(snooze_outbox))
+        .route(
+            "/api/outbox/{id}/snooze",
+            axum::routing::post(snooze_outbox),
+        )
         .route_layer(axum::middleware::from_fn(crate::auth::require_owner))
         .route_layer(axum::middleware::from_fn_with_state(
             guard.clone(),
@@ -75,7 +78,11 @@ async fn get_outbox_detail_requires_owner_auth() {
         .unwrap();
     let outbox = Arc::new(Outbox::open(&path).unwrap());
     let app = owner_outbox_app(outbox, std::path::PathBuf::from("/tmp/v")).await;
-    let response = app.clone().oneshot(anon_get("/api/outbox/1")).await.unwrap();
+    let response = app
+        .clone()
+        .oneshot(anon_get("/api/outbox/1"))
+        .await
+        .unwrap();
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
 }
 
@@ -119,10 +126,12 @@ async fn get_outbox_detail_returns_row_and_obsidian_url() {
         .unwrap();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["kind"], TASK_DUE);
-    assert!(json["obsidian_url"]
-        .as_str()
-        .unwrap()
-        .starts_with("obsidian://open?"));
+    assert!(
+        json["obsidian_url"]
+            .as_str()
+            .unwrap()
+            .starts_with("obsidian://open?")
+    );
 }
 
 #[tokio::test]
