@@ -53,6 +53,7 @@ pub(crate) struct DueReminderRow {
 struct DueItem {
     idempotency_key: String,
     legacy_key: String,
+    line: String,
     due_at: DateTime<Utc>,
     kind: &'static str,
     label: &'static str,
@@ -177,6 +178,11 @@ fn task_due(rel: &str, content: &str, line: &str, now: NaiveDateTime, zone: Tz) 
     Some(DueItem {
         legacy_key: fire_key("task", rel, &when_display, &identity),
         idempotency_key,
+        line: format!(
+            "{} — {} {when_display} — {rel}",
+            content.trim(),
+            stamp.label
+        ),
         due_at,
         kind: TASK_DUE,
         label: stamp.label,
@@ -312,6 +318,7 @@ fn events_due(rel: &str, text: &str, now: NaiveDateTime, zone: Tz) -> Vec<DueIte
         items.push(DueItem {
             legacy_key: fire_key("event", rel, &when_display, title),
             idempotency_key,
+            line: format!("{} — {when_display} — {rel}", event.title),
             due_at,
             kind: EVENT_START,
             label: "scheduled",
@@ -329,7 +336,7 @@ fn fire_key(kind: &str, path: &str, when: &str, id: &str) -> String {
 fn render(items: &[&DueItem]) -> String {
     let mut lines = vec!["Reminders".to_string(), String::new()];
     for item in items {
-        lines.push(format!("- {} — {} — {}", item.text, item.label, item.path));
+        lines.push(format!("- {}", item.line));
     }
     lines.join("\n")
 }

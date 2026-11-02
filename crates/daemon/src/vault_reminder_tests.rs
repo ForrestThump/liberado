@@ -94,12 +94,24 @@ fn a_marked_task_fires_on_its_local_minute_and_an_unmarked_task_does_not() {
     )
     .unwrap();
     let message = run(root.path(), at(21, 0), enabled(), &state).expect("fires");
-    assert!(message.contains("- trash — due — Home.md"), "{message}");
+    assert!(message.contains("trash"), "{message}");
+    assert!(message.contains("due 2026-09-29 21:00"), "{message}");
+    assert!(message.contains("bins"), "{message}");
+    assert!(message.contains("scheduled 2026-09-29 21:00"), "{message}");
+    assert!(message.contains("draft"), "{message}");
+    assert!(message.contains("start 2026-09-29 21:00"), "{message}");
     assert!(
-        message.contains("- bins remind:: true — scheduled — Home.md"),
+        message.contains("- trash — due 2026-09-29 21:00 — Home.md"),
         "{message}"
     );
-    assert!(message.contains("- draft — start — Home.md"), "{message}");
+    assert!(
+        message.contains("- bins remind:: true — scheduled 2026-09-29 21:00 — Home.md"),
+        "{message}"
+    );
+    assert!(
+        message.contains("- draft — start 2026-09-29 21:00 — Home.md"),
+        "{message}"
+    );
     assert!(!message.contains("bills"), "{message}");
     assert!(!message.contains("later"), "{message}");
     assert!(!message.contains("other"), "{message}");
@@ -210,6 +222,38 @@ fn task_and_event_switches_are_independent() {
     .expect("event");
     assert!(message.contains("Dentist"), "{message}");
     assert!(!message.contains("trash"), "{message}");
+}
+
+#[test]
+fn legacy_event_reminder_line_has_title_time_and_path_without_label() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(root.path().join("calendar")).unwrap();
+    std::fs::write(
+        root.path().join("calendar/dentist.md"),
+        "---\ntitle: Dentist\ndate: 2026-09-29\nstartTime: 21:00\nremind: true\n---\n",
+    )
+    .unwrap();
+    let settings = VaultRemindersConfig {
+        enabled: true,
+        tasks: false,
+        events: true,
+        ..VaultRemindersConfig::default()
+    };
+    let message = run(
+        root.path(),
+        at(21, 0),
+        settings,
+        &root.path().join("fires.json"),
+    )
+    .expect("event");
+    assert!(
+        message.contains("- Dentist — 2026-09-29 21:00 — calendar/dentist.md"),
+        "{message}"
+    );
+    assert!(
+        !message.contains(" — scheduled 2026-09-29"),
+        "event lines must not use task-style labels: {message}"
+    );
 }
 
 #[test]
