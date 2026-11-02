@@ -237,7 +237,6 @@ fn legacy_event_reminder_line_has_title_time_and_path_without_label() {
         enabled: true,
         tasks: false,
         events: true,
-        ..VaultRemindersConfig::default()
     };
     let message = run(
         root.path(),
