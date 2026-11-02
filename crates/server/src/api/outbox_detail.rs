@@ -152,7 +152,9 @@ pub fn obsidian_vault_display_name(vault_path: &Path, configured: Option<&str>) 
 }
 
 pub fn obsidian_open_url(vault_name: &str, rel_path: &str) -> String {
-    let mut url = url::Url::parse("obsidian://open").expect("obsidian scheme");
+    let Ok(mut url) = url::Url::parse("obsidian://open") else {
+        return String::new();
+    };
     url.query_pairs_mut()
         .append_pair("vault", vault_name)
         .append_pair("file", rel_path);

@@ -8,7 +8,6 @@ use std::time::Duration;
 
 use aws_lc_rs::rand::{SecureRandom, SystemRandom};
 use chrono::{DateTime, SecondsFormat, Utc};
-use liberado_outbox::DIGEST;
 use serde::Serialize;
 
 use super::aesgcm::{self, SealParts};
@@ -34,7 +33,7 @@ pub struct PushRequest<'a> {
 
 /// Landing URL for notification click navigation (service worker `payload.url`).
 pub fn notification_url(kind: &str, outbox_id: i64) -> String {
-    if kind == DIGEST {
+    if kind == "digest" {
         return "/notifications".to_string();
     }
     format!("/notifications/{outbox_id}")
