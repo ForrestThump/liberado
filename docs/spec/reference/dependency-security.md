@@ -35,8 +35,9 @@ still debt, not an audit.
 `deny.toml` allows the build script `pulldown-cmark@0.13.6`. The vet exemption
 in `supply-chain/config.toml` moved from 0.13.5 to 0.13.6 for
 RUSTSEC-2026-0433, quadratic parsing when wikilinks are enabled.
-0.13.6 is the patched release. The build script is not the same file as in
-0.13.5. The exemption is still debt, not an audit.
+0.13.6 is the patched release.
+The build script is the same file as in 0.13.5 (9313 bytes, byte-identical).
+The exemption is still debt, not an audit.
 
 The 2026-10 TLS and Tokio advisories moved four exemptions to the patched
 versions. No exemption was added and no criteria changed; each one names a
