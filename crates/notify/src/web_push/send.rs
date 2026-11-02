@@ -338,11 +338,83 @@ mod tests {
             items: Vec::new(),
         });
         let value = parse_payload(&json);
+        let mut keys: Vec<_> = value.as_object().expect("object").keys().cloned().collect();
+        keys.sort_unstable();
+        assert_eq!(
+            keys,
+            [
+                "body",
+                "due_at",
+                "kind",
+                "late",
+                "outbox_id",
+                "rows",
+                "source",
+                "tag",
+                "title",
+                "url",
+                "v"
+            ]
+        );
         assert_eq!(value["title"], "Due now: Call dentist");
         assert_eq!(value["body"], "Task due 2:00 PM · Tasks/Inbox.md");
         assert_eq!(value["tag"], "row-42");
         assert_eq!(value["url"], "/notifications/42");
-        assert!(value.get("rows").is_some());
+        assert_eq!(
+            value["rows"],
+            serde_json::json!([{"id": 42, "token": "ab"}])
+        );
+        assert!(!json.contains("p256dh"), "{json}");
+        assert!(!json.contains("LIBERADO_"), "{json}");
+        assert!(
+            !json.contains("\"auth\""),
+            "subscription auth must not appear in payload: {json}"
+        );
+    }
+
+    #[test]
+    fn digest_payload_exact_top_level_keys_and_rows() {
+        let json = reminder_payload(&ReminderPushInput {
+            title: "4 missed reminders".into(),
+            body: "a\nb".into(),
+            tag: "digest".into(),
+            rows: vec![(1, "a".into()), (2, "b".into())],
+            kind: DIGEST.into(),
+            outbox_id: None,
+            due_at: None,
+            late: true,
+            source: None,
+            items: vec![(1, TASK_DUE.into(), "Due now: x".into())],
+        });
+        let value = parse_payload(&json);
+        let mut keys: Vec<_> = value.as_object().expect("object").keys().cloned().collect();
+        keys.sort_unstable();
+        assert_eq!(
+            keys,
+            [
+                "body",
+                "due_at",
+                "items",
+                "kind",
+                "late",
+                "outbox_id",
+                "rows",
+                "tag",
+                "title",
+                "url",
+                "v"
+            ]
+        );
+        assert_eq!(
+            value["rows"],
+            serde_json::json!([{"id": 1, "token": "a"}, {"id": 2, "token": "b"}])
+        );
+        assert!(!json.contains("p256dh"), "{json}");
+        assert!(!json.contains("LIBERADO_"), "{json}");
+        assert!(
+            !json.contains("\"auth\""),
+            "subscription auth must not appear in payload: {json}"
+        );
     }
 
     #[test]

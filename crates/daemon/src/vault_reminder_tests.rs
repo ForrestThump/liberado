@@ -94,12 +94,12 @@ fn a_marked_task_fires_on_its_local_minute_and_an_unmarked_task_does_not() {
     )
     .unwrap();
     let message = run(root.path(), at(21, 0), enabled(), &state).expect("fires");
-    assert!(message.contains("trash"), "{message}");
-    assert!(message.contains("due"), "{message}");
-    assert!(message.contains("bins"), "{message}");
-    assert!(message.contains("scheduled"), "{message}");
-    assert!(message.contains("draft"), "{message}");
-    assert!(message.contains("start"), "{message}");
+    assert!(message.contains("- trash — due — Home.md"), "{message}");
+    assert!(
+        message.contains("- bins remind:: true — scheduled — Home.md"),
+        "{message}"
+    );
+    assert!(message.contains("- draft — start — Home.md"), "{message}");
     assert!(!message.contains("bills"), "{message}");
     assert!(!message.contains("later"), "{message}");
     assert!(!message.contains("other"), "{message}");
