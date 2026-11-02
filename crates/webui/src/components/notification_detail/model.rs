@@ -10,4 +10,7 @@ pub struct OutboxDetail {
     pub catch_up: bool,
     pub source: Option<serde_json::Value>,
     pub obsidian_url: Option<String>,
+    pub resolution: Option<String>,
+    pub resolved_at: Option<String>,
+    pub snooze_until_local: Option<String>,
 }

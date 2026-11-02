@@ -44,7 +44,30 @@ pub struct DetailActions {
     pub complete_label: &'static str,
 }
 
-pub fn detail_actions(kind: &str, source_type: Option<&str>) -> DetailActions {
+pub fn resolution_state_text(
+    resolution: Option<&str>,
+    snooze_until_local: Option<&str>,
+) -> Option<String> {
+    match resolution {
+        Some("completed") => Some("Completed".into()),
+        Some("dismissed") => Some("Dismissed".into()),
+        Some("snoozed") => {
+            let until = snooze_until_local.unwrap_or("later");
+            Some(format!("Snoozed until {until}"))
+        }
+        _ => None,
+    }
+}
+
+pub fn detail_actions(kind: &str, source_type: Option<&str>, resolved: bool) -> DetailActions {
+    if resolved {
+        return DetailActions {
+            show_complete: false,
+            show_snooze: false,
+            show_obsidian: source_type == Some("vault_note"),
+            complete_label: "Mark complete",
+        };
+    }
     let vault_note = source_type == Some("vault_note");
     let show_complete = kind == TASK_DUE && vault_note
         || matches!(
@@ -110,19 +133,43 @@ mod tests {
 
     #[test]
     fn detail_actions_per_kind_and_source() {
-        let task = detail_actions(TASK_DUE, Some("vault_note"));
+        let task = detail_actions(TASK_DUE, Some("vault_note"), false);
         assert!(task.show_complete);
         assert!(task.show_obsidian);
         assert_eq!(task.complete_label, "Mark complete");
 
-        let habit = detail_actions(HABIT, Some("schedule"));
+        let habit = detail_actions(HABIT, Some("schedule"), false);
         assert!(habit.show_complete);
         assert!(!habit.show_obsidian);
         assert_eq!(habit.complete_label, "Dismiss");
 
-        let test = detail_actions(TEST, Some("settings"));
+        let test = detail_actions(TEST, Some("settings"), false);
         assert!(test.show_complete);
         assert!(!test.show_snooze);
+    }
+
+    #[test]
+    fn resolution_state_text_maps_owner_outcomes() {
+        assert_eq!(
+            resolution_state_text(Some("completed"), None),
+            Some("Completed".into())
+        );
+        assert_eq!(
+            resolution_state_text(Some("dismissed"), None),
+            Some("Dismissed".into())
+        );
+        assert_eq!(
+            resolution_state_text(Some("snoozed"), Some("3:15 PM")),
+            Some("Snoozed until 3:15 PM".into())
+        );
+    }
+
+    #[test]
+    fn detail_actions_hide_when_resolved() {
+        let resolved = detail_actions(TASK_DUE, Some("vault_note"), true);
+        assert!(!resolved.show_complete);
+        assert!(!resolved.show_snooze);
+        assert!(resolved.show_obsidian);
     }
 
     #[test]

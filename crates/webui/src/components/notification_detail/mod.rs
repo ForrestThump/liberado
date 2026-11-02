@@ -6,7 +6,9 @@ use dioxus::prelude::*;
 
 use crate::components::sidebar::Route;
 use crate::http;
-use crate::notification_route::{detail_actions, what_kind_label, why_now_text};
+use crate::notification_route::{
+    detail_actions, resolution_state_text, what_kind_label, why_now_text,
+};
 
 use self::model::OutboxDetail;
 
@@ -41,9 +43,13 @@ pub fn NotificationDetailPage(api_base: String, outbox_id: i64, route: Signal<Ro
         .and_then(|row| row.source.as_ref())
         .and_then(|value| value.get("type"))
         .and_then(|value| value.as_str());
-    let actions = row_snapshot
-        .as_ref()
-        .map(|row| detail_actions(&row.kind, source_type));
+    let actions = row_snapshot.as_ref().map(|row| {
+        let resolved = row.resolution.is_some();
+        detail_actions(&row.kind, source_type, resolved)
+    });
+    let resolved_line = row_snapshot.as_ref().and_then(|row| {
+        resolution_state_text(row.resolution.as_deref(), row.snooze_until_local.as_deref())
+    });
     let why = row_snapshot
         .as_ref()
         .map(|row| why_now_text(row.late, row.catch_up, &row.due_at_local));
@@ -58,8 +64,6 @@ pub fn NotificationDetailPage(api_base: String, outbox_id: i64, route: Signal<Ro
     let api_for_complete = api_base.clone();
     let api_for_snooze_15 = api_base.clone();
     let api_for_snooze_60 = api_base.clone();
-    let mut route_snooze_15 = route;
-    let mut route_snooze_60 = route;
 
     rsx! {
         div { class: "grok-main-phone-scroll notification-detail",
@@ -71,10 +75,14 @@ pub fn NotificationDetailPage(api_base: String, outbox_id: i64, route: Signal<Ro
                     "← Notifications"
                 }
             }
-            if let Some(err) = error() {
-                p { class: "notification-detail-error", "{err}" }
-            } else if let Some(row) = row_snapshot {
+            if let Some(row) = row_snapshot {
+                if let Some(err) = error() {
+                    p { class: "notification-detail-error", "{err}" }
+                }
                 h1 { class: "grok-page-title", "{row.title}" }
+                if let Some(state) = resolved_line {
+                    p { class: "notification-detail-resolved", "{state}" }
+                }
                 if let Some(label) = kind_label {
                     p { class: "notification-detail-kind", "{label}" }
                 }
@@ -122,9 +130,9 @@ pub fn NotificationDetailPage(api_base: String, outbox_id: i64, route: Signal<Ro
                                         busy.set(true);
                                         if let Err(err) = snooze(&base, outbox_id, 15).await {
                                             error.set(Some(err));
-                                        } else {
-                                            route_snooze_15.set(Route::Notifications);
-                                            sync_path("/notifications");
+                                        } else if let Ok(row) = fetch_detail(&base, outbox_id).await {
+                                            detail.set(Some(row));
+                                            error.set(None);
                                         }
                                         busy.set(false);
                                     });
@@ -141,9 +149,9 @@ pub fn NotificationDetailPage(api_base: String, outbox_id: i64, route: Signal<Ro
                                         busy.set(true);
                                         if let Err(err) = snooze(&base, outbox_id, 60).await {
                                             error.set(Some(err));
-                                        } else {
-                                            route_snooze_60.set(Route::Notifications);
-                                            sync_path("/notifications");
+                                        } else if let Ok(row) = fetch_detail(&base, outbox_id).await {
+                                            detail.set(Some(row));
+                                            error.set(None);
                                         }
                                         busy.set(false);
                                     });
@@ -164,6 +172,8 @@ pub fn NotificationDetailPage(api_base: String, outbox_id: i64, route: Signal<Ro
                         }
                     }
                 }
+            } else if let Some(err) = error() {
+                p { class: "notification-detail-error", "{err}" }
             } else {
                 p { class: "notification-detail-loading", "Loading…" }
             }
@@ -239,7 +249,19 @@ async fn snooze(base: &str, id: i64, minutes: i64) -> Result<(), String> {
     if response.status().is_success() {
         Ok(())
     } else {
-        Err(format!("HTTP {}", response.status()))
+        let status = response.status();
+        let message = response
+            .json::<serde_json::Value>()
+            .await
+            .ok()
+            .and_then(|value| {
+                value
+                    .get("error")
+                    .and_then(|err| err.as_str())
+                    .map(str::to_string)
+            })
+            .unwrap_or_else(|| format!("HTTP {status}"));
+        Err(message)
     }
 }
 
