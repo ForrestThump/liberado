@@ -23,7 +23,7 @@ pub struct Topology {
     /// Path to the Obsidian vault (the source of truth). Required.
     pub vault_path: PathBuf,
     /// Name Obsidian expects in `obsidian://open?vault=…` URIs. Defaults to the final component of
-    /// [`vault_path`] when unset.
+    /// [`Self::vault_path`] when unset.
     #[serde(default)]
     pub obsidian_vault_name: Option<String>,
     /// Operator's IANA timezone — **single source of truth** for local wall-clock across Liberado
