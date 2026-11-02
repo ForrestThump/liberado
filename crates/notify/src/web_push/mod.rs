@@ -9,7 +9,10 @@ mod b64;
 mod send;
 mod vapid;
 
-pub use send::{PushDelivery, PushRequest, REMINDER_TTL, post_push, reminder_payload};
+pub use send::{
+    PushDelivery, PushRequest, REMINDER_TTL, ReminderPushInput, notification_url, post_push,
+    reminder_payload,
+};
 pub use vapid::vapid_env_lines;
 
 use vapid::VapidMaterial;

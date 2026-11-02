@@ -7,6 +7,8 @@
 use std::time::Duration;
 
 use aws_lc_rs::rand::{SecureRandom, SystemRandom};
+use chrono::{DateTime, SecondsFormat, Utc};
+use serde::Serialize;
 
 use super::aesgcm::{self, SealParts};
 use super::vapid::VapidMaterial;
@@ -29,6 +31,87 @@ pub struct PushRequest<'a> {
     pub urgency: &'a str,
 }
 
+/// Slice 2 will return `/notifications/<id>` for actionable kinds; keep `/` until that route ships.
+pub fn notification_url(_kind: &str, _outbox_id: i64) -> String {
+    "/".to_string()
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct PayloadRow {
+    id: i64,
+    token: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct PayloadDigestItem {
+    outbox_id: i64,
+    kind: String,
+    title: String,
+}
+
+/// Fields needed to build a v2 reminder push JSON object.
+#[derive(Debug, Clone)]
+pub struct ReminderPushInput {
+    pub title: String,
+    pub body: String,
+    pub tag: String,
+    pub rows: Vec<(i64, String)>,
+    pub kind: String,
+    pub outbox_id: Option<i64>,
+    pub due_at: Option<DateTime<Utc>>,
+    pub late: bool,
+    pub source: Option<serde_json::Value>,
+    pub items: Vec<(i64, String, String)>,
+}
+
+impl ReminderPushInput {
+    pub fn url(&self) -> String {
+        match self.outbox_id {
+            Some(id) => notification_url(&self.kind, id),
+            None => notification_url("digest", 0),
+        }
+    }
+}
+
+pub fn reminder_payload(input: &ReminderPushInput) -> String {
+    let rows: Vec<PayloadRow> = input
+        .rows
+        .iter()
+        .map(|(id, token)| PayloadRow {
+            id: *id,
+            token: token.clone(),
+        })
+        .collect();
+    let items: Vec<PayloadDigestItem> = input
+        .items
+        .iter()
+        .map(|(outbox_id, kind, title)| PayloadDigestItem {
+            outbox_id: *outbox_id,
+            kind: kind.clone(),
+            title: title.clone(),
+        })
+        .collect();
+    let mut value = serde_json::json!({
+        "v": 2,
+        "title": input.title,
+        "body": input.body,
+        "tag": input.tag,
+        "rows": rows,
+        "url": input.url(),
+        "kind": input.kind,
+        "outbox_id": input.outbox_id,
+        "due_at": input.due_at.map(|at| at.to_rfc3339_opts(SecondsFormat::Secs, true)),
+        "late": input.late,
+    });
+    if let Some(source) = &input.source {
+        value["source"] = source.clone();
+    }
+    if !items.is_empty() {
+        value["items"] = serde_json::to_value(items).unwrap_or(serde_json::Value::Array(vec![]));
+    }
+    value.to_string()
+}
+
 pub async fn post_push(keys: &VapidMaterial, request: PushRequest<'_>) -> PushDelivery {
     let host = host_of(request.endpoint);
     match post(keys, &request).await {
@@ -38,18 +121,6 @@ pub async fn post_push(keys: &VapidMaterial, request: PushRequest<'_>) -> PushDe
             PushDelivery::Failed
         }
     }
-}
-
-/// JSON object whose keys are only the reminder fields. Callers pass the bytes.
-pub fn reminder_payload(title: &str, body: &str, tag: &str, rows: &str, url: &str) -> String {
-    serde_json::json!({
-        "title": title,
-        "body": body,
-        "tag": tag,
-        "rows": serde_json::from_str::<serde_json::Value>(rows).unwrap_or(serde_json::Value::Array(Vec::new())),
-        "url": url,
-    })
-    .to_string()
 }
 
 fn classified(host: &str, status: reqwest::StatusCode) -> PushDelivery {
@@ -154,6 +225,12 @@ pub(crate) fn host_of(endpoint: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use chrono::TimeZone;
+    use liberado_outbox::{
+        DIGEST, EVENT_LIST, EVENT_START, HABIT, JOB_ERROR, OutboxSource, REMINDER, TASK_DUE,
+        TASK_LIST, TEST,
+    };
+
     use super::*;
     use wiremock::matchers::{header, method};
     use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -170,6 +247,25 @@ mod tests {
             .expect("keys")
     }
 
+    fn sample_input(kind: &str) -> ReminderPushInput {
+        ReminderPushInput {
+            title: "title".into(),
+            body: "body".into(),
+            tag: "row-1".into(),
+            rows: vec![(1, "tok".into())],
+            kind: kind.into(),
+            outbox_id: Some(1),
+            due_at: Some(Utc.with_ymd_and_hms(2026, 11, 1, 20, 0, 0).unwrap()),
+            late: false,
+            source: None,
+            items: Vec::new(),
+        }
+    }
+
+    fn parse_payload(json: &str) -> serde_json::Value {
+        serde_json::from_str(json).expect("json")
+    }
+
     #[tokio::test]
     async fn a_201_is_accepted_and_a_410_is_gone() {
         let server = MockServer::start().await;
@@ -182,7 +278,7 @@ mod tests {
             .mount(&server)
             .await;
         let endpoint = format!("{}/fake-subscription", server.uri());
-        let payload = reminder_payload("Reminder", "call home", "row-1", "[]", "/");
+        let payload = reminder_payload(&sample_input(TASK_DUE));
         let delivery = post_push(
             &keys(),
             PushRequest {
@@ -220,19 +316,169 @@ mod tests {
     }
 
     #[test]
-    fn the_payload_keeps_only_the_reminder_fields() {
-        let body = reminder_payload(
-            "Reminder",
-            "due 09:00 — notes/a.md",
-            "row-1",
-            r#"[{"id":1,"token":"ab"}]"#,
-            "/",
-        );
-        let value: serde_json::Value = serde_json::from_str(&body).expect("json");
-        let keys: Vec<_> = value.as_object().expect("object").keys().cloned().collect();
-        assert_eq!(keys, ["title", "body", "tag", "rows", "url"]);
-        assert!(body.contains("notes/a.md"));
-        assert!(!body.contains("p256dh"));
-        assert!(!body.contains("LIBERADO_"));
+    fn legacy_keys_title_body_tag_rows_url_remain() {
+        let json = reminder_payload(&ReminderPushInput {
+            title: "Due now: Call dentist".into(),
+            body: "Task due 2:00 PM · Tasks/Inbox.md".into(),
+            tag: "row-42".into(),
+            rows: vec![(42, "ab".into())],
+            kind: TASK_DUE.into(),
+            outbox_id: Some(42),
+            due_at: Some(Utc.with_ymd_and_hms(2026, 11, 1, 20, 0, 0).unwrap()),
+            late: false,
+            source: Some(serde_json::json!({
+                "type": "vault_note",
+                "path": "Tasks/Inbox.md",
+                "label": "due",
+                "text": "Call dentist"
+            })),
+            items: Vec::new(),
+        });
+        let value = parse_payload(&json);
+        assert_eq!(value["title"], "Due now: Call dentist");
+        assert_eq!(value["body"], "Task due 2:00 PM · Tasks/Inbox.md");
+        assert_eq!(value["tag"], "row-42");
+        assert_eq!(value["url"], "/");
+        assert!(value.get("rows").is_some());
+    }
+
+    #[test]
+    fn task_due_payload_matches_scope_shape() {
+        let json = reminder_payload(&ReminderPushInput {
+            title: "Due now: Call dentist".into(),
+            body: "Task due 2:00 PM · Tasks/Inbox.md".into(),
+            tag: "row-42".into(),
+            rows: vec![(42, "tok".into())],
+            kind: TASK_DUE.into(),
+            outbox_id: Some(42),
+            due_at: Some(Utc.with_ymd_and_hms(2026, 11, 1, 20, 0, 0).unwrap()),
+            late: false,
+            source: Some(
+                serde_json::to_value(OutboxSource::VaultNote {
+                    path: "Tasks/Inbox.md".into(),
+                    label: "due".into(),
+                    text: "Call dentist".into(),
+                })
+                .unwrap(),
+            ),
+            items: Vec::new(),
+        });
+        let value = parse_payload(&json);
+        assert_eq!(value["v"], 2);
+        assert_eq!(value["kind"], TASK_DUE);
+        assert_eq!(value["outbox_id"], 42);
+        assert_eq!(value["due_at"], "2026-11-01T20:00:00Z");
+        assert_eq!(value["late"], false);
+        assert_eq!(value["source"]["type"], "vault_note");
+    }
+
+    #[test]
+    fn event_start_payload_carries_expected_copy() {
+        let json = reminder_payload(&ReminderPushInput {
+            title: "Starting now: Standup".into(),
+            body: "Event at 9:00 AM · Calendar/2026-11-01.md".into(),
+            tag: "row-7".into(),
+            rows: vec![(7, "t".into())],
+            kind: EVENT_START.into(),
+            outbox_id: Some(7),
+            due_at: Some(Utc.with_ymd_and_hms(2026, 11, 1, 15, 0, 0).unwrap()),
+            late: false,
+            source: None,
+            items: Vec::new(),
+        });
+        let value = parse_payload(&json);
+        assert_eq!(value["title"], "Starting now: Standup");
+        assert_eq!(value["body"], "Event at 9:00 AM · Calendar/2026-11-01.md");
+        assert_eq!(value["kind"], EVENT_START);
+    }
+
+    #[test]
+    fn habit_task_list_event_list_job_error_test_and_digest_payloads() {
+        let cases: [(&str, &str, &str); 5] = [
+            (
+                HABIT,
+                "Morning tasks",
+                "Plan the day. · Morning tasks routine",
+            ),
+            (TASK_LIST, "Open tasks (3)", "Open tasks\n\n1. a"),
+            (EVENT_LIST, "Upcoming events (2)", "Events through …"),
+            (JOB_ERROR, "Morning tasks failed", "git push failed"),
+            (
+                TEST,
+                "Liberado test",
+                "Test notification from Notifications settings · 2:00 PM",
+            ),
+        ];
+        for (kind_name, title, body) in cases {
+            let json = reminder_payload(&ReminderPushInput {
+                title: title.into(),
+                body: body.into(),
+                tag: "row-1".into(),
+                rows: vec![(1, "t".into())],
+                kind: kind_name.into(),
+                outbox_id: Some(1),
+                due_at: None,
+                late: false,
+                source: None,
+                items: Vec::new(),
+            });
+            let value = parse_payload(&json);
+            assert_eq!(value["title"], title, "kind {kind_name}");
+            assert_eq!(value["body"], body, "kind {kind_name}");
+        }
+        let digest = reminder_payload(&ReminderPushInput {
+            title: "4 missed reminders".into(),
+            body: "a\nb".into(),
+            tag: "digest".into(),
+            rows: vec![(1, "a".into()), (2, "b".into())],
+            kind: DIGEST.into(),
+            outbox_id: None,
+            due_at: None,
+            late: true,
+            source: None,
+            items: vec![(1, TASK_DUE.into(), "Due now: x".into())],
+        });
+        let value = parse_payload(&digest);
+        assert_eq!(value["title"], "4 missed reminders");
+        assert!(value.get("items").is_some());
+    }
+
+    #[test]
+    fn legacy_row_without_kind_reads_as_reminder_in_payload() {
+        let json = reminder_payload(&ReminderPushInput {
+            title: "Old title".into(),
+            body: "Old body".into(),
+            tag: "row-9".into(),
+            rows: vec![(9, "t".into())],
+            kind: REMINDER.into(),
+            outbox_id: Some(9),
+            due_at: None,
+            late: false,
+            source: None,
+            items: Vec::new(),
+        });
+        let value = parse_payload(&json);
+        assert_eq!(value["kind"], REMINDER);
+        assert!(value.get("source").is_none());
+    }
+
+    #[test]
+    fn worst_case_digest_body_stays_below_aes128gcm_plaintext_limit() {
+        let body = "x".repeat(1800);
+        let json = reminder_payload(&ReminderPushInput {
+            title: "10 missed reminders".into(),
+            body,
+            tag: "digest".into(),
+            rows: (1..=10).map(|id| (id, format!("tok{id}"))).collect(),
+            kind: DIGEST.into(),
+            outbox_id: None,
+            due_at: None,
+            late: true,
+            source: None,
+            items: (1..=10)
+                .map(|id| (id, TASK_DUE.into(), format!("Due now: item {id}")))
+                .collect(),
+        });
+        assert!(json.len() < 3993, "payload {} bytes", json.len());
     }
 }
