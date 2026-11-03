@@ -7,7 +7,7 @@ use dioxus::prelude::*;
 use crate::components::sidebar::Route;
 use crate::http;
 use crate::notification_route::{
-    detail_actions, resolution_state_text, what_kind_label, why_now_text,
+    detail_actions, detail_body_adds_information, detail_status_line, resolution_state_text,
 };
 
 use self::model::OutboxDetail;
@@ -50,13 +50,22 @@ pub fn NotificationDetailPage(api_base: String, outbox_id: i64, route: Signal<Ro
     let resolved_line = row_snapshot.as_ref().and_then(|row| {
         resolution_state_text(row.resolution.as_deref(), row.snooze_until_local.as_deref())
     });
-    let why = row_snapshot
+    let status_line = row_snapshot
         .as_ref()
-        .map(|row| why_now_text(row.late, row.catch_up, &row.due_at_local));
-    let kind_label = row_snapshot.as_ref().map(|row| what_kind_label(&row.kind));
+        .map(|row| detail_status_line(&row.kind, row.late, row.catch_up, &row.due_at_local));
     let source_path = row_snapshot
         .as_ref()
         .and_then(|row| source_note_path(&row.source));
+    let body_adds_information = row_snapshot
+        .as_ref()
+        .map(|row| {
+            detail_body_adds_information(
+                &row.body,
+                status_line.as_deref().unwrap_or_default(),
+                source_path.as_deref(),
+            )
+        })
+        .unwrap_or(false);
     let obsidian_url = row_snapshot
         .as_ref()
         .and_then(|row| row.obsidian_url.clone());
@@ -66,116 +75,121 @@ pub fn NotificationDetailPage(api_base: String, outbox_id: i64, route: Signal<Ro
     let api_for_snooze_60 = api_base.clone();
 
     rsx! {
-        div { class: "grok-main-phone-scroll notification-detail",
+        div { class: "grok-page notification-detail",
             div { class: "notification-detail-header",
                 button {
-                    class: "lib-btn ghost",
+                    class: "lib-btn notification-detail-back",
                     r#type: "button",
                     onclick: back,
                     "← Notifications"
                 }
             }
-            if let Some(row) = row_snapshot {
-                if let Some(err) = error() {
-                    p { class: "notification-detail-error", "{err}" }
-                }
-                h1 { class: "grok-page-title", "{row.title}" }
-                if let Some(state) = resolved_line {
-                    p { class: "notification-detail-resolved", "{state}" }
-                }
-                if let Some(label) = kind_label {
-                    p { class: "notification-detail-kind", "{label}" }
-                }
-                if let Some(why_now) = why {
-                    p { class: "notification-detail-why", "{why_now}" }
-                }
-                p { class: "notification-detail-body", "{row.body}" }
-                if let Some(path) = source_path {
-                    p { class: "notification-detail-source", "Source: {path}" }
-                }
-                if let Some(actions) = actions {
-                    div { class: "notification-detail-actions",
-                        if actions.show_complete {
-                            button {
-                                class: "lib-btn primary",
-                                r#type: "button",
-                                disabled: busy(),
-                                onclick: move |_| {
-                                    let base = api_for_complete.clone();
-                                    spawn(async move {
-                                        busy.set(true);
-                                        match post_action(&base, outbox_id, "complete").await {
-                                            Ok(()) => {
-                                                error.set(None);
-                                                if let Ok(row) = fetch_detail(&base, outbox_id).await {
-                                                    detail.set(Some(row));
+            div { class: "card notification-detail-card",
+                div { class: "card-body notification-detail-content",
+                    if let Some(row) = row_snapshot {
+                        if let Some(err) = error() {
+                            p { class: "notification-detail-error", "{err}" }
+                        }
+                        h1 { class: "grok-page-title", "{row.title}" }
+                        if let Some(state) = resolved_line {
+                            p { class: "notification-detail-resolved", "{state}" }
+                        }
+                        if let Some(status) = status_line {
+                            p { class: "notification-detail-status", "{status}" }
+                        }
+                        if body_adds_information {
+                            p { class: "notification-detail-body", "{row.body}" }
+                        }
+                        if let Some(path) = source_path {
+                            p { class: "notification-detail-source", "Source: {path}" }
+                        }
+                        if let Some(actions) = actions {
+                            div { class: "notification-detail-actions",
+                                if actions.show_complete {
+                                    button {
+                                        class: "lib-btn primary",
+                                        r#type: "button",
+                                        disabled: busy(),
+                                        onclick: move |_| {
+                                            let base = api_for_complete.clone();
+                                            spawn(async move {
+                                                busy.set(true);
+                                                match post_action(&base, outbox_id, "complete").await {
+                                                    Ok(()) => {
+                                                        error.set(None);
+                                                        if let Ok(row) = fetch_detail(&base, outbox_id).await {
+                                                            detail.set(Some(row));
+                                                        }
+                                                    }
+                                                    Err(err) => error.set(Some(err)),
                                                 }
-                                            }
-                                            Err(err) => error.set(Some(err)),
+                                                busy.set(false);
+                                            });
+                                        },
+                                        "{actions.complete_label}"
+                                    }
+                                }
+                                if actions.show_snooze {
+                                    div { class: "notification-detail-snooze-actions",
+                                        button {
+                                            class: "lib-btn",
+                                            r#type: "button",
+                                            disabled: busy(),
+                                            onclick: move |_| {
+                                                let base = api_for_snooze_15.clone();
+                                                spawn(async move {
+                                                    busy.set(true);
+                                                    if let Err(err) = snooze(&base, outbox_id, 15).await {
+                                                        error.set(Some(err));
+                                                    } else if let Ok(row) = fetch_detail(&base, outbox_id).await {
+                                                        detail.set(Some(row));
+                                                        error.set(None);
+                                                    }
+                                                    busy.set(false);
+                                                });
+                                            },
+                                            "Snooze 15m"
                                         }
-                                        busy.set(false);
-                                    });
-                                },
-                                "{actions.complete_label}"
-                            }
-                        }
-                        if actions.show_snooze {
-                            button {
-                                class: "lib-btn",
-                                r#type: "button",
-                                disabled: busy(),
-                                onclick: move |_| {
-                                    let base = api_for_snooze_15.clone();
-                                    spawn(async move {
-                                        busy.set(true);
-                                        if let Err(err) = snooze(&base, outbox_id, 15).await {
-                                            error.set(Some(err));
-                                        } else if let Ok(row) = fetch_detail(&base, outbox_id).await {
-                                            detail.set(Some(row));
-                                            error.set(None);
+                                        button {
+                                            class: "lib-btn",
+                                            r#type: "button",
+                                            disabled: busy(),
+                                            onclick: move |_| {
+                                                let base = api_for_snooze_60.clone();
+                                                spawn(async move {
+                                                    busy.set(true);
+                                                    if let Err(err) = snooze(&base, outbox_id, 60).await {
+                                                        error.set(Some(err));
+                                                    } else if let Ok(row) = fetch_detail(&base, outbox_id).await {
+                                                        detail.set(Some(row));
+                                                        error.set(None);
+                                                    }
+                                                    busy.set(false);
+                                                });
+                                            },
+                                            "Snooze 1h"
                                         }
-                                        busy.set(false);
-                                    });
-                                },
-                                "Snooze 15m"
-                            }
-                            button {
-                                class: "lib-btn",
-                                r#type: "button",
-                                disabled: busy(),
-                                onclick: move |_| {
-                                    let base = api_for_snooze_60.clone();
-                                    spawn(async move {
-                                        busy.set(true);
-                                        if let Err(err) = snooze(&base, outbox_id, 60).await {
-                                            error.set(Some(err));
-                                        } else if let Ok(row) = fetch_detail(&base, outbox_id).await {
-                                            detail.set(Some(row));
-                                            error.set(None);
+                                    }
+                                }
+                                if actions.show_obsidian {
+                                    if let Some(url) = obsidian_url.clone() {
+                                        a {
+                                            class: "lib-btn notification-detail-obsidian-action",
+                                            href: "{url}",
+                                            target: "_blank",
+                                            rel: "noopener noreferrer",
+                                            "Open in Obsidian"
                                         }
-                                        busy.set(false);
-                                    });
-                                },
-                                "Snooze 1h"
-                            }
-                        }
-                        if actions.show_obsidian {
-                            if let Some(url) = obsidian_url.clone() {
-                                a {
-                                    class: "lib-btn",
-                                    href: "{url}",
-                                    target: "_blank",
-                                    rel: "noopener noreferrer",
-                                    "Open in Obsidian"
+                                    }
                                 }
                             }
                         }
+                    } else if let Some(err) = error() {
+                        p { class: "notification-detail-error", "{err}" }
+                    } else {
+                        p { class: "notification-detail-loading", "Loading…" }
                     }
                 }
-            } else if let Some(err) = error() {
-                p { class: "notification-detail-error", "{err}" }
-            } else {
-                p { class: "notification-detail-loading", "Loading…" }
             }
         }
     }

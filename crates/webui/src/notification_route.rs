@@ -1,5 +1,7 @@
 //! Path parsing and view-model helpers for notification detail pages.
 
+use std::collections::HashMap;
+
 use crate::components::sidebar::Route;
 
 const TASK_DUE: &str = "task_due";
@@ -97,8 +99,8 @@ pub fn why_now_text(late: bool, catch_up: bool, due_at_local: &str) -> String {
 
 pub fn what_kind_label(kind: &str) -> &'static str {
     match kind {
-        TASK_DUE => "Task due",
-        EVENT_START => "Event starting",
+        TASK_DUE => "Task",
+        EVENT_START => "Event",
         HABIT => "Habit",
         TASK_LIST => "Task list",
         EVENT_LIST => "Event list",
@@ -106,6 +108,51 @@ pub fn what_kind_label(kind: &str) -> &'static str {
         TEST => "Test notification",
         _ => "Reminder",
     }
+}
+
+/// One status line for the detail page. It combines the kind with the time context.
+pub fn detail_status_line(kind: &str, late: bool, catch_up: bool, due_at_local: &str) -> String {
+    format!(
+        "{} · {}",
+        what_kind_label(kind),
+        why_now_text(late, catch_up, due_at_local)
+    )
+}
+
+/// Whether the body says anything beyond the status line and source path.
+///
+/// Notification copy often repeats the kind, due time, and source path. Compare normalized word
+/// counts so punctuation and the different forms of "due" do not make duplicate copy look new.
+pub fn detail_body_adds_information(
+    body: &str,
+    status_line: &str,
+    source_path: Option<&str>,
+) -> bool {
+    let body_counts = display_token_counts(body);
+    if body_counts.is_empty() {
+        return false;
+    }
+    let status_counts = display_token_counts(status_line);
+    let source_counts = source_path.map(display_token_counts).unwrap_or_default();
+
+    body_counts.iter().any(|(token, count)| {
+        let known_count = status_counts
+            .get(token)
+            .copied()
+            .unwrap_or_default()
+            .max(source_counts.get(token).copied().unwrap_or_default());
+        *count > known_count
+    })
+}
+
+fn display_token_counts(text: &str) -> HashMap<String, usize> {
+    let mut counts = HashMap::new();
+    for token in text.split(|character: char| !character.is_alphanumeric()) {
+        if !token.is_empty() {
+            *counts.entry(token.to_lowercase()).or_default() += 1;
+        }
+    }
+    counts
 }
 
 #[cfg(test)]
@@ -176,5 +223,50 @@ mod tests {
     fn why_now_text_uses_late_wording() {
         assert!(why_now_text(true, false, "2:00 PM").starts_with("Missed"));
         assert!(why_now_text(false, false, "2:00 PM").starts_with("Due at"));
+    }
+
+    #[test]
+    fn detail_status_line_combines_kind_and_time() {
+        assert_eq!(
+            detail_status_line(EVENT_START, true, false, "9:00 PM"),
+            "Event · Missed — was due at 9:00 PM"
+        );
+        assert_eq!(
+            detail_status_line(TASK_DUE, false, false, "2:00 PM"),
+            "Task · Due at 2:00 PM"
+        );
+    }
+
+    #[test]
+    fn detail_body_hides_text_that_only_repeats_status_and_source() {
+        let status = detail_status_line(EVENT_START, true, false, "9:00 PM");
+        let source = "calendar/Evening journal.md";
+
+        assert!(!detail_body_adds_information(
+            "Missed at 9:00 PM · calendar/Evening journal.md",
+            &status,
+            Some(source),
+        ));
+        assert!(!detail_body_adds_information(
+            "Event at 9:00 PM",
+            &status,
+            Some(source),
+        ));
+        assert!(!detail_body_adds_information(source, &status, Some(source),));
+        assert!(detail_body_adds_information(
+            "Missed at 9:00 PM · calendar/Evening journal.md · Write one sentence",
+            &status,
+            Some(source),
+        ));
+    }
+
+    #[test]
+    fn detail_body_hides_task_copy_that_only_repeats_status_and_source() {
+        let status = detail_status_line(TASK_DUE, false, false, "2:00 PM");
+        assert!(!detail_body_adds_information(
+            "Task due 2:00 PM · Tasks/Inbox.md",
+            &status,
+            Some("Tasks/Inbox.md"),
+        ));
     }
 }
