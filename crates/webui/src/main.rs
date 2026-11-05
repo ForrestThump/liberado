@@ -9,6 +9,7 @@ mod device_label;
 mod fatal_classifier;
 mod http;
 mod icons;
+mod notification_route;
 mod panic_hook;
 mod push;
 #[cfg(test)]
@@ -132,6 +133,16 @@ fn App() -> Element {
     // Default to Chat — the screenshot says Chat is the open surface. Imagine / Library /
     // Automations / Projects / Plugins are reachable via the sidebar.
     let mut route = use_signal(|| Route::Chat);
+    #[cfg(target_arch = "wasm32")]
+    {
+        if let Some(window) = web_sys::window() {
+            if let Ok(path) = window.location().pathname() {
+                if let Some(parsed) = notification_route::route_from_path(&path) {
+                    route.set(parsed);
+                }
+            }
+        }
+    }
     // The active theme name, restored from the last choice. Chat writes it when `/theme set` lands,
     // and the sidebar's theme swatch writes it through `save_theme_name`. The `theme_epoch`
     // counter below is the bridge: a write through either path bumps it, and the effect re-reads
@@ -208,6 +219,8 @@ fn App() -> Element {
                 tools_open.set(false);
             } else if !sidebar_collapsed() && is_narrow() {
                 sidebar_collapsed.set(true);
+            } else if matches!(route(), Route::NotificationDetail(_)) {
+                route.set(Route::Notifications);
             } else if route() != Route::Chat {
                 route.set(Route::Chat);
             }
@@ -434,6 +447,31 @@ fn App() -> Element {
                                     }
                                 }
                                 crate::components::notifications::Notifications { api_base: base.clone() }
+                            }
+                        },
+                        Route::NotificationDetail(id) => rsx! {
+                            div { class: "grok-main-phone-scroll",
+                                if is_narrow() {
+                                    GrokAppHeader {
+                                        shell_class: PHONE_SCROLL_APP_HEADER_CLASS,
+                                        bar_title: shell_route_title(route()),
+                                        drawer_open: drawer_open(),
+                                        sidebar_collapsed,
+                                        active_project,
+                                        active_profile,
+                                        active_surface,
+                                        on_profile_open: open_profile_picker,
+                                        incognito,
+                                        api_base: base.clone(),
+                                        active_conv_id,
+                                        tools_open,
+                                    }
+                                }
+                                crate::components::notification_detail::NotificationDetailPage {
+                                    api_base: base.clone(),
+                                    outbox_id: id,
+                                    route: route,
+                                }
                             }
                         },
                         Route::Projects => rsx! {

@@ -3,6 +3,9 @@
 use std::sync::Arc;
 
 use axum::Router;
+use axum::http::header;
+use axum::response::{IntoResponse, Response};
+use axum::routing::get;
 use tower_http::compression::CompressionLayer;
 use tower_http::cors::CorsLayer;
 use tower_http::services::ServeDir;
@@ -61,6 +64,18 @@ pub(crate) fn owner_only_routes(state: &Arc<AppState>) -> Router {
         .route(
             "/api/outbox/{id}/retry",
             axum::routing::post(api::retry_outbox),
+        )
+        .route(
+            "/api/outbox/{id}",
+            axum::routing::get(api::get_outbox_detail),
+        )
+        .route(
+            "/api/outbox/{id}/complete",
+            axum::routing::post(api::complete_outbox),
+        )
+        .route(
+            "/api/outbox/{id}/snooze",
+            axum::routing::post(api::snooze_outbox),
         )
         .route_layer(axum::middleware::from_fn(auth::require_owner))
         .with_state(state.clone())
@@ -262,7 +277,8 @@ pub(crate) fn build_app_router(state: &Arc<AppState>, guard: &Arc<auth::ApiGuard
         None => api_surface,
     };
 
-    app
+    app.route("/notifications", get(notifications_shell))
+        .route("/notifications/{id}", get(notifications_shell))
         // Compression is scoped to the static fallback, deliberately not applied to the router as
         // a whole. The payload that needs it is the release .wasm (multi-MB, ~4x compressible, and
         // the whole page blocks on it over the tailnet); the payload that must never be buffered
@@ -278,6 +294,14 @@ pub(crate) fn build_app_router(state: &Arc<AppState>, guard: &Arc<auth::ApiGuard
             guard.clone(),
             crate::browser_redirect::redirect_browser_origin,
         ))
+}
+
+async fn notifications_shell() -> Response {
+    let path = format!("{}/index.html", dist_dir());
+    match tokio::fs::read(&path).await {
+        Ok(bytes) => ([(header::CONTENT_TYPE, "text/html; charset=utf-8")], bytes).into_response(),
+        Err(_) => axum::http::StatusCode::NOT_FOUND.into_response(),
+    }
 }
 
 /// A CORS layer for the exact origins the operator listed, or `None` when the list is empty.

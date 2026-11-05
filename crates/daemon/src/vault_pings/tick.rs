@@ -17,7 +17,7 @@ use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
 use chrono_tz::Tz;
 use turbovault_plugin_tasks::TasksConfig;
 
-use liberado_outbox::{content_id, task_key};
+use liberado_outbox::{EVENT_START, OutboxSource, TASK_DUE, content_id, copy, task_key};
 
 use super::date::parse_ymd;
 use super::events::events_in_note;
@@ -46,6 +46,8 @@ pub(crate) struct DueReminderRow {
     pub title: String,
     pub body: String,
     pub due_at: DateTime<Utc>,
+    pub kind: String,
+    pub source: OutboxSource,
 }
 
 struct DueItem {
@@ -53,6 +55,10 @@ struct DueItem {
     legacy_key: String,
     line: String,
     due_at: DateTime<Utc>,
+    kind: &'static str,
+    label: &'static str,
+    path: String,
+    text: String,
 }
 
 struct Stamp {
@@ -69,11 +75,32 @@ pub(crate) fn due_reminder_rows(root: &Path, tick: &ReminderTick) -> Vec<DueRemi
     let zone = parse_zone(&tick.zone);
     collect(root, tick, zone)
         .into_iter()
-        .map(|item| DueReminderRow {
-            idempotency_key: item.idempotency_key,
-            title: "Reminder".into(),
-            body: item.line,
-            due_at: item.due_at,
+        .map(|item| {
+            let zone_tz = parse_zone(&tick.zone);
+            let source = OutboxSource::VaultNote {
+                path: item.path.clone(),
+                label: item.label.to_string(),
+                text: item.text.clone(),
+            };
+            let (title, body) = if item.kind == EVENT_START {
+                (
+                    copy::event_start_title(&item.text),
+                    copy::event_start_body(&item.path, item.due_at, zone_tz, false),
+                )
+            } else {
+                (
+                    copy::task_due_title(item.label, &item.text),
+                    copy::task_due_body(item.label, &item.path, item.due_at, zone_tz, false),
+                )
+            };
+            DueReminderRow {
+                idempotency_key: item.idempotency_key,
+                title,
+                body,
+                due_at: item.due_at,
+                kind: item.kind.to_string(),
+                source,
+            }
         })
         .collect()
 }
@@ -157,6 +184,10 @@ fn task_due(rel: &str, content: &str, line: &str, now: NaiveDateTime, zone: Tz) 
             stamp.label
         ),
         due_at,
+        kind: TASK_DUE,
+        label: stamp.label,
+        path: rel.to_string(),
+        text: content.trim().to_string(),
     })
 }
 
@@ -289,6 +320,10 @@ fn events_due(rel: &str, text: &str, now: NaiveDateTime, zone: Tz) -> Vec<DueIte
             idempotency_key,
             line: format!("{} — {when_display} — {rel}", event.title),
             due_at,
+            kind: EVENT_START,
+            label: "scheduled",
+            path: rel.to_string(),
+            text: event.title.trim().to_string(),
         });
     }
     items

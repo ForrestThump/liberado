@@ -4,7 +4,9 @@ use std::sync::Arc;
 
 use liberado_outbox::{DeliverySink, Outbox};
 
-use super::{OutboxDelivery, TelegramReminderSender};
+use liberado_outbox::{DeliveryBatch, DeliveryRow, TASK_DUE};
+
+use super::{OutboxDelivery, TelegramReminderSender, push_input_from_batch};
 
 const TEST_VAPID_PUBLIC: &str =
     "BP4z9KsN6nGRTbVYI_c7VJSPQTBtkgcy27mlmlMoZIIgDll6e3vCYLocInmYWAmS6TlzAC8wEqKK6PBru3jl7A8";
@@ -143,4 +145,30 @@ fn from_env_requires_both_non_empty_vars() {
     with_test_env(None, false, || {
         assert!(TelegramReminderSender::from_env().is_none());
     });
+}
+
+#[test]
+fn web_push_payload_carries_outbox_id_and_kind() {
+    let batch = DeliveryBatch {
+        channel: "webpush".into(),
+        target: "sub:1".into(),
+        title: "Due now: Call dentist".into(),
+        body: "Task due 2:00 PM · Tasks/Inbox.md".into(),
+        tag: "row-42".into(),
+        rows: vec![DeliveryRow {
+            id: 42,
+            token: "tok".into(),
+        }],
+        kind: TASK_DUE.into(),
+        outbox_id: Some(42),
+        due_at: None,
+        late: false,
+        source: None,
+        items: Vec::new(),
+    };
+    let json = liberado_notify::web_push::reminder_payload(&push_input_from_batch(&batch));
+    let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+    assert_eq!(value["kind"], TASK_DUE);
+    assert_eq!(value["outbox_id"], 42);
+    assert_eq!(value["url"], "/notifications/42");
 }

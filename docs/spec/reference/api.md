@@ -410,8 +410,18 @@ on loopback if it can reach the bind address — scope MCP grants accordingly.
 | `POST /api/push/test` | owner | Enqueue a test Web Push row for one subscription (`endpoint` or `id` in the JSON body; must match a registered device) |
 | `POST /api/client-errors` | owner | Truncated WebUI panic/client error text at WARN (no secrets) |
 | `GET /api/outbox` | owner | Visible pending/failed reminder rows |
+| `GET /api/outbox/{id}` | owner | One outbox row for the notification detail page (`title`, `body`, `kind`, `due_at`, `late`, `source`, delivery/ack state, `resolution`, `resolved_at`, optional `snooze_until_local`, optional `obsidian_url`) |
 | `POST /api/outbox/{id}/retry` | owner | Retry a failed row |
+| `POST /api/outbox/{id}/complete` | owner | Mark a vault task done (`task_due` + `vault_note` source) or dismiss other kinds; sets `resolution` (`completed` or `dismissed`) when not already resolved (409 if resolved) |
+| `POST /api/outbox/{id}/snooze` | owner | `{minutes}` — atomically resolve the row as `snoozed`, enqueue one follow-up due at now+minutes (not delivered until that due time), idempotency key `snooze/{id}` |
 | `POST /api/outbox/ack` | none | `{id, token}` from the push payload; sets `acked_at` only |
 
 Click-ack is intentionally unauthenticated so an installed PWA can ack after the owner signs out.
 Subscription management stays owner-only.
+
+Web Push JSON is version `v: 2`. The service worker still reads `title`, `body`, `tag`, `rows`, and
+`url` (single rows → `/notifications/<id>`, digest → `/notifications`). Additional fields include `kind`, `outbox_id`, `due_at` (RFC 3339 UTC), `late`, `source`, and
+digest `items`. Outbox rows store nullable `kind`, `source_json`, `resolution`, and `resolved_at` (schema v3 in `liberado.db`).
+
+`topology.obsidian_vault_name` (optional) overrides the vault name embedded in server-built
+`obsidian://open` links; when unset, the basename of `topology.vault_path` is used.

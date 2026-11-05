@@ -3,6 +3,8 @@ use std::collections::BTreeMap;
 use chrono::{DateTime, Duration, Utc};
 
 use crate::batch::{DeliveryBatch, DeliveryRow};
+use crate::copy::{self, DigestItem};
+use crate::kind;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TelegramMode {
@@ -105,6 +107,8 @@ pub struct OpenRow {
     pub catch_up: bool,
     pub due_at: DateTime<Utc>,
     pub token: String,
+    pub kind: String,
+    pub source: Option<crate::source::OutboxSource>,
 }
 
 pub fn in_catchup_window(
@@ -116,7 +120,7 @@ pub fn in_catchup_window(
     at > cursor && at <= now && now.signed_duration_since(at) <= window
 }
 
-pub fn coalesce(rows: Vec<OpenRow>, now: DateTime<Utc>) -> Vec<DeliveryBatch> {
+pub fn coalesce(rows: Vec<OpenRow>, now: DateTime<Utc>, display_zone: &str) -> Vec<DeliveryBatch> {
     let mut groups: BTreeMap<(String, String), Vec<OpenRow>> = BTreeMap::new();
     for row in rows {
         groups
@@ -126,7 +130,7 @@ pub fn coalesce(rows: Vec<OpenRow>, now: DateTime<Utc>) -> Vec<DeliveryBatch> {
     }
     let mut out = Vec::new();
     for ((channel, target), group) in groups {
-        out.extend(batches_for(channel, target, group, now));
+        out.extend(batches_for(channel, target, group, now, display_zone));
     }
     out
 }
@@ -136,15 +140,24 @@ fn batches_for(
     target: String,
     group: Vec<OpenRow>,
     now: DateTime<Utc>,
+    display_zone: &str,
 ) -> Vec<DeliveryBatch> {
     let (digest, singles) = split_overdue(group, now);
     let mut out = Vec::new();
     if digest.len() > 3 {
-        out.push(digest_batch(&channel, &target, digest));
+        out.push(digest_batch(&channel, &target, digest, now, display_zone));
     } else {
-        out.extend(digest.into_iter().map(single_batch));
+        out.extend(
+            digest
+                .into_iter()
+                .map(|row| single_batch(row, now, display_zone)),
+        );
     }
-    out.extend(singles.into_iter().map(single_batch));
+    out.extend(
+        singles
+            .into_iter()
+            .map(|row| single_batch(row, now, display_zone)),
+    );
     out
 }
 
@@ -162,32 +175,46 @@ fn split_overdue(group: Vec<OpenRow>, now: DateTime<Utc>) -> (Vec<OpenRow>, Vec<
     (digest, singles)
 }
 
-fn single_batch(row: OpenRow) -> DeliveryBatch {
+fn single_batch(row: OpenRow, now: DateTime<Utc>, display_zone: &str) -> DeliveryBatch {
     let id = row.id;
+    let (title, body, late) = copy::present_row(&row, now, display_zone);
     DeliveryBatch {
         channel: row.channel,
         target: row.target,
-        title: row.title,
-        body: row.body,
+        title,
+        body,
         tag: format!("row-{id}"),
         rows: vec![DeliveryRow {
             id,
             token: row.token,
         }],
+        kind: row.kind,
+        outbox_id: Some(id),
+        due_at: Some(row.due_at),
+        late,
+        source: row.source,
+        items: Vec::new(),
     }
 }
 
-fn digest_batch(channel: &str, target: &str, rows: Vec<OpenRow>) -> DeliveryBatch {
+fn digest_batch(
+    channel: &str,
+    target: &str,
+    rows: Vec<OpenRow>,
+    now: DateTime<Utc>,
+    display_zone: &str,
+) -> DeliveryBatch {
     let count = rows.len();
     let body = rows
         .iter()
-        .map(|row| row.body.as_str())
+        .map(|row| copy::present_row(row, now, display_zone).1)
         .collect::<Vec<_>>()
         .join("\n");
+    let items: Vec<DigestItem> = copy::digest_items(&rows, now, display_zone);
     DeliveryBatch {
         channel: channel.to_string(),
         target: target.to_string(),
-        title: format!("{count} reminders"),
+        title: copy::digest_title(count),
         body,
         tag: "digest".into(),
         rows: rows
@@ -197,6 +224,12 @@ fn digest_batch(channel: &str, target: &str, rows: Vec<OpenRow>) -> DeliveryBatc
                 token: row.token,
             })
             .collect(),
+        kind: kind::DIGEST.to_string(),
+        outbox_id: None,
+        due_at: None,
+        late: true,
+        source: None,
+        items,
     }
 }
 
@@ -293,22 +326,23 @@ mod tests {
             .unwrap()
             .with_timezone(&Utc);
         let fresh = (1..=4).map(|id| sample(id, false, now)).collect::<Vec<_>>();
-        let batches = coalesce(fresh, now);
+        let batches = coalesce(fresh, now, "UTC");
         assert_eq!(batches.len(), 4);
         assert!(batches.iter().all(|batch| batch.rows.len() == 1));
 
         let burst = (1..=4)
             .map(|id| sample(id, true, now - Duration::minutes(1)))
             .collect::<Vec<_>>();
-        let batches = coalesce(burst, now);
+        let batches = coalesce(burst, now, "UTC");
         assert_eq!(batches.len(), 1);
         assert_eq!(batches[0].rows.len(), 4);
         assert_eq!(batches[0].tag, "digest");
+        assert_eq!(batches[0].title, "4 missed reminders");
 
         let late = (1..=4)
             .map(|id| sample(id, false, now - Duration::minutes(10)))
             .collect::<Vec<_>>();
-        assert_eq!(coalesce(late, now)[0].rows.len(), 4);
+        assert_eq!(coalesce(late, now, "UTC")[0].rows.len(), 4);
     }
 
     fn sample(id: i64, catch_up: bool, due_at: DateTime<Utc>) -> OpenRow {
@@ -321,6 +355,8 @@ mod tests {
             catch_up,
             due_at,
             token: format!("tok{id}"),
+            kind: kind::REMINDER.into(),
+            source: None,
         }
     }
 

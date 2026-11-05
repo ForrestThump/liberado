@@ -15,13 +15,16 @@ base64 = { workspace = true }
 liberado-common = { workspace = true }
 liberado-messaging = { workspace = true }
 reqwest = { workspace = true }
+serde = { workspace = true }
 serde_json = { workspace = true }
+chrono = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 
 [dev-dependencies]
 wiremock = "0.6"
+liberado-outbox = { path = "../outbox" }
 
 [package.metadata.liberado]
 # Layer role for the layer-rules test + crate-map generator (docs/architecture/contracts.md)

@@ -9,6 +9,9 @@ mod goals;
 mod grants;
 mod library;
 mod mcp_status;
+mod outbox_detail;
+#[cfg(test)]
+mod outbox_detail_http_tests;
 mod plugins;
 mod profiles;
 mod reminders;
@@ -18,6 +21,7 @@ pub(crate) mod schedule_description;
 mod search;
 mod sessions;
 mod status;
+mod vault_task_line;
 
 pub use approvals::{list_approvals, list_pending_approvals, resolve_approval};
 pub use auth::{
@@ -37,6 +41,7 @@ pub use goals::{
 };
 pub use grants::{conversation_grants, get_header_grant};
 pub use library::list_library;
+pub use outbox_detail::{complete_outbox, get_outbox_detail, snooze_outbox};
 pub use plugins::set_plugin_enabled;
 pub use profiles::{delete_profile, rename_profile};
 pub use reminders::{

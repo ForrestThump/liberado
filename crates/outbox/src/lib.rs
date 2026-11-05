@@ -7,13 +7,19 @@
 mod ack;
 mod auth_store;
 mod batch;
+pub mod copy;
 mod cursor;
 mod error;
 mod keys;
+mod kind;
 mod migrate;
 mod pass;
 mod plan;
+mod resolution;
+mod row_detail;
+mod row_open;
 mod rows;
+mod source;
 mod store;
 mod subs;
 mod time;
@@ -23,14 +29,23 @@ pub use auth_store::{
     PasskeyCredential, PasskeyRow, SESSION_ABSOLUTE, SESSION_IDLE, SessionRecord, hash_session_id,
 };
 pub use batch::{DeliveryBatch, DeliveryOutcome, DeliveryRow};
+pub use copy::DigestItem;
 pub use error::Error;
 pub use keys::{content_id, fanout_key, task_key};
+pub use kind::{
+    DIGEST, EVENT_LIST, EVENT_START, HABIT, JOB_ERROR, REMINDER, TASK_DUE, TASK_LIST, TEST,
+};
 pub use pass::{DeliverySink, PassLimits, PassReport, run_pass};
 pub use plan::{
-    FanoutInput, PlannedTarget, TelegramMode, coalesce, fallback_reason, in_catchup_window,
-    plan_targets,
+    FanoutInput, OpenRow, PlannedTarget, TelegramMode, coalesce, fallback_reason,
+    in_catchup_window, plan_targets,
 };
+pub use resolution::{
+    OwnerResolveResult, OwnerSnoozeResult, RES_COMPLETED, RES_DISMISSED, RES_SNOOZED,
+};
+pub use row_detail::OutboxRecord;
 pub use rows::{EnqueueOutcome, NewReminder, OutboxCounts, VisibleReminder};
+pub use source::OutboxSource;
 pub use store::Outbox;
 pub use subs::{NewSubscription, SubscriptionKeys, SubscriptionView};
 

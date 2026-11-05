@@ -16,6 +16,7 @@ impl Default for Topology {
             research_max_turns: None,
             report_sink: None,
             vault_path: PathBuf::new(),
+            obsidian_vault_name: None,
             timezone: DEFAULT_TIMEZONE.to_string(),
             daemon_socket: PathBuf::from("/run/liberado/daemon.sock"),
             provider: "deepseek".to_string(),

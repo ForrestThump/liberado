@@ -89,6 +89,8 @@ fn reminder(
         body: "call home".into(),
         due_at: due,
         catch_up,
+        kind: None,
+        source: None,
     }
 }
 

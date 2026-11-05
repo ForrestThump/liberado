@@ -1,3 +1,8 @@
+use chrono::{DateTime, Utc};
+
+use crate::copy::DigestItem;
+use crate::source::OutboxSource;
+
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct DeliveryRow {
     pub id: i64,
@@ -12,6 +17,12 @@ pub struct DeliveryBatch {
     pub body: String,
     pub tag: String,
     pub rows: Vec<DeliveryRow>,
+    pub kind: String,
+    pub outbox_id: Option<i64>,
+    pub due_at: Option<DateTime<Utc>>,
+    pub late: bool,
+    pub source: Option<OutboxSource>,
+    pub items: Vec<DigestItem>,
 }
 
 impl DeliveryBatch {

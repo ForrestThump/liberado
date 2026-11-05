@@ -5,7 +5,7 @@ use aws_lc_rs::agreement::{self, UnparsedPublicKey};
 use aws_lc_rs::hkdf::{self, KeyType};
 
 const RECORD_SIZE: u32 = 4096;
-const MAX_PLAINTEXT: usize = 3993;
+pub(crate) const MAX_PLAINTEXT: usize = 3993;
 const PUBLIC_LEN: usize = 65;
 
 struct Len(usize);

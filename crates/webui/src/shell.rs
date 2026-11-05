@@ -112,6 +112,7 @@ pub(crate) fn shell_route_title(route: Route) -> &'static str {
         Route::Library => "Library",
         Route::Automations => "Automations",
         Route::Notifications => "Notifications",
+        Route::NotificationDetail(_) => "Notifications",
         Route::Agents => "Agents",
         Route::Projects => "Projects",
         Route::Plugins => "Plugins",
@@ -313,6 +314,11 @@ mod tests {
         assert_eq!(shell_route_title(Route::Library), "Library");
         assert_eq!(shell_route_title(Route::Imagine), "Imagine");
         assert_eq!(shell_route_title(Route::Agents), "Agents");
+        assert_eq!(shell_route_title(Route::Notifications), "Notifications");
+        assert_eq!(
+            shell_route_title(Route::NotificationDetail(42)),
+            "Notifications"
+        );
         assert_eq!(shell_route_title(Route::Chat), "Liberado");
         assert_eq!(shell_route_title(Route::ChatSession), "Liberado");
         assert_eq!(shell_route_title(Route::AgentSession), "Liberado");

@@ -5,6 +5,7 @@ use serde::Serialize;
 use crate::ack::{hash_token, new_token};
 use crate::error::Result;
 use crate::plan::OpenRow;
+use crate::source::OutboxSource;
 use crate::store::Outbox;
 use crate::time::{parse_stamp, stamp};
 
@@ -17,6 +18,8 @@ pub struct NewReminder {
     pub body: String,
     pub due_at: DateTime<Utc>,
     pub catch_up: bool,
+    pub kind: Option<String>,
+    pub source: Option<OutboxSource>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -47,47 +50,63 @@ pub struct OutboxCounts {
 
 impl Outbox {
     pub fn enqueue(&self, row: &NewReminder, now: DateTime<Utc>) -> Result<EnqueueOutcome> {
-        let token = new_token();
-        let hash = hash_token(&token);
-        let when = stamp(now);
-        let due = stamp(row.due_at);
-        let conn = self.lock();
-        let changed = conn.execute(
-            "INSERT OR IGNORE INTO outbox (
-                idempotency_key, channel, target, title, body, state, attempts,
-                next_attempt_at, created_at, due_at, catch_up, ack_token_hash, ack_token
-            ) VALUES (?1, ?2, ?3, ?4, ?5, 'pending', 0, ?6, ?6, ?7, ?8, ?9, ?10)",
-            params![
-                row.idempotency_key,
-                row.channel,
-                row.target,
-                clip(&row.title, 180),
-                clip(&row.body, 1800),
-                when,
-                due,
-                if row.catch_up { 1 } else { 0 },
-                hash.as_slice(),
-                token,
-            ],
-        )?;
-        if changed == 0 {
-            return Ok(EnqueueOutcome::Duplicate);
-        }
-        Ok(EnqueueOutcome::Inserted(conn.last_insert_rowid()))
+        insert_reminder(&self.lock(), row, now)
     }
+}
 
+pub(crate) fn insert_reminder(
+    conn: &rusqlite::Connection,
+    row: &NewReminder,
+    now: DateTime<Utc>,
+) -> Result<EnqueueOutcome> {
+    let token = new_token();
+    let hash = hash_token(&token);
+    let when = stamp(now);
+    let attempt_at = if row.due_at > now { row.due_at } else { now };
+    let next = stamp(attempt_at);
+    let due = stamp(row.due_at);
+    let changed = conn.execute(
+        "INSERT OR IGNORE INTO outbox (
+            idempotency_key, channel, target, title, body, state, attempts,
+            next_attempt_at, created_at, due_at, catch_up, ack_token_hash, ack_token,
+            kind, source_json
+        ) VALUES (?1, ?2, ?3, ?4, ?5, 'pending', 0, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+        params![
+            row.idempotency_key,
+            row.channel,
+            row.target,
+            crate::row_open::clip(&row.title, 180),
+            crate::row_open::clip(&row.body, 1800),
+            next,
+            when,
+            due,
+            if row.catch_up { 1 } else { 0 },
+            hash.as_slice(),
+            token,
+            row.kind.as_deref(),
+            OutboxSource::encode(&row.source),
+        ],
+    )?;
+    if changed == 0 {
+        return Ok(EnqueueOutcome::Duplicate);
+    }
+    Ok(EnqueueOutcome::Inserted(conn.last_insert_rowid()))
+}
+
+impl Outbox {
     pub fn due_rows(&self, now: DateTime<Utc>, max_catchup: u32) -> Result<Vec<OpenRow>> {
         let when = stamp(now);
         let conn = self.lock();
         let mut stmt = conn.prepare(
-            "SELECT id, channel, target, title, body, catch_up, due_at, ack_token
+            "SELECT id, channel, target, title, body, catch_up, due_at, ack_token, kind, source_json
              FROM outbox
              WHERE ack_token IS NOT NULL
+               AND resolved_at IS NULL
                AND ((state IN ('pending', 'failed') AND next_attempt_at <= ?1)
                  OR (state = 'delivering' AND lease_until <= ?1))
              ORDER BY due_at ASC",
         )?;
-        let rows = stmt.query_map(params![when], read_open)?;
+        let rows = stmt.query_map(params![when], crate::row_open::read_open)?;
         let mut normal = Vec::new();
         let mut catch_up = Vec::new();
         for row in rows {
@@ -130,7 +149,7 @@ impl Outbox {
                      lease_until = NULL,
                      last_error = ?1
                  WHERE id = ?2",
-                params![clip(message, 300), id],
+                params![crate::row_open::clip(message, 300), id],
             )?;
         }
         Ok(())
@@ -141,7 +160,7 @@ impl Outbox {
         for id in ids {
             conn.execute(
                 "UPDATE outbox SET last_error = ?1 WHERE id = ?2",
-                params![clip(message, 300), id],
+                params![crate::row_open::clip(message, 300), id],
             )?;
         }
         Ok(())
@@ -186,7 +205,7 @@ impl Outbox {
                     "UPDATE outbox
                      SET state = 'failed', next_attempt_at = ?1, lease_until = NULL, last_error = ?2
                      WHERE id = ?3",
-                    params![next, clip(message, 300), id],
+                    params![next, crate::row_open::clip(message, 300), id],
                 )?;
             }
         }
@@ -335,24 +354,9 @@ fn finish_dead(
         "UPDATE outbox
          SET state = 'dead', finished_at = ?1, lease_until = NULL, ack_token = NULL, last_error = ?2
          WHERE id = ?3",
-        params![stamp(now), clip(message, 300), id],
+        params![stamp(now), crate::row_open::clip(message, 300), id],
     )?;
     Ok(())
-}
-
-fn read_open(row: &rusqlite::Row<'_>) -> rusqlite::Result<OpenRow> {
-    let due: String = row.get(6)?;
-    let token: String = row.get(7)?;
-    Ok(OpenRow {
-        id: row.get(0)?,
-        channel: row.get(1)?,
-        target: row.get(2)?,
-        title: row.get(3)?,
-        body: row.get(4)?,
-        catch_up: row.get::<_, i64>(5)? != 0,
-        due_at: parse_stamp(&due).unwrap_or_else(|_| Utc::now()),
-        token,
-    })
 }
 
 fn count_states(conn: &rusqlite::Connection, states: &[&str]) -> Result<u64> {
@@ -378,15 +382,6 @@ fn backoff_secs(attempts: i64) -> i64 {
     let cap = 15i64.saturating_mul(1i64 << shift).min(3600);
     let mut rng = rand::rngs::OsRng;
     rand::Rng::gen_range(&mut rng, 0..=cap)
-}
-
-fn clip(text: &str, max: usize) -> String {
-    if text.chars().count() <= max {
-        return text.to_string();
-    }
-    let mut out: String = text.chars().take(max.saturating_sub(1)).collect();
-    out.push('…');
-    out
 }
 
 pub fn host_label(target: &str) -> String {
