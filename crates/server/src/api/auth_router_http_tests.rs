@@ -94,6 +94,36 @@ const AUTHENTICATED_ROUTES: &[(&str, &str)] = &[
     ("PATCH", "/api/profiles/some-profile"),
 ];
 
+/// The tray action route is mounted outside the owner gate. Owner detail, complete,
+/// and snooze stay on that gate. A missing outbox is 503 from the handler, which is
+/// how this proves the request was not refused as unauthenticated.
+#[tokio::test]
+async fn outbox_action_is_open_and_owner_outbox_routes_stay_closed() {
+    let h = harness().await;
+    let (status, body) = call(
+        &h.app,
+        Request::builder()
+            .method("POST")
+            .uri("/api/outbox/action")
+            .header("content-type", "application/json")
+            .body(Body::from(r#"{"id":1,"token":"missing","action":"done"}"#))
+            .unwrap(),
+    )
+    .await;
+    assert_ne!(status, StatusCode::UNAUTHORIZED, "{body}");
+    assert_ne!(status, StatusCode::FORBIDDEN, "{body}");
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{body}");
+
+    for (method, uri) in [
+        ("GET", "/api/outbox/1"),
+        ("POST", "/api/outbox/1/complete"),
+        ("POST", "/api/outbox/1/snooze"),
+    ] {
+        let (status, body) = call(&h.app, bare(method, uri)).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED, "{method} {uri}: {body}");
+    }
+}
+
 /// Done-when 1, on the real router: another tailnet host holds no credential, so every API
 /// route answers 401 — including the ones that only read.
 #[tokio::test]

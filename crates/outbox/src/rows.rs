@@ -311,9 +311,26 @@ impl Outbox {
     }
 
     pub fn ack(&self, id: i64, token: &str, now: DateTime<Utc>) -> Result<()> {
+        if !self.push_token_matches(id, token)? {
+            return Ok(());
+        }
+        self.lock().execute(
+            "UPDATE outbox SET acked_at = ?1 WHERE id = ?2 AND acked_at IS NULL",
+            params![stamp(now), id],
+        )?;
+        Ok(())
+    }
+
+    /// Whether `token` is the push token for this row.
+    ///
+    /// A missing row and a mismatch both return false. The hash compare runs in
+    /// constant time, including when the row is gone, so a caller cannot use
+    /// timing to tell those cases apart. Delivery clears the plaintext token
+    /// and leaves the hash, which is what a later tray action checks.
+    pub fn push_token_matches(&self, id: i64, token: &str) -> Result<bool> {
         let presented = hash_token(token);
-        let conn = self.lock();
-        let stored: Option<Vec<u8>> = conn
+        let stored: Option<Vec<u8>> = self
+            .lock()
             .query_row(
                 "SELECT ack_token_hash FROM outbox WHERE id = ?1",
                 [id],
@@ -322,14 +339,7 @@ impl Outbox {
             .optional()?;
         let dummy = [0u8; 32];
         let candidate = stored.as_deref().unwrap_or(&dummy);
-        if !crate::ack::constant_time_eq(&presented, candidate) || stored.is_none() {
-            return Ok(());
-        }
-        conn.execute(
-            "UPDATE outbox SET acked_at = ?1 WHERE id = ?2 AND acked_at IS NULL",
-            params![stamp(now), id],
-        )?;
-        Ok(())
+        Ok(crate::ack::constant_time_eq(&presented, candidate) && stored.is_some())
     }
 
     pub fn acked(&self, id: i64) -> Result<bool> {
