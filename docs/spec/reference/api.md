@@ -415,12 +415,37 @@ on loopback if it can reach the bind address — scope MCP grants accordingly.
 | `POST /api/outbox/{id}/complete` | owner | Mark a vault task done (`task_due` + `vault_note` source) or dismiss other kinds; sets `resolution` (`completed` or `dismissed`) when not already resolved (409 if resolved) |
 | `POST /api/outbox/{id}/snooze` | owner | `{minutes}` — atomically resolve the row as `snoozed`, enqueue one follow-up due at now+minutes (not delivered until that due time), idempotency key `snooze/{id}` |
 | `POST /api/outbox/ack` | none | `{id, token}` from the push payload; sets `acked_at` only |
+| `POST /api/outbox/action` | none | `{id, token, action, minutes?}` — `action` is `done` or `snooze`. The per-row push token must match that row. `done` completes the source vault task. `snooze` uses `minutes`, or 15 when `minutes` is omitted. Same row transitions as the owner complete and snooze routes. Wrong or unknown token: 403, no change. Already resolved: 409. Unknown action, bad minutes, or a row that is not a completable vault task: 400, no change. Success JSON is `{notice}` |
 
-Click-ack is intentionally unauthenticated so an installed PWA can ack after the owner signs out.
-Subscription management stays owner-only.
+`POST /api/outbox/ack` and `POST /api/outbox/action` take no owner credential. The service worker
+has no owner cookie and no CSRF token, and it must keep working after sign-out. The push token
+is the capability. It is compared in constant time to that row's stored hash and authorizes only
+that row: ack sets `acked_at`, and action runs the owner complete or snooze logic for a `task_due`
+row whose source is a vault note. A token does not grant any other route. Both posts use the same
+default JSON body limit as the rest of the API. Ack has no rate limiter, and action does not add
+one. Subscription management and the owner detail, complete, and snooze routes stay owner-only.
 
-Web Push JSON is version `v: 2`. The service worker still reads `title`, `body`, `tag`, `rows`, and
-`url` (single rows → `/notifications/<id>`, digest → `/notifications`). Additional fields include `kind`, `outbox_id`, `due_at` (RFC 3339 UTC), `late`, `source`, and
+Web Push JSON is version `v: 2`. The service worker reads `title`, `body`, `tag`, `rows`, and
+`url` (single rows → `/notifications/<id>`, digest → `/notifications`). A body tap
+(`notificationclick` with an empty `action`) acks every `{id, token}` in `rows` via
+`POST /api/outbox/ack`, then focuses an open window or opens `url`.
+
+`actions` and `snooze_minutes` are present only for one completable vault task (`kind` is
+`task_due`, `source.type` is `vault_note`, and `rows` has one entry). The buttons are Done and
+Snooze 15m. The 15 minutes are `DEFAULT_SNOOZE_MINUTES` in `crates/notify/src/web_push/send.rs`.
+The detail page's short snooze uses that same length. Digests, tests, other kinds, and approvals
+omit `actions`. Older workers ignore the extra fields. A platform that shows no action buttons
+still opens the detail page on a body tap. The worker does not read `Notification.maxActions`,
+so the notification is still shown.
+
+Done posts `{action:"done"}` and does not open a window. On success the worker shows a
+confirmation with the same tag and no actions (`notice`, for example `Done: <title>`). Snooze
+posts `{action:"snooze", minutes: snooze_minutes}`. The confirmation is `Snoozed until HH:MM`
+in the operator zone. Any failure (network, or a status that is not 2xx) acks the rows and opens
+`url`, so the owner can finish on the detail page. A row completed or snoozed from the tray is
+the same resolved row `GET /api/outbox/{id}` returns.
+
+Additional fields include `kind`, `outbox_id`, `due_at` (RFC 3339 UTC), `late`, `source`, and
 digest `items`. Outbox rows store nullable `kind`, `source_json`, `resolution`, and `resolved_at` (schema v3 in `liberado.db`).
 
 `topology.obsidian_vault_name` (optional) overrides the vault name embedded in server-built

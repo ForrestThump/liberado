@@ -80,43 +80,10 @@ pub async fn complete_outbox(
     State(state): State<Arc<AppState>>,
     AxumPath(id): AxumPath<i64>,
 ) -> Response {
-    let Some(outbox) = state.outbox.as_ref() else {
-        return fail(StatusCode::SERVICE_UNAVAILABLE, "outbox is not available");
-    };
-    let Some(record) = (match outbox.fetch_record(id) {
-        Ok(row) => row,
-        Err(err) => return fail(StatusCode::INTERNAL_SERVER_ERROR, &err.to_string()),
-    }) else {
-        return fail(StatusCode::NOT_FOUND, "outbox row not found");
-    };
-    let vault_task =
-        record.kind == TASK_DUE && matches!(&record.source, Some(OutboxSource::VaultNote { .. }));
-    let now = Utc::now();
-    if vault_task
-        && let Some(OutboxSource::VaultNote { path, text, .. }) = &record.source
-        && let Err(message) = complete_vault_task(&state.vault_path, path, text).await
-    {
-        return fail(StatusCode::CONFLICT, &message);
+    match apply_complete(state.as_ref(), id).await {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(err) => err.into_response(),
     }
-    let resolution = if vault_task {
-        RES_COMPLETED
-    } else {
-        RES_DISMISSED
-    };
-    match outbox.try_resolve(id, resolution, now) {
-        Ok(OwnerResolveResult::AlreadyResolved(existing)) => {
-            return fail(
-                StatusCode::CONFLICT,
-                &format!("row already resolved as {existing}"),
-            );
-        }
-        Ok(OwnerResolveResult::NotFound) => {
-            return fail(StatusCode::NOT_FOUND, "outbox row not found");
-        }
-        Ok(OwnerResolveResult::Applied) => {}
-        Err(err) => return fail(StatusCode::INTERNAL_SERVER_ERROR, &err.to_string()),
-    }
-    StatusCode::NO_CONTENT.into_response()
 }
 
 pub async fn snooze_outbox(
@@ -124,24 +91,143 @@ pub async fn snooze_outbox(
     AxumPath(id): AxumPath<i64>,
     Json(body): Json<SnoozeBody>,
 ) -> Response {
-    if body.minutes <= 0 || body.minutes > 60 * 24 * 7 {
-        return fail(
-            StatusCode::BAD_REQUEST,
-            "minutes must be between 1 and 10080",
-        );
+    match apply_snooze(state.as_ref(), id, body.minutes).await {
+        Ok(_) => StatusCode::NO_CONTENT.into_response(),
+        Err(err) => err.into_response(),
     }
-    let Some(outbox) = state.outbox.as_ref() else {
-        return fail(StatusCode::SERVICE_UNAVAILABLE, "outbox is not available");
+}
+
+const MAX_SNOOZE_MINUTES: i64 = 60 * 24 * 7;
+
+pub(crate) enum ActionFail {
+    Unavailable,
+    NotFound,
+    Forbidden,
+    Conflict(String),
+    BadRequest(String),
+    Internal(String),
+}
+
+impl ActionFail {
+    pub(crate) fn conflict(message: impl Into<String>) -> Self {
+        Self::Conflict(message.into())
+    }
+
+    pub(crate) fn bad(message: impl Into<String>) -> Self {
+        Self::BadRequest(message.into())
+    }
+
+    pub(crate) fn internal(message: impl Into<String>) -> Self {
+        Self::Internal(message.into())
+    }
+
+    pub(crate) fn into_response(self) -> Response {
+        match self {
+            Self::Unavailable => fail(StatusCode::SERVICE_UNAVAILABLE, "outbox is not available"),
+            Self::NotFound => fail(StatusCode::NOT_FOUND, "outbox row not found"),
+            Self::Forbidden => fail(StatusCode::FORBIDDEN, "unknown or mismatched token"),
+            Self::Conflict(message) => fail(StatusCode::CONFLICT, &message),
+            Self::BadRequest(message) => fail(StatusCode::BAD_REQUEST, &message),
+            Self::Internal(message) => fail(StatusCode::INTERNAL_SERVER_ERROR, &message),
+        }
+    }
+}
+
+/// Same complete transition the owner route uses. Vault tasks are checked off
+/// before the row is claimed, so a failed note write leaves the row open.
+pub(crate) async fn apply_complete(state: &AppState, id: i64) -> Result<(), ActionFail> {
+    let outbox = require_outbox(state)?;
+    let record = require_record(outbox, id)?;
+    if is_vault_task(&record) {
+        write_vault_task(state, &record).await?;
+    }
+    let resolution = if is_vault_task(&record) {
+        RES_COMPLETED
+    } else {
+        RES_DISMISSED
     };
+    resolve_claimed(outbox, id, resolution)
+}
+
+/// Same snooze transition the owner route uses. The string is the tray confirmation.
+pub(crate) async fn apply_snooze(
+    state: &AppState,
+    id: i64,
+    minutes: i64,
+) -> Result<String, ActionFail> {
+    if minutes <= 0 || minutes > MAX_SNOOZE_MINUTES {
+        return Err(ActionFail::bad("minutes must be between 1 and 10080"));
+    }
+    let outbox = require_outbox(state)?;
     let now = Utc::now();
-    match outbox.owner_snooze(id, body.minutes, now) {
-        Ok(OwnerSnoozeResult::Applied { .. }) => StatusCode::NO_CONTENT.into_response(),
-        Ok(OwnerSnoozeResult::AlreadyResolved(existing)) => fail(
-            StatusCode::CONFLICT,
-            &format!("row already resolved as {existing}"),
-        ),
-        Ok(OwnerSnoozeResult::NotFound) => fail(StatusCode::NOT_FOUND, "outbox row not found"),
-        Err(err) => fail(StatusCode::INTERNAL_SERVER_ERROR, &err.to_string()),
+    match outbox.owner_snooze(id, minutes, now) {
+        Ok(OwnerSnoozeResult::Applied { .. }) => Ok(snooze_notice(state, outbox, id)),
+        Ok(OwnerSnoozeResult::AlreadyResolved(existing)) => Err(ActionFail::conflict(format!(
+            "row already resolved as {existing}"
+        ))),
+        Ok(OwnerSnoozeResult::NotFound) => Err(ActionFail::NotFound),
+        Err(err) => Err(ActionFail::internal(err.to_string())),
+    }
+}
+
+pub(crate) fn done_notice(state: &AppState, record: &OutboxRecord) -> String {
+    let zone = operator_zone(state);
+    let open = open_row_from_record(record);
+    let (title, _, _) = liberado_outbox::copy::present_row(&open, Utc::now(), &zone);
+    format!("Done: {title}")
+}
+
+pub(crate) fn is_vault_task(record: &OutboxRecord) -> bool {
+    record.kind == TASK_DUE && matches!(record.source, Some(OutboxSource::VaultNote { .. }))
+}
+
+fn require_outbox(state: &AppState) -> Result<&liberado_outbox::Outbox, ActionFail> {
+    state.outbox.as_deref().ok_or(ActionFail::Unavailable)
+}
+
+fn require_record(outbox: &liberado_outbox::Outbox, id: i64) -> Result<OutboxRecord, ActionFail> {
+    match outbox.fetch_record(id) {
+        Ok(Some(record)) => Ok(record),
+        Ok(None) => Err(ActionFail::NotFound),
+        Err(err) => Err(ActionFail::internal(err.to_string())),
+    }
+}
+
+fn resolve_claimed(
+    outbox: &liberado_outbox::Outbox,
+    id: i64,
+    resolution: &str,
+) -> Result<(), ActionFail> {
+    match outbox.try_resolve(id, resolution, Utc::now()) {
+        Ok(OwnerResolveResult::Applied) => Ok(()),
+        Ok(OwnerResolveResult::AlreadyResolved(existing)) => Err(ActionFail::conflict(format!(
+            "row already resolved as {existing}"
+        ))),
+        Ok(OwnerResolveResult::NotFound) => Err(ActionFail::NotFound),
+        Err(err) => Err(ActionFail::internal(err.to_string())),
+    }
+}
+
+async fn write_vault_task(state: &AppState, record: &OutboxRecord) -> Result<(), ActionFail> {
+    match &record.source {
+        Some(OutboxSource::VaultNote { path, text, .. }) => {
+            complete_vault_task(&state.vault_path, path, text)
+                .await
+                .map_err(ActionFail::conflict)
+        }
+        _ => Err(ActionFail::internal("vault task missing source")),
+    }
+}
+
+fn snooze_notice(state: &AppState, outbox: &liberado_outbox::Outbox, id: i64) -> String {
+    let until = outbox
+        .fetch_record(id)
+        .ok()
+        .flatten()
+        .and_then(|record| snooze_until_local(state, outbox, &record));
+    match until {
+        Some(text) => format!("Snoozed until {text}"),
+        None => "Snoozed".to_string(),
     }
 }
 
