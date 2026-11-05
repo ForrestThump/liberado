@@ -15,6 +15,17 @@ use super::vapid::VapidMaterial;
 
 pub const REMINDER_TTL: u64 = 6 * 60 * 60;
 
+/// Minutes for the tray Snooze button and for `POST /api/outbox/action` when
+/// `minutes` is omitted. The detail page's short snooze uses this same length.
+pub const DEFAULT_SNOOZE_MINUTES: i64 = 15;
+
+/// `kind` value for a vault task. Matches `liberado_outbox::TASK_DUE`.
+/// This crate does not depend on the outbox crate in production.
+const TASK_DUE_KIND: &str = "task_due";
+
+/// `source.type` for a note task. Matches `OutboxSource::VaultNote`.
+const VAULT_NOTE_SOURCE: &str = "vault_note";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PushDelivery {
     Accepted,
@@ -49,6 +60,12 @@ struct PayloadRow {
 struct PayloadDigestItem {
     outbox_id: i64,
     kind: String,
+    title: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct PayloadAction {
+    action: &'static str,
     title: String,
 }
 
@@ -112,7 +129,44 @@ pub fn reminder_payload(input: &ReminderPushInput) -> String {
     if !items.is_empty() {
         value["items"] = serde_json::to_value(items).unwrap_or(serde_json::Value::Array(vec![]));
     }
+    attach_tray_actions(&mut value, input);
     value.to_string()
+}
+
+fn attach_tray_actions(value: &mut serde_json::Value, input: &ReminderPushInput) {
+    let Some(actions) = tray_actions(input) else {
+        return;
+    };
+    value["actions"] = serde_json::to_value(&actions).unwrap_or(serde_json::Value::Array(vec![]));
+    value["snooze_minutes"] = serde_json::json!(DEFAULT_SNOOZE_MINUTES);
+}
+
+/// Done and Snooze belong on a single vault task. Digests, tests, events, and
+/// approvals omit the field so older workers and non-task pushes stay unchanged.
+fn tray_actions(input: &ReminderPushInput) -> Option<Vec<PayloadAction>> {
+    if !completable_vault_task(input) {
+        return None;
+    }
+    Some(vec![
+        PayloadAction {
+            action: "done",
+            title: "Done".to_string(),
+        },
+        PayloadAction {
+            action: "snooze",
+            title: format!("Snooze {DEFAULT_SNOOZE_MINUTES}m"),
+        },
+    ])
+}
+
+fn completable_vault_task(input: &ReminderPushInput) -> bool {
+    input.kind == TASK_DUE_KIND
+        && input.rows.len() == 1
+        && source_type(input) == Some(VAULT_NOTE_SOURCE)
+}
+
+fn source_type(input: &ReminderPushInput) -> Option<&str> {
+    input.source.as_ref()?.get("type")?.as_str()
 }
 
 pub async fn post_push(keys: &VapidMaterial, request: PushRequest<'_>) -> PushDelivery {
@@ -343,18 +397,28 @@ mod tests {
         assert_eq!(
             keys,
             [
+                "actions",
                 "body",
                 "due_at",
                 "kind",
                 "late",
                 "outbox_id",
                 "rows",
+                "snooze_minutes",
                 "source",
                 "tag",
                 "title",
                 "url",
                 "v"
             ]
+        );
+        assert_eq!(value["snooze_minutes"], DEFAULT_SNOOZE_MINUTES);
+        assert_eq!(
+            value["actions"],
+            serde_json::json!([
+                {"action": "done", "title": "Done"},
+                {"action": "snooze", "title": format!("Snooze {DEFAULT_SNOOZE_MINUTES}m")}
+            ])
         );
         assert_eq!(value["title"], "Due now: Call dentist");
         assert_eq!(value["body"], "Task due 2:00 PM · Tasks/Inbox.md");
@@ -445,6 +509,82 @@ mod tests {
         assert_eq!(value["due_at"], "2026-11-01T20:00:00Z");
         assert_eq!(value["late"], false);
         assert_eq!(value["source"]["type"], "vault_note");
+        assert!(value.get("actions").is_some());
+    }
+
+    #[test]
+    fn tray_actions_are_only_on_a_single_completable_vault_task() {
+        assert_eq!(TASK_DUE_KIND, liberado_outbox::TASK_DUE);
+        let encoded = serde_json::to_value(OutboxSource::VaultNote {
+            path: "Tasks/Inbox.md".into(),
+            label: "due".into(),
+            text: "Call dentist".into(),
+        })
+        .unwrap();
+        assert_eq!(encoded["type"], VAULT_NOTE_SOURCE);
+
+        let task = parse_payload(&reminder_payload(&ReminderPushInput {
+            title: "Due now: Call dentist".into(),
+            body: "body".into(),
+            tag: "row-1".into(),
+            rows: vec![(1, "tok".into())],
+            kind: TASK_DUE.into(),
+            outbox_id: Some(1),
+            due_at: None,
+            late: false,
+            source: Some(encoded),
+            items: Vec::new(),
+        }));
+        assert_eq!(task["actions"][0]["action"], "done");
+        assert_eq!(
+            task["actions"][1]["title"],
+            format!("Snooze {DEFAULT_SNOOZE_MINUTES}m")
+        );
+
+        let without_actions = [
+            sample_input(EVENT_START),
+            sample_input(HABIT),
+            sample_input(TEST),
+            sample_input(REMINDER),
+            sample_input(TASK_DUE),
+            ReminderPushInput {
+                rows: vec![(1, "a".into()), (2, "b".into())],
+                kind: TASK_DUE.into(),
+                source: Some(
+                    serde_json::json!({"type": "vault_note", "path": "n", "label": "due", "text": "t"}),
+                ),
+                ..sample_input(TASK_DUE)
+            },
+            ReminderPushInput {
+                kind: DIGEST.into(),
+                outbox_id: None,
+                rows: vec![(1, "a".into()), (2, "b".into())],
+                source: None,
+                items: vec![(1, TASK_DUE.into(), "Due now: x".into())],
+                ..sample_input(DIGEST)
+            },
+        ];
+        for input in without_actions {
+            let value = parse_payload(&reminder_payload(&input));
+            assert!(
+                value.get("actions").is_none(),
+                "kind {} must not offer tray actions",
+                input.kind
+            );
+            assert!(value.get("snooze_minutes").is_none());
+        }
+    }
+
+    #[test]
+    fn detail_page_short_snooze_uses_the_tray_default() {
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../webui/src/components/notification_detail/mod.rs");
+        let source = std::fs::read_to_string(path).expect("notification detail page");
+        let needle = format!("Snooze {DEFAULT_SNOOZE_MINUTES}m");
+        assert!(
+            source.contains(&needle),
+            "detail page short snooze must match DEFAULT_SNOOZE_MINUTES ({DEFAULT_SNOOZE_MINUTES})"
+        );
     }
 
     #[test]
