@@ -207,6 +207,16 @@ mod tests {
     }
 
     #[test]
+    fn service_worker_notification_actions_run_in_node() {
+        let status = std::process::Command::new("node")
+            .arg("sw_node_test.mjs")
+            .current_dir(std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("public"))
+            .status()
+            .expect("node must be installed to run sw_node_test.mjs");
+        assert!(status.success(), "sw_node_test.mjs failed");
+    }
+
+    #[test]
     fn shipped_index_html_is_the_pwa_shell() {
         let errors = index_html_errors(&read_crate_file("index.html"));
         assert!(errors.is_empty(), "{errors:?}");

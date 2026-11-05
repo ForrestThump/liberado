@@ -148,6 +148,8 @@ pub fn NotificationDetailPage(api_base: String, outbox_id: i64, route: Signal<Ro
                                                     busy.set(false);
                                                 });
                                             },
+                                            // Same length as liberado_notify::web_push::DEFAULT_SNOOZE_MINUTES.
+                                            // This surface crate cannot import that constant.
                                             "Snooze 15m"
                                         }
                                         button {

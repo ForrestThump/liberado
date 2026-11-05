@@ -32,6 +32,18 @@ fn push_handler_errors(text: &str) -> Vec<String> {
     if !text.contains("notificationclick") {
         errors.push("service worker must ack on notificationclick".into());
     }
+    if !text.contains("/api/outbox/ack") {
+        errors.push("service worker must ack rows on a notification body tap".into());
+    }
+    if !text.contains("/api/outbox/action") {
+        errors.push("service worker must post tray actions to /api/outbox/action".into());
+    }
+    if text.contains("maxActions") {
+        errors.push(
+            "service worker must not read maxActions; a zero count must not hide the notification"
+                .into(),
+        );
+    }
     if !text.contains("showNotification") {
         errors.push("service worker must showNotification on push".into());
     }
