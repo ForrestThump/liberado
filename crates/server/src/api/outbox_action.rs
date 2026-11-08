@@ -15,7 +15,8 @@ use serde::Deserialize;
 
 use crate::state::AppState;
 
-use super::outbox_detail::{ActionFail, apply_complete, apply_snooze, done_notice, is_vault_task};
+use super::outbox_apply::{ActionFail, apply_complete, apply_snooze, fail_result, is_vault_task};
+use super::outbox_detail::done_notice;
 use super::outbox_log::{self, VIA_TRAY};
 
 const ACTION_DONE: &str = "done";
@@ -75,7 +76,13 @@ async fn run_tray_action(
     let record = match load_record(state, body.id) {
         Ok(record) => record,
         Err(err) => {
-            log_tray_stop(action, body.id, body.minutes, received_at, fail_label(&err));
+            log_tray_stop(
+                action,
+                body.id,
+                body.minutes,
+                received_at,
+                fail_result(&err),
+            );
             return Err(err);
         }
     };
@@ -117,13 +124,6 @@ fn log_tray_stop(
         TrayAction::Done => {
             outbox_log::log_outbox_action("complete", VIA_TRAY, id, received_at, result);
         }
-    }
-}
-
-fn fail_label(err: &ActionFail) -> &'static str {
-    match err {
-        ActionFail::NotFound => "not_found",
-        _ => "error",
     }
 }
 

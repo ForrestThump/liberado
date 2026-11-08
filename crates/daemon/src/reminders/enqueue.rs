@@ -92,10 +92,6 @@ fn log_inserted(
     key_hash: &str,
     subscription_id: Option<i64>,
 ) {
-    // The callsite interest cache is process-wide. A prior test with no subscriber
-    // would otherwise stick Interest::never on this line.
-    #[cfg(test)]
-    let hold = super::enqueue_tests::log_interest::hold();
     match subscription_id {
         Some(subscription_id) => info!(
             row_id,
@@ -103,13 +99,9 @@ fn log_inserted(
         ),
         None => info!(row_id, kind, due_at, key_hash, "reminder_enqueued"),
     }
-    #[cfg(test)]
-    drop(hold);
 }
 
 fn log_duplicate(kind: &str, due_at: &str, key_hash: &str, subscription_id: Option<i64>) {
-    #[cfg(test)]
-    let hold = super::enqueue_tests::log_interest::hold();
     match subscription_id {
         Some(subscription_id) => info!(
             reason = "duplicate",
@@ -120,8 +112,6 @@ fn log_duplicate(kind: &str, due_at: &str, key_hash: &str, subscription_id: Opti
             key_hash, kind, due_at, "reminder_enqueue_skipped"
         ),
     }
-    #[cfg(test)]
-    drop(hold);
 }
 
 fn subscription_id(target: &str) -> Option<i64> {

@@ -73,6 +73,8 @@ coder-full = ["coding", "liberado-coder-agent/full-tools"]
 vector-local = ["dep:liberado-memory-store", "dep:turbovault-vector"]
 
 [dev-dependencies]
+# Test-only: the shared tracing capture. Production builds do not enable it.
+liberado-notify = { workspace = true, features = ["log-capture"] }
 # The exact deserializer axum's `Query` extractor uses, so the query-string contract test in
 # api/chat.rs exercises the real parser rather than an approximation of it.
 serde_urlencoded = "0.7"

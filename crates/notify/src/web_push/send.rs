@@ -42,11 +42,7 @@ pub struct PushRequest<'a> {
     pub urgency: &'a str,
 }
 
-/// Ids for the worker log. The endpoint and payload are not logged.
-pub struct PushAttemptIds<'a> {
-    pub row_ids: &'a [i64],
-    pub subscription_id: i64,
-}
+pub use super::attempt::PushAttemptIds;
 
 /// Landing URL for notification click navigation (service worker `payload.url`).
 pub fn notification_url(kind: &str, outbox_id: i64) -> String {
@@ -180,112 +176,24 @@ pub async fn post_push(
     request: PushRequest<'_>,
     attempt: PushAttemptIds<'_>,
 ) -> PushDelivery {
-    let host = host_of(request.endpoint);
     let attempt_at = Utc::now();
     match post(keys, &request).await {
         Ok(status) => {
-            let class = classify(status);
-            log_push_http(&host, &attempt, attempt_at, &class, status.as_u16());
+            let class = super::attempt::classify(status);
+            super::attempt::log_push_http(
+                request.endpoint,
+                &attempt,
+                attempt_at,
+                &class,
+                status.as_u16(),
+            );
             class.delivery
         }
         Err(_) => {
-            log_push_transport(&host, &attempt, attempt_at);
+            super::attempt::log_push_transport(request.endpoint, &attempt, attempt_at);
             PushDelivery::Failed
         }
     }
-}
-
-struct Classified {
-    delivery: PushDelivery,
-    outcome: &'static str,
-    warn: bool,
-}
-
-fn classify(status: reqwest::StatusCode) -> Classified {
-    let code = status.as_u16();
-    if (200..300).contains(&code) {
-        return Classified {
-            delivery: PushDelivery::Accepted,
-            outcome: "provider_accepted",
-            warn: false,
-        };
-    }
-    if code == 404 || code == 410 {
-        return Classified {
-            delivery: PushDelivery::Gone,
-            outcome: "gone",
-            warn: false,
-        };
-    }
-    Classified {
-        delivery: PushDelivery::Failed,
-        outcome: "rejected",
-        warn: true,
-    }
-}
-
-fn log_push_http(
-    host: &str,
-    attempt: &PushAttemptIds<'_>,
-    attempt_at: DateTime<Utc>,
-    class: &Classified,
-    status: u16,
-) {
-    let row_ids = join_row_ids(attempt.row_ids);
-    let attempt_at = attempt_at.to_rfc3339_opts(SecondsFormat::Secs, true);
-    #[cfg(test)]
-    let hold = tests::log_interest::hold();
-    if class.warn {
-        tracing::warn!(
-            row_ids = %row_ids,
-            subscription_id = attempt.subscription_id,
-            push_host = %host,
-            outcome = class.outcome,
-            status,
-            attempt_at = %attempt_at,
-            "web_push_attempt"
-        );
-    } else {
-        tracing::info!(
-            row_ids = %row_ids,
-            subscription_id = attempt.subscription_id,
-            push_host = %host,
-            outcome = class.outcome,
-            status,
-            attempt_at = %attempt_at,
-            "web_push_attempt"
-        );
-    }
-    #[cfg(test)]
-    drop(hold);
-}
-
-fn log_push_transport(host: &str, attempt: &PushAttemptIds<'_>, attempt_at: DateTime<Utc>) {
-    let row_ids = join_row_ids(attempt.row_ids);
-    let attempt_at = attempt_at.to_rfc3339_opts(SecondsFormat::Secs, true);
-    #[cfg(test)]
-    let hold = tests::log_interest::hold();
-    tracing::warn!(
-        row_ids = %row_ids,
-        subscription_id = attempt.subscription_id,
-        push_host = %host,
-        outcome = "transport_error",
-        attempt_at = %attempt_at,
-        "web_push_attempt"
-    );
-    #[cfg(test)]
-    drop(hold);
-}
-
-fn join_row_ids(ids: &[i64]) -> String {
-    let mut out = String::new();
-    for (index, id) in ids.iter().enumerate() {
-        if index > 0 {
-            out.push(',');
-        }
-        out.push_str(&id.to_string());
-    }
-    out
 }
 
 struct Prepared {
@@ -366,13 +274,6 @@ pub(crate) fn origin_of(endpoint: &str) -> Result<String, String> {
         return Err("push endpoint has no origin".into());
     }
     Ok(format!("{scheme}://{host}"))
-}
-
-pub(crate) fn host_of(endpoint: &str) -> String {
-    origin_of(endpoint)
-        .ok()
-        .and_then(|origin| origin.split("://").nth(1).map(str::to_string))
-        .unwrap_or_else(|| "push".into())
 }
 
 #[cfg(test)]
@@ -801,133 +702,6 @@ mod tests {
         assert!(json.len() < 3993, "payload {} bytes", json.len());
     }
 
-    pub(crate) mod log_interest {
-        use std::cell::Cell;
-        use std::sync::{Mutex, MutexGuard};
-
-        static LOCK: Mutex<()> = Mutex::new(());
-
-        thread_local! {
-            static CAPTURE: Cell<bool> = const { Cell::new(false) };
-        }
-
-        pub(crate) fn set_capture(on: bool) {
-            CAPTURE.with(|flag| flag.set(on));
-        }
-
-        pub(crate) fn hold() -> MutexGuard<'static, ()> {
-            let guard = LOCK.lock().expect("log interest lock");
-            if CAPTURE.with(|flag| flag.get()) {
-                tracing::callsite::rebuild_interest_cache();
-            }
-            guard
-        }
-    }
-
-    struct PushLogSession {
-        logs: LogCapture,
-        _guard: tracing::subscriber::DefaultGuard,
-    }
-
-    impl PushLogSession {
-        fn arm() -> Self {
-            let logs = LogCapture::new();
-            log_interest::set_capture(true);
-            let guard = tracing::subscriber::set_default(logs.clone());
-            Self {
-                logs,
-                _guard: guard,
-            }
-        }
-
-        fn text(&self) -> String {
-            self.logs.text()
-        }
-    }
-
-    impl Drop for PushLogSession {
-        fn drop(&mut self) {
-            log_interest::set_capture(false);
-        }
-    }
-
-    #[derive(Clone)]
-    struct LogCapture {
-        lines: std::sync::Arc<std::sync::Mutex<Vec<(tracing::Level, String)>>>,
-    }
-
-    struct FieldVisit(Vec<String>);
-
-    impl tracing::field::Visit for FieldVisit {
-        fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
-            self.0.push(format!("{}={value}", field.name()));
-        }
-
-        fn record_i64(&mut self, field: &tracing::field::Field, value: i64) {
-            self.0.push(format!("{}={value}", field.name()));
-        }
-
-        fn record_u64(&mut self, field: &tracing::field::Field, value: u64) {
-            self.0.push(format!("{}={value}", field.name()));
-        }
-
-        fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
-            self.0.push(format!("{}={value:?}", field.name()));
-        }
-    }
-
-    impl LogCapture {
-        fn new() -> Self {
-            Self {
-                lines: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
-            }
-        }
-
-        fn text(&self) -> String {
-            self.lines
-                .lock()
-                .expect("log lock")
-                .iter()
-                .map(|(_, line)| line.clone())
-                .collect::<Vec<_>>()
-                .join("\n")
-        }
-    }
-
-    impl tracing::Subscriber for LogCapture {
-        fn enabled(&self, _: &tracing::Metadata<'_>) -> bool {
-            true
-        }
-
-        fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
-            tracing::span::Id::from_u64(1)
-        }
-
-        fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
-
-        fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
-
-        fn register_callsite(
-            &self,
-            _: &'static tracing::Metadata<'static>,
-        ) -> tracing::subscriber::Interest {
-            tracing::subscriber::Interest::sometimes()
-        }
-
-        fn event(&self, event: &tracing::Event<'_>) {
-            let mut visit = FieldVisit(Vec::new());
-            event.record(&mut visit);
-            self.lines
-                .lock()
-                .expect("log lock")
-                .push((*event.metadata().level(), visit.0.join(" ")));
-        }
-
-        fn enter(&self, _: &tracing::span::Id) {}
-
-        fn exit(&self, _: &tracing::span::Id) {}
-    }
-
     fn attempt_ids() -> PushAttemptIds<'static> {
         PushAttemptIds {
             row_ids: &[42, 43],
@@ -967,7 +741,7 @@ mod tests {
             source: None,
             items: Vec::new(),
         });
-        let session = PushLogSession::arm();
+        let session = crate::log_capture::Capture::arm();
         let delivery = post_push(
             &keys(),
             push_request(&endpoint, payload.as_bytes()),
@@ -1002,7 +776,7 @@ mod tests {
             .mount(&rejected)
             .await;
         let payload = b"SECRET_TITLE_DO_NOT_LOG";
-        let session = PushLogSession::arm();
+        let session = crate::log_capture::Capture::arm();
         let gone_endpoint = format!("{}/SECRET_ENDPOINT_PATH", gone.uri());
         let gone_delivery = post_push(
             &keys(),
@@ -1032,7 +806,7 @@ mod tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn web_push_attempt_logs_transport_error_without_the_endpoint() {
-        let session = PushLogSession::arm();
+        let session = crate::log_capture::Capture::arm();
         let endpoint = "http://127.0.0.1:1/SECRET_ENDPOINT_PATH";
         let delivery = post_push(
             &keys(),

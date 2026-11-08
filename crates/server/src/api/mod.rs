@@ -12,6 +12,7 @@ mod mcp_status;
 mod outbox_action;
 #[cfg(test)]
 mod outbox_action_http_tests;
+mod outbox_apply;
 mod outbox_detail;
 #[cfg(test)]
 mod outbox_detail_http_tests;

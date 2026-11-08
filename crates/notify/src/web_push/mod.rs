@@ -5,6 +5,7 @@
 //! Weekly spending and its per-subscription week stamp stayed on that branch.
 
 mod aesgcm;
+mod attempt;
 mod b64;
 mod send;
 mod vapid;

@@ -431,8 +431,7 @@ async fn tray_snooze_follow_up_uses_action_time_and_log_hides_the_task() {
         .unwrap()
         .token;
     let app = action_app(outbox.clone(), PathBuf::from("/tmp/v")).await;
-    let logs = super::outbox_log::capture::LogCapture::new();
-    let session = super::outbox_log::capture::Session::arm(logs);
+    let session = liberado_notify::log_capture::Capture::arm();
     let start = Utc::now();
     let response = app
         .oneshot(post_json(

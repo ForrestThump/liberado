@@ -330,8 +330,7 @@ async fn owner_snooze_follow_up_uses_action_time_and_log_hides_the_task() {
     let outbox = Arc::new(Outbox::open(&path).unwrap());
     let (id, original) = enqueue_early(&outbox, "SECRET_TITLE_DO_NOT_LOG");
     let app = owner_outbox_app(outbox.clone(), std::path::PathBuf::from("/tmp/v")).await;
-    let logs = super::outbox_log::capture::LogCapture::new();
-    let session = super::outbox_log::capture::Session::arm(logs);
+    let session = liberado_notify::log_capture::Capture::arm();
     let start = Utc::now();
     let response = app
         .oneshot(owner_post(

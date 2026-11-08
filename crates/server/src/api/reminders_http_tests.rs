@@ -173,8 +173,7 @@ async fn body_tap_ack_logs_the_row_and_omits_the_token() {
         .unwrap();
     let token = outbox.due_rows(at, 10).unwrap()[0].token.clone();
     let app = app_with_outbox(outbox.clone()).await;
-    let logs = super::outbox_log::capture::LogCapture::new();
-    let session = super::outbox_log::capture::Session::arm(logs);
+    let session = liberado_notify::log_capture::Capture::arm();
     let wrong = app
         .clone()
         .oneshot(
