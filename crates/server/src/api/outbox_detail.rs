@@ -20,6 +20,7 @@ use serde::Serialize;
 
 use crate::state::AppState;
 
+use super::outbox_log::{self, SnoozeApplied, VIA_DETAIL};
 use super::vault_task_line::toggle_open_task_line;
 
 #[derive(Serialize)]
@@ -80,7 +81,7 @@ pub async fn complete_outbox(
     State(state): State<Arc<AppState>>,
     AxumPath(id): AxumPath<i64>,
 ) -> Response {
-    match apply_complete(state.as_ref(), id).await {
+    match apply_complete(state.as_ref(), id, VIA_DETAIL).await {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(err) => err.into_response(),
     }
@@ -91,7 +92,7 @@ pub async fn snooze_outbox(
     AxumPath(id): AxumPath<i64>,
     Json(body): Json<SnoozeBody>,
 ) -> Response {
-    match apply_snooze(state.as_ref(), id, body.minutes).await {
+    match apply_snooze(state.as_ref(), id, body.minutes, VIA_DETAIL).await {
         Ok(_) => StatusCode::NO_CONTENT.into_response(),
         Err(err) => err.into_response(),
     }
@@ -135,18 +136,50 @@ impl ActionFail {
 
 /// Same complete transition the owner route uses. Vault tasks are checked off
 /// before the row is claimed, so a failed note write leaves the row open.
-pub(crate) async fn apply_complete(state: &AppState, id: i64) -> Result<(), ActionFail> {
-    let outbox = require_outbox(state)?;
-    let record = require_record(outbox, id)?;
-    if is_vault_task(&record) {
-        write_vault_task(state, &record).await?;
+pub(crate) async fn apply_complete(
+    state: &AppState,
+    id: i64,
+    via: &'static str,
+) -> Result<(), ActionFail> {
+    let received_at = Utc::now();
+    let outbox = match require_outbox(state) {
+        Ok(outbox) => outbox,
+        Err(err) => {
+            outbox_log::log_outbox_action("complete", via, id, received_at, "error");
+            return Err(err);
+        }
+    };
+    let record = match require_record(outbox, id) {
+        Ok(record) => record,
+        Err(err) => {
+            outbox_log::log_outbox_action("complete", via, id, received_at, fail_result(&err));
+            return Err(err);
+        }
+    };
+    finish_complete(state, outbox, record, via, received_at).await
+}
+
+async fn finish_complete(
+    state: &AppState,
+    outbox: &liberado_outbox::Outbox,
+    record: OutboxRecord,
+    via: &str,
+    received_at: chrono::DateTime<Utc>,
+) -> Result<(), ActionFail> {
+    let vault_task = is_vault_task(&record);
+    let action = if vault_task { "complete" } else { "dismiss" };
+    if vault_task && let Err(err) = write_vault_task(state, &record).await {
+        outbox_log::log_outbox_action(action, via, record.id, received_at, "error");
+        return Err(err);
     }
-    let resolution = if is_vault_task(&record) {
+    let resolution = if vault_task {
         RES_COMPLETED
     } else {
         RES_DISMISSED
     };
-    resolve_claimed(outbox, id, resolution)
+    let result = resolve_claimed(outbox, record.id, resolution);
+    outbox_log::log_outbox_action(action, via, record.id, received_at, claimed_result(&result));
+    result
 }
 
 /// Same snooze transition the owner route uses. The string is the tray confirmation.
@@ -154,19 +187,97 @@ pub(crate) async fn apply_snooze(
     state: &AppState,
     id: i64,
     minutes: i64,
+    via: &'static str,
 ) -> Result<String, ActionFail> {
     if minutes <= 0 || minutes > MAX_SNOOZE_MINUTES {
+        outbox_log::log_snooze_stopped(via, id, minutes, Utc::now(), "error");
         return Err(ActionFail::bad("minutes must be between 1 and 10080"));
     }
-    let outbox = require_outbox(state)?;
+    let outbox = match require_outbox(state) {
+        Ok(outbox) => outbox,
+        Err(err) => {
+            outbox_log::log_snooze_stopped(via, id, minutes, Utc::now(), "error");
+            return Err(err);
+        }
+    };
     let now = Utc::now();
+    let prior = record_due(outbox, id);
     match outbox.owner_snooze(id, minutes, now) {
-        Ok(OwnerSnoozeResult::Applied { .. }) => Ok(snooze_notice(state, outbox, id)),
-        Ok(OwnerSnoozeResult::AlreadyResolved(existing)) => Err(ActionFail::conflict(format!(
-            "row already resolved as {existing}"
-        ))),
-        Ok(OwnerSnoozeResult::NotFound) => Err(ActionFail::NotFound),
-        Err(err) => Err(ActionFail::internal(err.to_string())),
+        Ok(OwnerSnoozeResult::Applied { follow_up_id }) => {
+            note_applied_snooze(via, id, minutes, now, prior, outbox, follow_up_id);
+            Ok(snooze_notice(state, outbox, id))
+        }
+        Ok(OwnerSnoozeResult::AlreadyResolved(existing)) => {
+            outbox_log::log_snooze_stopped(via, id, minutes, now, "already_resolved");
+            Err(ActionFail::conflict(format!(
+                "row already resolved as {existing}"
+            )))
+        }
+        Ok(OwnerSnoozeResult::NotFound) => {
+            outbox_log::log_snooze_stopped(via, id, minutes, now, "not_found");
+            Err(ActionFail::NotFound)
+        }
+        Err(err) => {
+            outbox_log::log_snooze_stopped(via, id, minutes, now, "error");
+            Err(ActionFail::internal(err.to_string()))
+        }
+    }
+}
+
+fn note_applied_snooze(
+    via: &str,
+    id: i64,
+    minutes: i64,
+    now: chrono::DateTime<Utc>,
+    prior: Option<chrono::DateTime<Utc>>,
+    outbox: &liberado_outbox::Outbox,
+    follow_up_id: i64,
+) {
+    let Some(prior_due_at) = prior else {
+        outbox_log::log_outbox_action("snooze", via, id, now, "applied");
+        return;
+    };
+    let Some(new_due_at) = follow_up_due(outbox, id) else {
+        outbox_log::log_outbox_action("snooze", via, id, now, "applied");
+        return;
+    };
+    outbox_log::log_snooze_applied(&SnoozeApplied {
+        via,
+        row_id: id,
+        minutes,
+        received_at: now,
+        prior_due_at,
+        new_due_at,
+        follow_up_row_id: follow_up_id,
+    });
+}
+
+fn record_due(outbox: &liberado_outbox::Outbox, id: i64) -> Option<chrono::DateTime<Utc>> {
+    outbox
+        .fetch_record(id)
+        .ok()
+        .flatten()
+        .map(|record| record.due_at)
+}
+
+fn follow_up_due(outbox: &liberado_outbox::Outbox, id: i64) -> Option<chrono::DateTime<Utc>> {
+    let key = format!("snooze/{id}");
+    outbox.due_at_by_idempotency(&key).ok().flatten()
+}
+
+fn fail_result(err: &ActionFail) -> &'static str {
+    match err {
+        ActionFail::NotFound => "not_found",
+        _ => "error",
+    }
+}
+
+fn claimed_result(result: &Result<(), ActionFail>) -> &'static str {
+    match result {
+        Ok(()) => "applied",
+        Err(ActionFail::NotFound) => "not_found",
+        Err(ActionFail::Conflict(_)) => "already_resolved",
+        Err(_) => "error",
     }
 }
 

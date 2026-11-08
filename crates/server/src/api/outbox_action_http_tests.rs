@@ -9,8 +9,8 @@ use axum::{
     body::Body,
     http::{Request, StatusCode},
 };
-use chrono::{Duration, Utc};
-use liberado_outbox::{NewReminder, Outbox, OutboxSource, RES_COMPLETED, TASK_DUE};
+use chrono::{Duration, SecondsFormat, Utc};
+use liberado_outbox::{EnqueueOutcome, NewReminder, Outbox, OutboxSource, RES_COMPLETED, TASK_DUE};
 use tower::ServiceExt;
 
 use super::{complete_outbox, get_outbox_detail, outbox_action_with_state, snooze_outbox};
@@ -392,4 +392,80 @@ async fn owner_detail_still_requires_auth_on_the_production_shape() {
         .await
         .unwrap();
     assert_eq!(snooze.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn tray_snooze_follow_up_uses_action_time_and_log_hides_the_task() {
+    let outbox = open_outbox();
+    let now = Utc::now();
+    let due = now - Duration::minutes(45);
+    let EnqueueOutcome::Inserted(id) = outbox
+        .enqueue(
+            &NewReminder {
+                idempotency_key: "tray-clock".into(),
+                channel: "webpush".into(),
+                target: "sub:1".into(),
+                title: "SECRET_TITLE_DO_NOT_LOG".into(),
+                body: "SECRET_BODY_DO_NOT_LOG".into(),
+                due_at: due,
+                catch_up: false,
+                kind: Some(TASK_DUE.into()),
+                source: Some(OutboxSource::VaultNote {
+                    path: "Tasks/SECRETPATH.md".into(),
+                    label: "due".into(),
+                    text: "SECRET_TITLE_DO_NOT_LOG".into(),
+                }),
+            },
+            now,
+        )
+        .unwrap()
+    else {
+        panic!("expected insert");
+    };
+    let original = outbox.fetch_record(id).unwrap().unwrap().due_at;
+    let token = outbox
+        .due_rows(Utc::now(), 10)
+        .unwrap()
+        .into_iter()
+        .find(|row| row.id == id)
+        .unwrap()
+        .token;
+    let app = action_app(outbox.clone(), PathBuf::from("/tmp/v")).await;
+    let logs = super::outbox_log::capture::LogCapture::new();
+    let session = super::outbox_log::capture::Session::arm(logs);
+    let start = Utc::now();
+    let response = app
+        .oneshot(post_json(
+            "/api/outbox/action",
+            &format!(r#"{{"id":{id},"token":"{token}","action":"snooze","minutes":15}}"#),
+        ))
+        .await
+        .unwrap();
+    let end = Utc::now();
+    assert_eq!(response.status(), StatusCode::OK);
+    let follow = outbox
+        .due_at_by_idempotency(&format!("snooze/{id}"))
+        .unwrap()
+        .unwrap();
+    let lower = start + Duration::minutes(15) - Duration::seconds(2);
+    let upper = end + Duration::minutes(15) + Duration::seconds(2);
+    assert!(
+        follow >= lower && follow <= upper,
+        "follow-up due {follow} not in [{lower}, {upper}]"
+    );
+    assert!(start.signed_duration_since(original) > Duration::minutes(30));
+    assert_ne!(follow, original + Duration::minutes(15));
+    let text = session.text();
+    let prior = original.to_rfc3339_opts(SecondsFormat::Secs, true);
+    let new_due = follow.to_rfc3339_opts(SecondsFormat::Secs, true);
+    assert!(text.contains("action=snooze"), "{text}");
+    assert!(text.contains("via=tray"), "{text}");
+    assert!(text.contains(&format!("row_id={id}")), "{text}");
+    assert!(text.contains("minutes=15"), "{text}");
+    assert!(text.contains("result=applied"), "{text}");
+    assert!(text.contains(&format!("prior_due_at={prior}")), "{text}");
+    assert!(text.contains(&format!("new_due_at={new_due}")), "{text}");
+    assert!(text.contains("follow_up_row_id="), "{text}");
+    assert!(!text.contains("SECRET"), "{text}");
+    assert!(!text.contains(&token), "{text}");
 }

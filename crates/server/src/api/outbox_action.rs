@@ -8,6 +8,7 @@
 use std::sync::Arc;
 
 use axum::{Json, extract::State, http::StatusCode, response::IntoResponse};
+use chrono::{DateTime, Utc};
 use liberado_notify::web_push::DEFAULT_SNOOZE_MINUTES;
 use liberado_outbox::OutboxRecord;
 use serde::Deserialize;
@@ -15,6 +16,7 @@ use serde::Deserialize;
 use crate::state::AppState;
 
 use super::outbox_detail::{ActionFail, apply_complete, apply_snooze, done_notice, is_vault_task};
+use super::outbox_log::{self, VIA_TRAY};
 
 const ACTION_DONE: &str = "done";
 const ACTION_SNOOZE: &str = "snooze";
@@ -28,6 +30,7 @@ pub struct ActionBody {
     minutes: Option<i64>,
 }
 
+#[derive(Clone, Copy)]
 enum TrayAction {
     Done,
     Snooze,
@@ -48,17 +51,79 @@ pub async fn outbox_action_with_state(
 }
 
 async fn dispatch_push_action(state: &AppState, body: ActionBody) -> Result<String, ActionFail> {
-    let action = parse_action(&body.action)?;
-    authorize_row(state, body.id, &body.token)?;
-    let record = load_record(state, body.id)?;
-    reject_if_resolved(&record)?;
-    ensure_tray_task(&record)?;
+    let received_at = Utc::now();
+    let action = match parse_action(&body.action) {
+        Ok(action) => action,
+        Err(err) => {
+            outbox_log::log_outbox_action("unknown", VIA_TRAY, body.id, received_at, "error");
+            return Err(err);
+        }
+    };
+    run_tray_action(state, body, action, received_at).await
+}
+
+async fn run_tray_action(
+    state: &AppState,
+    body: ActionBody,
+    action: TrayAction,
+    received_at: DateTime<Utc>,
+) -> Result<String, ActionFail> {
+    if let Err(err) = authorize_row(state, body.id, &body.token) {
+        log_tray_stop(action, body.id, body.minutes, received_at, "error");
+        return Err(err);
+    }
+    let record = match load_record(state, body.id) {
+        Ok(record) => record,
+        Err(err) => {
+            log_tray_stop(action, body.id, body.minutes, received_at, fail_label(&err));
+            return Err(err);
+        }
+    };
+    if let Err(err) = reject_if_resolved(&record) {
+        log_tray_stop(
+            action,
+            body.id,
+            body.minutes,
+            received_at,
+            "already_resolved",
+        );
+        return Err(err);
+    }
+    if let Err(err) = ensure_tray_task(&record) {
+        log_tray_stop(action, body.id, body.minutes, received_at, "error");
+        return Err(err);
+    }
     match action {
         TrayAction::Done => finish_done(state, body.id, &record).await,
         TrayAction::Snooze => {
             let minutes = body.minutes.unwrap_or(DEFAULT_SNOOZE_MINUTES);
-            apply_snooze(state, body.id, minutes).await
+            apply_snooze(state, body.id, minutes, VIA_TRAY).await
         }
+    }
+}
+
+fn log_tray_stop(
+    action: TrayAction,
+    id: i64,
+    minutes: Option<i64>,
+    received_at: DateTime<Utc>,
+    result: &'static str,
+) {
+    match action {
+        TrayAction::Snooze => {
+            let minutes = minutes.unwrap_or(DEFAULT_SNOOZE_MINUTES);
+            outbox_log::log_snooze_stopped(VIA_TRAY, id, minutes, received_at, result);
+        }
+        TrayAction::Done => {
+            outbox_log::log_outbox_action("complete", VIA_TRAY, id, received_at, result);
+        }
+    }
+}
+
+fn fail_label(err: &ActionFail) -> &'static str {
+    match err {
+        ActionFail::NotFound => "not_found",
+        _ => "error",
     }
 }
 
@@ -68,7 +133,7 @@ async fn finish_done(
     record: &OutboxRecord,
 ) -> Result<String, ActionFail> {
     let notice = done_notice(state, record);
-    apply_complete(state, id).await?;
+    apply_complete(state, id, VIA_TRAY).await?;
     Ok(notice)
 }
 

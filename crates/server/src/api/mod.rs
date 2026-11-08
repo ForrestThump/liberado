@@ -15,6 +15,7 @@ mod outbox_action_http_tests;
 mod outbox_detail;
 #[cfg(test)]
 mod outbox_detail_http_tests;
+mod outbox_log;
 mod plugins;
 mod profiles;
 mod reminders;
