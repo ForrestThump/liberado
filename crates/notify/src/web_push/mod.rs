@@ -10,8 +10,8 @@ mod send;
 mod vapid;
 
 pub use send::{
-    DEFAULT_SNOOZE_MINUTES, PushDelivery, PushRequest, REMINDER_TTL, ReminderPushInput,
-    notification_url, post_push, reminder_payload,
+    DEFAULT_SNOOZE_MINUTES, PushAttemptIds, PushDelivery, PushRequest, REMINDER_TTL,
+    ReminderPushInput, notification_url, post_push, reminder_payload,
 };
 pub use vapid::vapid_env_lines;
 
