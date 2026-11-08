@@ -310,15 +310,17 @@ impl Outbox {
             .map_err(Into::into)
     }
 
-    pub fn ack(&self, id: i64, token: &str, now: DateTime<Utc>) -> Result<()> {
+    /// `Ok(true)` when this call set `acked_at`. A bad token, a missing row, and
+    /// a row that was already acked return `Ok(false)`.
+    pub fn ack(&self, id: i64, token: &str, now: DateTime<Utc>) -> Result<bool> {
         if !self.push_token_matches(id, token)? {
-            return Ok(());
+            return Ok(false);
         }
-        self.lock().execute(
+        let changed = self.lock().execute(
             "UPDATE outbox SET acked_at = ?1 WHERE id = ?2 AND acked_at IS NULL",
             params![stamp(now), id],
         )?;
-        Ok(())
+        Ok(changed == 1)
     }
 
     /// Whether `token` is the push token for this row.

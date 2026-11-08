@@ -146,6 +146,70 @@ async fn outbox_ack_without_owner_cookie_is_open_and_constant_time() {
     assert!(outbox.acked(1).unwrap());
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn body_tap_ack_logs_the_row_and_omits_the_token() {
+    let path = tempfile::NamedTempFile::new()
+        .unwrap()
+        .into_temp_path()
+        .keep()
+        .unwrap();
+    let outbox = Arc::new(Outbox::open(&path).unwrap());
+    let at = Utc::now();
+    outbox
+        .enqueue(
+            &NewReminder {
+                idempotency_key: "ack-log".into(),
+                channel: "webpush".into(),
+                target: "sub:1".into(),
+                title: "SECRET_TITLE_DO_NOT_LOG".into(),
+                body: "SECRET_BODY_DO_NOT_LOG".into(),
+                due_at: at,
+                catch_up: false,
+                kind: None,
+                source: None,
+            },
+            at,
+        )
+        .unwrap();
+    let token = outbox.due_rows(at, 10).unwrap()[0].token.clone();
+    let app = app_with_outbox(outbox.clone()).await;
+    let logs = super::outbox_log::capture::LogCapture::new();
+    let session = super::outbox_log::capture::Session::arm(logs);
+    let wrong = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/outbox/ack")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"id":1,"token":"SECRET_WRONG_TOKEN"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let ok = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/outbox/ack")
+                .header("content-type", "application/json")
+                .body(Body::from(format!(r#"{{"id":1,"token":"{token}"}}"#)))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(wrong.status(), StatusCode::NO_CONTENT);
+    assert_eq!(ok.status(), StatusCode::NO_CONTENT);
+    assert!(outbox.acked(1).unwrap());
+    let text = session.text();
+    assert!(text.contains("message=outbox_ack"), "{text}");
+    assert!(text.contains("row_id=1"), "{text}");
+    assert!(text.contains("ack=body_tap"), "{text}");
+    assert!(text.contains("received_at="), "{text}");
+    assert!(!text.contains("SECRET"), "{text}");
+    assert!(!text.contains(&token), "{text}");
+}
+
 #[tokio::test]
 async fn push_handlers_keep_expected_statuses() {
     let path = tempfile::NamedTempFile::new()
