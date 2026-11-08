@@ -6,6 +6,10 @@
 //! again. The event is kept only while this thread holds a guard. Other threads
 //! drop it. The guard is not `Send`: an async test that captures logs must stay
 //! on `current_thread`, or the buffer and the `await` land on different threads.
+//!
+//! `set_global_default` runs once. When another subscriber already owns the
+//! process, that call fails. [`Capture::installed`] is then false, and this
+//! guard records nothing.
 
 use std::cell::RefCell;
 use std::marker::PhantomData;
@@ -21,17 +25,26 @@ thread_local! {
 
 /// Lines recorded on this thread until the guard drops.
 pub struct Capture {
+    installed: bool,
     _thread: PhantomData<*const ()>,
 }
 
 impl Capture {
     /// Start a fresh buffer on this thread and install the subscriber once.
+    ///
+    /// [`Self::installed`] reports whether this capture can record events.
     pub fn arm() -> Self {
-        install();
+        let installed = install();
         LINES.with(|slot| *slot.borrow_mut() = Some(Vec::new()));
         Self {
+            installed,
             _thread: PhantomData,
         }
+    }
+
+    /// True when this process uses the log-capture subscriber.
+    pub fn installed(&self) -> bool {
+        self.installed
     }
 
     /// Field lines joined by newlines, in record order.
@@ -49,12 +62,15 @@ impl Drop for Capture {
     }
 }
 
-fn install() {
-    static INSTALLED: OnceLock<()> = OnceLock::new();
-    INSTALLED.get_or_init(|| {
-        tracing::subscriber::set_global_default(LogCapture)
-            .expect("install log capture subscriber");
-    });
+/// False when a global subscriber was already set, so capture cannot record.
+fn install() -> bool {
+    static INSTALLED: OnceLock<bool> = OnceLock::new();
+    *INSTALLED.get_or_init(
+        || match tracing::subscriber::set_global_default(LogCapture) {
+            Ok(()) => true,
+            Err(_) => false,
+        },
+    )
 }
 
 struct LogCapture;
@@ -125,6 +141,7 @@ mod tests {
     #[test]
     fn armed_thread_keeps_fields_and_a_later_arm_starts_empty() {
         let first = Capture::arm();
+        assert!(first.installed());
         tracing::info!(row_id = 7_i64, due_at = %"2026-11-08T10:00:00Z", "reminder_enqueued");
         let text = first.text();
         assert!(text.contains("message=reminder_enqueued"), "{text}");
@@ -135,6 +152,7 @@ mod tests {
 
         tracing::info!(row_id = 8_i64, "reminder_enqueued");
         let second = Capture::arm();
+        assert!(second.installed());
         assert_eq!(second.text(), "");
     }
 }
