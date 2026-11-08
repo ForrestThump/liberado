@@ -17,6 +17,11 @@ pub fn fanout_key(base: &str, channel: &str, target: &str) -> String {
     format!("{base}/{channel}/{target}")
 }
 
+/// First 16 hex characters of SHA-256 of `key`. Safe to log. The key is not.
+pub fn key_hash_suffix(key: &str) -> String {
+    hex16(&Sha256::digest(key.as_bytes()))
+}
+
 fn block_id(line: &str) -> Option<String> {
     let token = line.split_whitespace().last()?;
     let rest = token.strip_prefix('^')?;
@@ -75,5 +80,16 @@ mod tests {
         let second = content_id("- [ ] beta");
         assert_ne!(first, second);
         assert_eq!(first.len(), 16);
+    }
+
+    #[test]
+    fn key_hash_suffix_is_16_hex_and_hides_the_key() {
+        let key = "remind/task/Life/SECRET.md/due/2026-11-08T10:00/abc";
+        let hash = key_hash_suffix(key);
+        assert_eq!(hash.len(), 16);
+        assert!(hash.chars().all(|ch| ch.is_ascii_hexdigit()));
+        assert!(!hash.contains("SECRET"));
+        assert_ne!(hash, key_hash_suffix("other"));
+        assert_eq!(hash, key_hash_suffix(key));
     }
 }

@@ -31,7 +31,7 @@ pub use auth_store::{
 pub use batch::{DeliveryBatch, DeliveryOutcome, DeliveryRow};
 pub use copy::DigestItem;
 pub use error::Error;
-pub use keys::{content_id, fanout_key, task_key};
+pub use keys::{content_id, fanout_key, key_hash_suffix, task_key};
 pub use kind::{
     DIGEST, EVENT_LIST, EVENT_START, HABIT, JOB_ERROR, REMINDER, TASK_DUE, TASK_LIST, TEST,
 };
