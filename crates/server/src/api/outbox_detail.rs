@@ -190,7 +190,7 @@ fn detail_json(
     }
 }
 
-fn operator_zone(state: &AppState) -> String {
+pub(crate) fn operator_zone(state: &AppState) -> String {
     state
         .config
         .topology

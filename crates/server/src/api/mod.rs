@@ -5,6 +5,9 @@ mod auth;
 mod automations;
 mod chat;
 mod chat_create;
+mod completions;
+#[cfg(test)]
+mod completions_http_tests;
 mod goals;
 mod grants;
 mod library;
@@ -20,6 +23,8 @@ mod outbox_log;
 mod plugins;
 mod profiles;
 mod push;
+#[cfg(test)]
+mod recurring_done_http_tests;
 mod reminders;
 #[cfg(test)]
 mod reminders_http_tests;
@@ -41,6 +46,7 @@ pub use chat::{
     patch_conversation_title, set_conversation_profile,
 };
 pub use chat_create::create_conversation;
+pub use completions::list_completions;
 pub use goals::{
     goals_cancel, goals_diff, goals_domains, goals_get, goals_list, goals_message, goals_park,
     goals_rewind, goals_start, goals_stream, list_projects,
