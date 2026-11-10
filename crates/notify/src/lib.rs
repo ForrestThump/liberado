@@ -26,6 +26,8 @@ use liberado_messaging::{
 };
 
 mod http_error;
+#[cfg(any(test, feature = "log-capture"))]
+pub mod log_capture;
 mod outbound_cards;
 mod telegram_ack;
 pub mod web_push;

@@ -144,6 +144,7 @@ impl OutboxDelivery {
         };
         let input = push_input_from_batch(batch);
         let payload = web_push::reminder_payload(&input);
+        let row_ids = batch.ids();
         let delivery = web_push::post_push(
             keys,
             web_push::PushRequest {
@@ -153,6 +154,10 @@ impl OutboxDelivery {
                 payload: payload.as_bytes(),
                 ttl_secs: REMINDER_TTL,
                 urgency: "high",
+            },
+            web_push::PushAttemptIds {
+                row_ids: &row_ids,
+                subscription_id: id,
             },
         )
         .await;

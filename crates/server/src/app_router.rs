@@ -87,6 +87,16 @@ pub(crate) fn owner_only_routes(state: &Arc<AppState>) -> Router {
 /// credential is obtained in the first place. `POST /api/hooks/{name}` carries its own
 /// per-hook shared secret (`X-Liberado-Hook-Secret`), which is the whole point of a webhook:
 /// it is called by software that will never hold an API token.
+///
+/// `POST /api/outbox/ack` and `POST /api/outbox/action` are how the installed service
+/// worker talks to the daemon. The worker has no owner cookie and no CSRF token, and
+/// it must keep working after the owner signs out. Each call carries the per-row push
+/// token from that notification. The token is compared in constant time to the row's
+/// stored hash and authorizes only that row. Ack sets `acked_at`. Action runs the same
+/// complete or snooze transition as the owner routes, and only for a completable vault
+/// task (`task_due` with a vault-note source). A token does not open any other route.
+/// Both posts use the process-wide JSON body limit. Ack has no rate limiter, and action
+/// does not add one.
 pub(crate) fn unauthenticated_routes(state: &Arc<AppState>, guard: &Arc<auth::ApiGuard>) -> Router {
     let hooks = Router::new()
         .route(
@@ -112,6 +122,10 @@ pub(crate) fn unauthenticated_routes(state: &Arc<AppState>, guard: &Arc<auth::Ap
         .route(
             "/api/outbox/ack",
             axum::routing::post(api::outbox_ack_with_state),
+        )
+        .route(
+            "/api/outbox/action",
+            axum::routing::post(api::outbox_action_with_state),
         )
         .with_state(state.clone());
     hooks.merge(sign_in).merge(ack)

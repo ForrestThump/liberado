@@ -9,9 +9,14 @@ mod goals;
 mod grants;
 mod library;
 mod mcp_status;
+mod outbox_action;
+#[cfg(test)]
+mod outbox_action_http_tests;
+mod outbox_apply;
 mod outbox_detail;
 #[cfg(test)]
 mod outbox_detail_http_tests;
+mod outbox_log;
 mod plugins;
 mod profiles;
 mod reminders;
@@ -41,6 +46,7 @@ pub use goals::{
 };
 pub use grants::{conversation_grants, get_header_grant};
 pub use library::list_library;
+pub use outbox_action::outbox_action_with_state;
 pub use outbox_detail::{complete_outbox, get_outbox_detail, snooze_outbox};
 pub use plugins::set_plugin_enabled;
 pub use profiles::{delete_profile, rename_profile};

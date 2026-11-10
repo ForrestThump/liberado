@@ -286,6 +286,22 @@ fn the_first_cursor_is_now_and_a_duplicate_insert_does_not_block_it() {
 }
 
 #[test]
+fn push_token_matches_after_delivery_clears_the_plaintext() {
+    let (outbox, _) = db();
+    let at = now();
+    outbox
+        .enqueue(&reminder("tok", "webpush", "sub:1", false, at), at)
+        .unwrap();
+    let token = outbox.due_rows(at, 20).unwrap()[0].token.clone();
+    outbox.lease(&[1], at).unwrap();
+    outbox.mark_accepted(&[1], at).unwrap();
+    assert!(outbox.due_rows(at, 20).unwrap().is_empty());
+    assert!(outbox.push_token_matches(1, &token).unwrap());
+    assert!(!outbox.push_token_matches(1, "not-the-token").unwrap());
+    assert!(!outbox.push_token_matches(99, &token).unwrap());
+}
+
+#[test]
 fn ack_sets_only_that_row_and_a_wrong_token_does_not() {
     let (outbox, _) = db();
     let at = now();

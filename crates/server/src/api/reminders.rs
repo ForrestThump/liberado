@@ -16,6 +16,8 @@ use tracing::{info, warn};
 
 use crate::state::AppState;
 
+use super::outbox_log;
+
 #[derive(Deserialize)]
 pub struct SubscribeBody {
     endpoint: String,
@@ -244,9 +246,18 @@ pub async fn outbox_ack_with_state(
     Json(body): Json<AckBody>,
 ) -> Response {
     if let Some(outbox) = state.outbox.as_ref() {
-        let _ = outbox.ack(body.id, &body.token, Utc::now());
+        note_ack(outbox, body.id, &body.token);
     }
     StatusCode::NO_CONTENT.into_response()
+}
+
+fn note_ack(outbox: &liberado_outbox::Outbox, id: i64, token: &str) {
+    let received_at = Utc::now();
+    match outbox.ack(id, token, received_at) {
+        Ok(true) => outbox_log::log_body_tap_ack(id, received_at),
+        Ok(false) => {}
+        Err(_) => outbox_log::log_ack_failed(id),
+    }
 }
 
 fn fail(status: StatusCode, message: &str) -> Response {

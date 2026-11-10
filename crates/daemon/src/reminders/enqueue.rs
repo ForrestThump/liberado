@@ -4,10 +4,12 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
+use chrono::SecondsFormat;
 use chrono::{DateTime, Utc};
 use liberado_config::RemindersConfig;
 use liberado_outbox::{
-    FanoutInput, NewReminder, Outbox, PassLimits, TelegramMode, fanout_key, plan_targets, run_pass,
+    EnqueueOutcome, FanoutInput, NewReminder, Outbox, PassLimits, TelegramMode, fanout_key,
+    key_hash_suffix, plan_targets, run_pass,
 };
 use tracing::info;
 
@@ -60,10 +62,64 @@ pub fn enqueue_mechanical(
                 kind: Some(item.kind.clone()),
                 source: item.source.clone(),
             };
-            outbox.enqueue(&row, now).map_err(|err| err.to_string())?;
+            let outcome = outbox.enqueue(&row, now).map_err(|err| err.to_string())?;
+            log_reminder_enqueue(&row, outcome);
         }
     }
     Ok(())
+}
+
+/// Ids, kind, due time, and a key hash. The key, path, title, and body stay out.
+pub(crate) fn log_reminder_enqueue(row: &NewReminder, outcome: EnqueueOutcome) {
+    let kind = row.kind.as_deref().unwrap_or("");
+    let due_at = row.due_at.to_rfc3339_opts(SecondsFormat::Secs, true);
+    let key_hash = key_hash_suffix(&row.idempotency_key);
+    let subscription_id = subscription_id(&row.target);
+    match outcome {
+        EnqueueOutcome::Inserted(row_id) => {
+            log_inserted(row_id, kind, &due_at, &key_hash, subscription_id);
+        }
+        EnqueueOutcome::Duplicate => {
+            log_duplicate(kind, &due_at, &key_hash, subscription_id);
+        }
+    }
+}
+
+fn log_inserted(
+    row_id: i64,
+    kind: &str,
+    due_at: &str,
+    key_hash: &str,
+    subscription_id: Option<i64>,
+) {
+    match subscription_id {
+        Some(subscription_id) => info!(
+            row_id,
+            kind, subscription_id, due_at, key_hash, "reminder_enqueued"
+        ),
+        None => info!(row_id, kind, due_at, key_hash, "reminder_enqueued"),
+    }
+}
+
+fn log_duplicate(kind: &str, due_at: &str, key_hash: &str, subscription_id: Option<i64>) {
+    match subscription_id {
+        Some(subscription_id) => info!(
+            reason = "duplicate",
+            key_hash, kind, due_at, subscription_id, "reminder_enqueue_skipped"
+        ),
+        None => info!(
+            reason = "duplicate",
+            key_hash, kind, due_at, "reminder_enqueue_skipped"
+        ),
+    }
+}
+
+fn subscription_id(target: &str) -> Option<i64> {
+    let rest = target.strip_prefix("sub:")?;
+    if rest.is_empty() || !rest.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    rest.parse().ok()
 }
 
 pub fn spawn_worker(

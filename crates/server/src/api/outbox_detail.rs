@@ -10,17 +10,14 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use chrono::Utc;
-use liberado_outbox::{
-    OpenRow, OutboxRecord, OutboxSource, OwnerResolveResult, OwnerSnoozeResult, RES_COMPLETED,
-    RES_DISMISSED, RES_SNOOZED, TASK_DUE,
-};
-use liberado_vault::Vault;
+use liberado_outbox::{OpenRow, OutboxRecord, OutboxSource, RES_SNOOZED};
 use serde::Deserialize;
 use serde::Serialize;
 
 use crate::state::AppState;
 
-use super::vault_task_line::toggle_open_task_line;
+use super::outbox_apply::{apply_complete, apply_snooze, fail};
+use super::outbox_log::VIA_DETAIL;
 
 #[derive(Serialize)]
 pub struct OutboxDetailResponse {
@@ -80,43 +77,10 @@ pub async fn complete_outbox(
     State(state): State<Arc<AppState>>,
     AxumPath(id): AxumPath<i64>,
 ) -> Response {
-    let Some(outbox) = state.outbox.as_ref() else {
-        return fail(StatusCode::SERVICE_UNAVAILABLE, "outbox is not available");
-    };
-    let Some(record) = (match outbox.fetch_record(id) {
-        Ok(row) => row,
-        Err(err) => return fail(StatusCode::INTERNAL_SERVER_ERROR, &err.to_string()),
-    }) else {
-        return fail(StatusCode::NOT_FOUND, "outbox row not found");
-    };
-    let vault_task =
-        record.kind == TASK_DUE && matches!(&record.source, Some(OutboxSource::VaultNote { .. }));
-    let now = Utc::now();
-    if vault_task
-        && let Some(OutboxSource::VaultNote { path, text, .. }) = &record.source
-        && let Err(message) = complete_vault_task(&state.vault_path, path, text).await
-    {
-        return fail(StatusCode::CONFLICT, &message);
+    match apply_complete(state.as_ref(), id, VIA_DETAIL).await {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(err) => err.into_response(),
     }
-    let resolution = if vault_task {
-        RES_COMPLETED
-    } else {
-        RES_DISMISSED
-    };
-    match outbox.try_resolve(id, resolution, now) {
-        Ok(OwnerResolveResult::AlreadyResolved(existing)) => {
-            return fail(
-                StatusCode::CONFLICT,
-                &format!("row already resolved as {existing}"),
-            );
-        }
-        Ok(OwnerResolveResult::NotFound) => {
-            return fail(StatusCode::NOT_FOUND, "outbox row not found");
-        }
-        Ok(OwnerResolveResult::Applied) => {}
-        Err(err) => return fail(StatusCode::INTERNAL_SERVER_ERROR, &err.to_string()),
-    }
-    StatusCode::NO_CONTENT.into_response()
 }
 
 pub async fn snooze_outbox(
@@ -124,25 +88,17 @@ pub async fn snooze_outbox(
     AxumPath(id): AxumPath<i64>,
     Json(body): Json<SnoozeBody>,
 ) -> Response {
-    if body.minutes <= 0 || body.minutes > 60 * 24 * 7 {
-        return fail(
-            StatusCode::BAD_REQUEST,
-            "minutes must be between 1 and 10080",
-        );
+    match apply_snooze(state.as_ref(), id, body.minutes, VIA_DETAIL).await {
+        Ok(_) => StatusCode::NO_CONTENT.into_response(),
+        Err(err) => err.into_response(),
     }
-    let Some(outbox) = state.outbox.as_ref() else {
-        return fail(StatusCode::SERVICE_UNAVAILABLE, "outbox is not available");
-    };
-    let now = Utc::now();
-    match outbox.owner_snooze(id, body.minutes, now) {
-        Ok(OwnerSnoozeResult::Applied { .. }) => StatusCode::NO_CONTENT.into_response(),
-        Ok(OwnerSnoozeResult::AlreadyResolved(existing)) => fail(
-            StatusCode::CONFLICT,
-            &format!("row already resolved as {existing}"),
-        ),
-        Ok(OwnerSnoozeResult::NotFound) => fail(StatusCode::NOT_FOUND, "outbox row not found"),
-        Err(err) => fail(StatusCode::INTERNAL_SERVER_ERROR, &err.to_string()),
-    }
+}
+
+pub(crate) fn done_notice(state: &AppState, record: &OutboxRecord) -> String {
+    let zone = operator_zone(state);
+    let open = open_row_from_record(record);
+    let (title, _, _) = liberado_outbox::copy::present_row(&open, Utc::now(), &zone);
+    format!("Done: {title}")
 }
 
 pub fn obsidian_vault_display_name(vault_path: &Path, configured: Option<&str>) -> String {
@@ -191,7 +147,7 @@ pub fn obsidian_url_for(
     Some(obsidian_open_url(&name, path))
 }
 
-fn snooze_until_local(
+pub(crate) fn snooze_until_local(
     state: &AppState,
     outbox: &liberado_outbox::Outbox,
     record: &OutboxRecord,
@@ -261,33 +217,6 @@ fn open_row_from_record(record: &OutboxRecord) -> OpenRow {
         kind: record.kind.clone(),
         source: record.source.clone(),
     }
-}
-
-async fn complete_vault_task(
-    vault_path: &str,
-    rel_path: &str,
-    task_text: &str,
-) -> Result<(), String> {
-    let vault = Vault::open("outbox-complete", vault_path)
-        .await
-        .map_err(|err| err.to_string())?;
-    let content = vault.read(rel_path).await.map_err(|err| err.to_string())?;
-    let updated = toggle_open_task_line(&content, task_text)?;
-    let hash = Vault::content_hash(&content);
-    vault
-        .write(
-            rel_path,
-            &updated,
-            Some(&hash),
-            &liberado_common::WriteProvenance::human(),
-        )
-        .await
-        .map_err(|err| err.to_string())?;
-    Ok(())
-}
-
-fn fail(status: StatusCode, message: &str) -> Response {
-    (status, Json(serde_json::json!({ "error": message }))).into_response()
 }
 
 #[cfg(test)]

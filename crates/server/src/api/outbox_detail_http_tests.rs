@@ -7,8 +7,8 @@ use axum::{
     body::Body,
     http::{Request, StatusCode},
 };
-use chrono::Utc;
-use liberado_outbox::{NewReminder, Outbox, OutboxSource, RES_COMPLETED, TASK_DUE};
+use chrono::{Duration, SecondsFormat, Utc};
+use liberado_outbox::{EnqueueOutcome, NewReminder, Outbox, OutboxSource, RES_COMPLETED, TASK_DUE};
 use tower::ServiceExt;
 
 use super::{complete_outbox, get_outbox_detail, snooze_outbox};
@@ -266,6 +266,99 @@ async fn snooze_outbox_enqueues_followup_not_due_immediately() {
     let rows = outbox.due_rows(fire, 10).unwrap();
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].title, "Snoozed: Due now: x");
+}
+
+fn enqueue_early(outbox: &Outbox, title: &str) -> (i64, chrono::DateTime<Utc>) {
+    let now = Utc::now();
+    let due = now - Duration::minutes(45);
+    let EnqueueOutcome::Inserted(id) = outbox
+        .enqueue(
+            &NewReminder {
+                idempotency_key: format!("early-{title}"),
+                channel: "webpush".into(),
+                target: "sub:1".into(),
+                title: title.into(),
+                body: "SECRET_BODY_DO_NOT_LOG".into(),
+                due_at: due,
+                catch_up: false,
+                kind: Some(TASK_DUE.into()),
+                source: Some(OutboxSource::VaultNote {
+                    path: "Tasks/SECRETPATH.md".into(),
+                    label: "due".into(),
+                    text: title.into(),
+                }),
+            },
+            now,
+        )
+        .unwrap()
+    else {
+        panic!("expected insert");
+    };
+    let stored = outbox.fetch_record(id).unwrap().unwrap().due_at;
+    (id, stored)
+}
+
+fn assert_follow_up_uses_action_clock(
+    outbox: &Outbox,
+    id: i64,
+    original: chrono::DateTime<Utc>,
+    start: chrono::DateTime<Utc>,
+    end: chrono::DateTime<Utc>,
+) {
+    let due = outbox
+        .due_at_by_idempotency(&format!("snooze/{id}"))
+        .unwrap()
+        .unwrap();
+    let lower = start + Duration::minutes(15) - Duration::seconds(2);
+    let upper = end + Duration::minutes(15) + Duration::seconds(2);
+    assert!(
+        due >= lower && due <= upper,
+        "follow-up due {due} not in [{lower}, {upper}]"
+    );
+    assert!(start.signed_duration_since(original) > Duration::minutes(30));
+    assert_ne!(due, original + Duration::minutes(15));
+    assert!(due > original + Duration::minutes(30));
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn owner_snooze_follow_up_uses_action_time_and_log_hides_the_task() {
+    let path = tempfile::NamedTempFile::new()
+        .unwrap()
+        .into_temp_path()
+        .keep()
+        .unwrap();
+    let outbox = Arc::new(Outbox::open(&path).unwrap());
+    let (id, original) = enqueue_early(&outbox, "SECRET_TITLE_DO_NOT_LOG");
+    let app = owner_outbox_app(outbox.clone(), std::path::PathBuf::from("/tmp/v")).await;
+    let session = liberado_notify::log_capture::Capture::arm();
+    let start = Utc::now();
+    let response = app
+        .oneshot(owner_post(
+            &format!("/api/outbox/{id}/snooze"),
+            r#"{"minutes":15}"#,
+        ))
+        .await
+        .unwrap();
+    let end = Utc::now();
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    assert_follow_up_uses_action_clock(&outbox, id, original, start, end);
+    let due = outbox
+        .due_at_by_idempotency(&format!("snooze/{id}"))
+        .unwrap()
+        .unwrap();
+    let text = session.text();
+    let prior = original.to_rfc3339_opts(SecondsFormat::Secs, true);
+    let new_due = due.to_rfc3339_opts(SecondsFormat::Secs, true);
+    assert!(text.contains("message=outbox_action"), "{text}");
+    assert!(text.contains("action=snooze"), "{text}");
+    assert!(text.contains("via=detail"), "{text}");
+    assert!(text.contains(&format!("row_id={id}")), "{text}");
+    assert!(text.contains("minutes=15"), "{text}");
+    assert!(text.contains("result=applied"), "{text}");
+    assert!(text.contains(&format!("prior_due_at={prior}")), "{text}");
+    assert!(text.contains(&format!("new_due_at={new_due}")), "{text}");
+    assert!(text.contains("follow_up_row_id="), "{text}");
+    assert!(!text.contains("SECRET"), "{text}");
 }
 
 #[tokio::test]

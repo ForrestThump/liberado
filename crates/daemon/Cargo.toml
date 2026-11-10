@@ -35,6 +35,8 @@ tracing = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]
+# Test-only: the shared tracing capture. Production builds do not enable it.
+liberado-notify = { workspace = true, features = ["log-capture"] }
 tempfile = { workspace = true }
 liberado-cron = { workspace = true }
 liberado-executor = { workspace = true }

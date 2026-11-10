@@ -212,7 +212,7 @@ fn read_outbox_record(row: &Row<'_>) -> rusqlite::Result<OutboxRecord> {
 
 #[cfg(test)]
 mod tests {
-    use chrono::{Duration, Utc};
+    use chrono::{Duration, TimeZone, Utc};
     use tempfile::NamedTempFile;
 
     use super::*;
@@ -318,6 +318,45 @@ mod tests {
         let rows = outbox.due_rows(fire, 10).unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].title, "Snoozed: Due now: x");
+    }
+
+    #[test]
+    fn snooze_follow_up_due_is_action_time_plus_minutes() {
+        let (outbox, _path) = open_temp();
+        let action = Utc.with_ymd_and_hms(2026, 11, 8, 10, 37, 0).unwrap();
+        let original_due = Utc.with_ymd_and_hms(2026, 11, 8, 10, 0, 0).unwrap();
+        let EnqueueOutcome::Inserted(id) = outbox
+            .enqueue(
+                &NewReminder {
+                    idempotency_key: "orig-clock".into(),
+                    channel: "web_push".into(),
+                    target: "sub:1".into(),
+                    title: "Due now: x".into(),
+                    body: "body".into(),
+                    due_at: original_due,
+                    catch_up: false,
+                    kind: None,
+                    source: None,
+                },
+                original_due,
+            )
+            .unwrap()
+        else {
+            panic!("expected insert");
+        };
+        let OwnerSnoozeResult::Applied { follow_up_id } =
+            outbox.owner_snooze(id, 15, action).unwrap()
+        else {
+            panic!("expected applied");
+        };
+        let follow = outbox.fetch_record(follow_up_id).unwrap().unwrap();
+        let expected = action + Duration::minutes(15);
+        assert_eq!(follow.due_at, expected);
+        assert_ne!(follow.due_at, original_due + Duration::minutes(15));
+        assert_eq!(
+            outbox.fetch_record(id).unwrap().unwrap().due_at,
+            original_due
+        );
     }
 
     #[test]

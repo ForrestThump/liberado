@@ -15,6 +15,17 @@ use super::vapid::VapidMaterial;
 
 pub const REMINDER_TTL: u64 = 6 * 60 * 60;
 
+/// Minutes for the tray Snooze button and for `POST /api/outbox/action` when
+/// `minutes` is omitted. The detail page's short snooze uses this same length.
+pub const DEFAULT_SNOOZE_MINUTES: i64 = 15;
+
+/// `kind` value for a vault task. Matches `liberado_outbox::TASK_DUE`.
+/// This crate does not depend on the outbox crate in production.
+const TASK_DUE_KIND: &str = "task_due";
+
+/// `source.type` for a note task. Matches `OutboxSource::VaultNote`.
+const VAULT_NOTE_SOURCE: &str = "vault_note";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PushDelivery {
     Accepted,
@@ -30,6 +41,8 @@ pub struct PushRequest<'a> {
     pub ttl_secs: u64,
     pub urgency: &'a str,
 }
+
+pub use super::attempt::PushAttemptIds;
 
 /// Landing URL for notification click navigation (service worker `payload.url`).
 pub fn notification_url(kind: &str, outbox_id: i64) -> String {
@@ -49,6 +62,12 @@ struct PayloadRow {
 struct PayloadDigestItem {
     outbox_id: i64,
     kind: String,
+    title: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct PayloadAction {
+    action: &'static str,
     title: String,
 }
 
@@ -112,31 +131,69 @@ pub fn reminder_payload(input: &ReminderPushInput) -> String {
     if !items.is_empty() {
         value["items"] = serde_json::to_value(items).unwrap_or(serde_json::Value::Array(vec![]));
     }
+    attach_tray_actions(&mut value, input);
     value.to_string()
 }
 
-pub async fn post_push(keys: &VapidMaterial, request: PushRequest<'_>) -> PushDelivery {
-    let host = host_of(request.endpoint);
+fn attach_tray_actions(value: &mut serde_json::Value, input: &ReminderPushInput) {
+    let Some(actions) = tray_actions(input) else {
+        return;
+    };
+    value["actions"] = serde_json::to_value(&actions).unwrap_or(serde_json::Value::Array(vec![]));
+    value["snooze_minutes"] = serde_json::json!(DEFAULT_SNOOZE_MINUTES);
+}
+
+/// Done and Snooze belong on a single vault task. Digests, tests, events, and
+/// approvals omit the field so older workers and non-task pushes stay unchanged.
+fn tray_actions(input: &ReminderPushInput) -> Option<Vec<PayloadAction>> {
+    if !completable_vault_task(input) {
+        return None;
+    }
+    Some(vec![
+        PayloadAction {
+            action: "done",
+            title: "Done".to_string(),
+        },
+        PayloadAction {
+            action: "snooze",
+            title: format!("Snooze {DEFAULT_SNOOZE_MINUTES}m"),
+        },
+    ])
+}
+
+fn completable_vault_task(input: &ReminderPushInput) -> bool {
+    input.kind == TASK_DUE_KIND
+        && input.rows.len() == 1
+        && source_type(input) == Some(VAULT_NOTE_SOURCE)
+}
+
+fn source_type(input: &ReminderPushInput) -> Option<&str> {
+    input.source.as_ref()?.get("type")?.as_str()
+}
+
+pub async fn post_push(
+    keys: &VapidMaterial,
+    request: PushRequest<'_>,
+    attempt: PushAttemptIds<'_>,
+) -> PushDelivery {
+    let attempt_at = Utc::now();
     match post(keys, &request).await {
-        Ok(status) => classified(&host, status),
-        Err(err) => {
-            tracing::warn!(host = %host, %err, "web push transport failed");
+        Ok(status) => {
+            let class = super::attempt::classify(status);
+            super::attempt::log_push_http(
+                request.endpoint,
+                &attempt,
+                attempt_at,
+                &class,
+                status.as_u16(),
+            );
+            class.delivery
+        }
+        Err(_) => {
+            super::attempt::log_push_transport(request.endpoint, &attempt, attempt_at);
             PushDelivery::Failed
         }
     }
-}
-
-fn classified(host: &str, status: reqwest::StatusCode) -> PushDelivery {
-    let code = status.as_u16();
-    if (200..300).contains(&code) {
-        return PushDelivery::Accepted;
-    }
-    if code == 404 || code == 410 {
-        tracing::info!(host = %host, status = code, "web push subscription is gone");
-        return PushDelivery::Gone;
-    }
-    tracing::warn!(host = %host, status = code, "web push was rejected");
-    PushDelivery::Failed
 }
 
 struct Prepared {
@@ -219,13 +276,6 @@ pub(crate) fn origin_of(endpoint: &str) -> Result<String, String> {
     Ok(format!("{scheme}://{host}"))
 }
 
-pub(crate) fn host_of(endpoint: &str) -> String {
-    origin_of(endpoint)
-        .ok()
-        .and_then(|origin| origin.split("://").nth(1).map(str::to_string))
-        .unwrap_or_else(|| "push".into())
-}
-
 #[cfg(test)]
 mod tests {
     use chrono::TimeZone;
@@ -292,6 +342,10 @@ mod tests {
                 ttl_secs: REMINDER_TTL,
                 urgency: "high",
             },
+            PushAttemptIds {
+                row_ids: &[1],
+                subscription_id: 1,
+            },
         )
         .await;
         assert_eq!(delivery, PushDelivery::Accepted);
@@ -312,6 +366,10 @@ mod tests {
                 payload: payload.as_bytes(),
                 ttl_secs: REMINDER_TTL,
                 urgency: "high",
+            },
+            PushAttemptIds {
+                row_ids: &[1],
+                subscription_id: 1,
             },
         )
         .await;
@@ -343,18 +401,28 @@ mod tests {
         assert_eq!(
             keys,
             [
+                "actions",
                 "body",
                 "due_at",
                 "kind",
                 "late",
                 "outbox_id",
                 "rows",
+                "snooze_minutes",
                 "source",
                 "tag",
                 "title",
                 "url",
                 "v"
             ]
+        );
+        assert_eq!(value["snooze_minutes"], DEFAULT_SNOOZE_MINUTES);
+        assert_eq!(
+            value["actions"],
+            serde_json::json!([
+                {"action": "done", "title": "Done"},
+                {"action": "snooze", "title": format!("Snooze {DEFAULT_SNOOZE_MINUTES}m")}
+            ])
         );
         assert_eq!(value["title"], "Due now: Call dentist");
         assert_eq!(value["body"], "Task due 2:00 PM · Tasks/Inbox.md");
@@ -445,6 +513,82 @@ mod tests {
         assert_eq!(value["due_at"], "2026-11-01T20:00:00Z");
         assert_eq!(value["late"], false);
         assert_eq!(value["source"]["type"], "vault_note");
+        assert!(value.get("actions").is_some());
+    }
+
+    #[test]
+    fn tray_actions_are_only_on_a_single_completable_vault_task() {
+        assert_eq!(TASK_DUE_KIND, liberado_outbox::TASK_DUE);
+        let encoded = serde_json::to_value(OutboxSource::VaultNote {
+            path: "Tasks/Inbox.md".into(),
+            label: "due".into(),
+            text: "Call dentist".into(),
+        })
+        .unwrap();
+        assert_eq!(encoded["type"], VAULT_NOTE_SOURCE);
+
+        let task = parse_payload(&reminder_payload(&ReminderPushInput {
+            title: "Due now: Call dentist".into(),
+            body: "body".into(),
+            tag: "row-1".into(),
+            rows: vec![(1, "tok".into())],
+            kind: TASK_DUE.into(),
+            outbox_id: Some(1),
+            due_at: None,
+            late: false,
+            source: Some(encoded),
+            items: Vec::new(),
+        }));
+        assert_eq!(task["actions"][0]["action"], "done");
+        assert_eq!(
+            task["actions"][1]["title"],
+            format!("Snooze {DEFAULT_SNOOZE_MINUTES}m")
+        );
+
+        let without_actions = [
+            sample_input(EVENT_START),
+            sample_input(HABIT),
+            sample_input(TEST),
+            sample_input(REMINDER),
+            sample_input(TASK_DUE),
+            ReminderPushInput {
+                rows: vec![(1, "a".into()), (2, "b".into())],
+                kind: TASK_DUE.into(),
+                source: Some(
+                    serde_json::json!({"type": "vault_note", "path": "n", "label": "due", "text": "t"}),
+                ),
+                ..sample_input(TASK_DUE)
+            },
+            ReminderPushInput {
+                kind: DIGEST.into(),
+                outbox_id: None,
+                rows: vec![(1, "a".into()), (2, "b".into())],
+                source: None,
+                items: vec![(1, TASK_DUE.into(), "Due now: x".into())],
+                ..sample_input(DIGEST)
+            },
+        ];
+        for input in without_actions {
+            let value = parse_payload(&reminder_payload(&input));
+            assert!(
+                value.get("actions").is_none(),
+                "kind {} must not offer tray actions",
+                input.kind
+            );
+            assert!(value.get("snooze_minutes").is_none());
+        }
+    }
+
+    #[test]
+    fn detail_page_short_snooze_uses_the_tray_default() {
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../webui/src/components/notification_detail/mod.rs");
+        let source = std::fs::read_to_string(path).expect("notification detail page");
+        let needle = format!("Snooze {DEFAULT_SNOOZE_MINUTES}m");
+        assert!(
+            source.contains(&needle),
+            "detail page short snooze must match DEFAULT_SNOOZE_MINUTES ({DEFAULT_SNOOZE_MINUTES})"
+        );
     }
 
     #[test]
@@ -556,5 +700,127 @@ mod tests {
                 .collect(),
         });
         assert!(json.len() < 3993, "payload {} bytes", json.len());
+    }
+
+    fn attempt_ids() -> PushAttemptIds<'static> {
+        PushAttemptIds {
+            row_ids: &[42, 43],
+            subscription_id: 9,
+        }
+    }
+
+    fn push_request<'a>(endpoint: &'a str, payload: &'a [u8]) -> PushRequest<'a> {
+        PushRequest {
+            endpoint,
+            p256dh: UA_PUBLIC,
+            auth: AUTH,
+            payload,
+            ttl_secs: REMINDER_TTL,
+            urgency: "high",
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn web_push_attempt_logs_provider_accepted_without_secrets() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(201))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let endpoint = format!("{}/SECRET_ENDPOINT_PATH", server.uri());
+        let payload = reminder_payload(&ReminderPushInput {
+            title: "SECRET_TITLE_DO_NOT_LOG".into(),
+            body: "SECRET_BODY_DO_NOT_LOG".into(),
+            tag: "row-42".into(),
+            rows: vec![(42, "SECRET_PUSH_TOKEN".into())],
+            kind: TASK_DUE.into(),
+            outbox_id: Some(42),
+            due_at: None,
+            late: false,
+            source: None,
+            items: Vec::new(),
+        });
+        let session = crate::log_capture::Capture::arm();
+        let delivery = post_push(
+            &keys(),
+            push_request(&endpoint, payload.as_bytes()),
+            attempt_ids(),
+        )
+        .await;
+        assert_eq!(delivery, PushDelivery::Accepted);
+        let text = session.text();
+        assert!(text.contains("message=web_push_attempt"), "{text}");
+        assert!(text.contains("outcome=provider_accepted"), "{text}");
+        assert!(text.contains("row_ids=42,43"), "{text}");
+        assert!(text.contains("subscription_id=9"), "{text}");
+        assert!(text.contains("status=201"), "{text}");
+        assert!(text.contains("attempt_at="), "{text}");
+        assert!(!text.contains("SECRET"), "{text}");
+        assert!(!text.contains(AUTH), "{text}");
+        assert!(!text.contains(UA_PUBLIC), "{text}");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn web_push_attempt_logs_gone_and_rejected_without_secrets() {
+        let gone = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(410))
+            .expect(1)
+            .mount(&gone)
+            .await;
+        let rejected = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(400))
+            .expect(1)
+            .mount(&rejected)
+            .await;
+        let payload = b"SECRET_TITLE_DO_NOT_LOG";
+        let session = crate::log_capture::Capture::arm();
+        let gone_endpoint = format!("{}/SECRET_ENDPOINT_PATH", gone.uri());
+        let gone_delivery = post_push(
+            &keys(),
+            push_request(&gone_endpoint, payload),
+            attempt_ids(),
+        )
+        .await;
+        let rejected_endpoint = format!("{}/SECRET_ENDPOINT_PATH", rejected.uri());
+        let rejected_delivery = post_push(
+            &keys(),
+            push_request(&rejected_endpoint, payload),
+            attempt_ids(),
+        )
+        .await;
+        assert_eq!(gone_delivery, PushDelivery::Gone);
+        assert_eq!(rejected_delivery, PushDelivery::Failed);
+        let text = session.text();
+        assert!(text.contains("outcome=gone"), "{text}");
+        assert!(text.contains("status=410"), "{text}");
+        assert!(text.contains("outcome=rejected"), "{text}");
+        assert!(text.contains("status=400"), "{text}");
+        assert!(text.contains("row_ids=42,43"), "{text}");
+        assert!(text.contains("subscription_id=9"), "{text}");
+        assert!(!text.contains("SECRET"), "{text}");
+        assert!(!text.contains(AUTH), "{text}");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn web_push_attempt_logs_transport_error_without_the_endpoint() {
+        let session = crate::log_capture::Capture::arm();
+        let endpoint = "http://127.0.0.1:1/SECRET_ENDPOINT_PATH";
+        let delivery = post_push(
+            &keys(),
+            push_request(endpoint, b"SECRET_PUSH_TOKEN"),
+            attempt_ids(),
+        )
+        .await;
+        assert_eq!(delivery, PushDelivery::Failed);
+        let text = session.text();
+        assert!(text.contains("outcome=transport_error"), "{text}");
+        assert!(text.contains("row_ids=42,43"), "{text}");
+        assert!(text.contains("subscription_id=9"), "{text}");
+        assert!(text.contains("push_host=127.0.0.1:1"), "{text}");
+        assert!(!text.contains("SECRET"), "{text}");
+        assert!(!text.contains("status="), "{text}");
     }
 }

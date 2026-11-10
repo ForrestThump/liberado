@@ -5,13 +5,14 @@
 //! Weekly spending and its per-subscription week stamp stayed on that branch.
 
 mod aesgcm;
+mod attempt;
 mod b64;
 mod send;
 mod vapid;
 
 pub use send::{
-    PushDelivery, PushRequest, REMINDER_TTL, ReminderPushInput, notification_url, post_push,
-    reminder_payload,
+    DEFAULT_SNOOZE_MINUTES, PushAttemptIds, PushDelivery, PushRequest, REMINDER_TTL,
+    ReminderPushInput, notification_url, post_push, reminder_payload,
 };
 pub use vapid::vapid_env_lines;
 
