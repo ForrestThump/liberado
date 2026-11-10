@@ -6,7 +6,38 @@ use rusqlite::Connection;
 use crate::error::{Error, Result};
 use crate::time::stamp;
 
-pub const SCHEMA_VERSION: i64 = 4;
+pub const SCHEMA_VERSION: i64 = 5;
+
+const V5_TABLES: &str = "
+CREATE TABLE IF NOT EXISTS task_completions (
+    id INTEGER PRIMARY KEY,
+    completed_at TEXT NOT NULL,
+    local_date TEXT NOT NULL,
+    precision TEXT NOT NULL,
+    source TEXT NOT NULL,
+    path TEXT NOT NULL,
+    task_text TEXT NOT NULL,
+    done_date TEXT,
+    outbox_id INTEGER,
+    voided_at TEXT,
+    detected_at TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS task_completions_outbox_id
+    ON task_completions(outbox_id) WHERE outbox_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS task_completions_completed_at
+    ON task_completions(completed_at);
+CREATE TABLE IF NOT EXISTS task_snapshot (
+    path TEXT NOT NULL,
+    task_text TEXT NOT NULL,
+    open_count INTEGER NOT NULL,
+    closed_count INTEGER NOT NULL,
+    PRIMARY KEY(path, task_text)
+);
+CREATE TABLE IF NOT EXISTS task_file_state (
+    path TEXT PRIMARY KEY,
+    fingerprint TEXT NOT NULL
+);
+";
 
 const V2_TABLES: &str = "
 CREATE TABLE IF NOT EXISTS accounts (
@@ -120,6 +151,13 @@ fn migrate_v3_to_v4(conn: &Connection) -> Result<()> {
             [],
         )?;
     }
+    // Version 4 is the weekly-spending stamp. Do not write SCHEMA_VERSION here.
+    set_version(conn, 4)?;
+    Ok(())
+}
+
+fn migrate_v4_to_v5(conn: &Connection) -> Result<()> {
+    conn.execute_batch(V5_TABLES)?;
     set_version(conn, SCHEMA_VERSION)?;
     Ok(())
 }
@@ -139,7 +177,11 @@ fn upgrade(conn: &Connection, version: i64) -> Result<()> {
         return upgrade(conn, 3);
     }
     if version == 3 {
-        return migrate_v3_to_v4(conn);
+        migrate_v3_to_v4(conn)?;
+        return upgrade(conn, 4);
+    }
+    if version == 4 {
+        return migrate_v4_to_v5(conn);
     }
     Err(Error::Invalid(format!(
         "unsupported liberado.db schema version {version}"
@@ -323,6 +365,7 @@ VALUES (1, 'owner', 'Owner', x'00', '2026-01-01T00:00:00Z');
             .unwrap();
         assert_eq!(sub_rows, 1);
         assert!(column_exists(&conn, "push_subscriptions", "last_sent_week").unwrap());
+        assert_completion_tables(&conn);
         let handle: String = conn
             .query_row("SELECT handle FROM accounts WHERE id = 1", [], |r| r.get(0))
             .unwrap();
@@ -346,6 +389,47 @@ VALUES (1, 'owner', 'Owner', x'00', '2026-01-01T00:00:00Z');
             .query_row("SELECT COUNT(*) FROM accounts", [], |r| r.get(0))
             .unwrap();
         assert_eq!(accounts, 1);
+        let tables: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'task_completions'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(tables, 1);
+    }
+
+    #[test]
+    fn v3_database_gains_the_completion_log_and_keeps_outbox_rows() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("liberado.db");
+        let conn = Connection::open(&path).unwrap();
+        conn.execute_batch(V2_SCHEMA).unwrap();
+        conn.execute_batch(
+            "ALTER TABLE outbox ADD COLUMN kind TEXT;
+             ALTER TABLE outbox ADD COLUMN source_json TEXT;
+             ALTER TABLE outbox ADD COLUMN resolved_at TEXT;
+             ALTER TABLE outbox ADD COLUMN resolution TEXT;
+             UPDATE schema_meta SET value = '3' WHERE key = 'version';",
+        )
+        .unwrap();
+        let now = stamp(Utc::now());
+        conn.execute(
+            "INSERT INTO outbox(idempotency_key, channel, target, title, body, state,
+             next_attempt_at, created_at, due_at, ack_token_hash)
+             VALUES ('k-v3', 'web_push', 'sub:1', 't', 'b', 'pending', ?1, ?1, ?1, x'00')",
+            [now.as_str()],
+        )
+        .unwrap();
+        migrate(&conn).unwrap();
+        assert_eq!(read_version(&conn).unwrap(), SCHEMA_VERSION);
+        let outbox_rows: i64 = conn
+            .query_row("SELECT COUNT(*) FROM outbox", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(outbox_rows, 1);
+        assert_completion_tables(&conn);
+        migrate(&conn).unwrap();
+        assert_eq!(read_version(&conn).unwrap(), SCHEMA_VERSION);
     }
 
     #[test]
@@ -378,5 +462,73 @@ VALUES (1, 'owner', 'Owner', x'00', '2026-01-01T00:00:00Z');
             )
             .unwrap();
         assert_eq!(endpoint, "https://push.example.test/phone");
+        assert_completion_tables(&conn);
+    }
+
+    #[test]
+    fn fresh_database_reaches_v5_with_the_week_column_and_completion_tables() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("liberado.db");
+        drop(Outbox::open(&path).unwrap());
+        let conn = Connection::open(&path).unwrap();
+        assert_eq!(read_version(&conn).unwrap(), SCHEMA_VERSION);
+        assert!(column_exists(&conn, "push_subscriptions", "last_sent_week").unwrap());
+        assert_completion_tables(&conn);
+    }
+
+    #[test]
+    fn v4_database_keeps_last_sent_week_and_gains_the_completion_tables() {
+        let dir = tempfile::tempdir().unwrap();
+        let conn = Connection::open(dir.path().join("liberado.db")).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE schema_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+             INSERT INTO schema_meta(key, value) VALUES ('version', '4');
+             CREATE TABLE push_subscriptions (
+                 id INTEGER PRIMARY KEY,
+                 endpoint TEXT NOT NULL UNIQUE,
+                 p256dh TEXT NOT NULL,
+                 auth TEXT NOT NULL,
+                 label TEXT NOT NULL,
+                 created_at TEXT NOT NULL,
+                 last_sent_week TEXT
+             );
+             INSERT INTO push_subscriptions(
+                 endpoint, p256dh, auth, label, created_at, last_sent_week
+             ) VALUES (
+                 'https://push.example.test/phone', 'k', 'a', 'phone',
+                 '2026-10-01T00:00:00Z', '2026-11-02'
+             );",
+        )
+        .unwrap();
+        migrate(&conn).unwrap();
+        assert_eq!(read_version(&conn).unwrap(), SCHEMA_VERSION);
+        let week: String = conn
+            .query_row(
+                "SELECT last_sent_week FROM push_subscriptions WHERE endpoint = ?1",
+                ["https://push.example.test/phone"],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(week, "2026-11-02");
+        assert_completion_tables(&conn);
+        migrate(&conn).unwrap();
+        assert_eq!(read_version(&conn).unwrap(), SCHEMA_VERSION);
+        let week_again: String = conn
+            .query_row(
+                "SELECT last_sent_week FROM push_subscriptions WHERE endpoint = ?1",
+                ["https://push.example.test/phone"],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(week_again, "2026-11-02");
+    }
+
+    fn assert_completion_tables(conn: &Connection) {
+        assert!(table_exists(conn, "task_completions").unwrap());
+        assert!(column_exists(conn, "task_completions", "outbox_id").unwrap());
+        assert!(table_exists(conn, "task_snapshot").unwrap());
+        assert!(column_exists(conn, "task_snapshot", "open_count").unwrap());
+        assert!(table_exists(conn, "task_file_state").unwrap());
+        assert!(column_exists(conn, "task_file_state", "fingerprint").unwrap());
     }
 }
