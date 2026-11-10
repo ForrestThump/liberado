@@ -449,6 +449,8 @@ You are a live-conformance probe. Do exactly this and nothing else:
 enabled = false
 tasks = true
 events = true
+# Task-completion log. Off until you set this true. See docs/spec/reference/tuning.md.
+completions = false
 # Times are UTC. "Today" inside task-ping and event-ping uses topology.timezone
 # (America/Chicago). 11:50 UTC = 06:50 CDT. 11:55 UTC = 06:55 CDT.
 # 02:00 UTC = 21:00 CDT. 08:15 UTC = 03:15 CDT.

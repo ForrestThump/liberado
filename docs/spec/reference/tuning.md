@@ -279,6 +279,43 @@ budget URL live in the homelab env file, not in git. See config-spec §9.
 
 `[vault_reminders] enabled` defaults to false. The minute tick does nothing until that
 switch is on. `tasks` and `events` default to true and apply only while the switch is on.
+`completions` defaults to false. While it is false the tick does not write the task-completion
+log. Turn it on only after `enabled` is already true.
+
+A task or event also needs its own `#remind` tag, or `remind` / `reminder` set to
+`true`, `yes`, `y`, `1`, or `on`, before the tick *sends* it. The completion log does not
+use that marker. It logs every task the Obsidian Tasks global filter accepts, checked in
+Obsidian or marked Done in Liberado. A task the filter rejects is not logged. Notes under
+dot directories, `.trash`, `00 - Meta`, `Legal`, and `proposals` are not read.
+
+The clock on a logged row is one of three precisions:
+
+- `tap` — you pressed Done in Liberado. The time is that press, to the second. For a normal
+  line, Done checks the box and the next tick writes the row, copying the Done time when that
+  outbox row was resolved in the last 15 minutes. For a line that contains 🔁, Done does not
+  check the box. It writes the row immediately and leaves the vault line open, so the series
+  does not end. The next tick does not write a second row for that press.
+- `tick` — the box was checked in Obsidian (or another editor) and the minute tick saw the
+  file change. The time is the detection time. That is about a minute after the file lands,
+  plus Syncthing lag: seconds when both devices are online, hours when the phone was offline.
+- `date` — the checked line has a ✅ date earlier than the detection's local date, and this
+  identity had no closed line in the previous snapshot. The row stores local noon of that
+  date. The day is the done date. The clock is not a real time. A habit that already has
+  older checked copies in the snapshot stays `tick`, so an old ✅ cannot move the new row.
+
+Nothing deletes completion rows. Unchecking a task sets `voided_at` on the newest live row.
+`Outbox::prune` does not touch the log. A repeated Done on the same outbox row does not
+insert a second row.
+
+The log stays empty until the flag has been on for a baseline tick. The first time a note
+is seen, the tick stores counts and writes no rows. A checkoff made while the daemon was
+down is logged on the next tick, because the stored snapshot still shows the open line.
+A checkoff made while `completions` was false is not backfilled: that tick stored nothing,
+so the first enabled tick only records the baseline. A restart with no file change adds
+nothing.
+
+Read the rows with `GET /api/completions`. See `docs/spec/reference/api.md`.
+
 A task or event also needs its own `#remind` tag, or `remind` / `reminder` set to
 `true`, `yes`, `y`, `1`, or `on`. The rightmost marker wins. The tick matches a clock
 time in `topology.timezone`. A date with no time stays on `task-ping`. A habit such as

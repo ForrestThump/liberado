@@ -25,6 +25,8 @@ pub struct VaultRemindersConfig {
     pub tasks: bool,
     /// Fire remind-marked calendar notes while the master switch is on.
     pub events: bool,
+    /// Write the task-completion log from the minute tick. Default off.
+    pub completions: bool,
 }
 
 impl Default for VaultRemindersConfig {
@@ -33,6 +35,7 @@ impl Default for VaultRemindersConfig {
             enabled: false,
             tasks: true,
             events: true,
+            completions: false,
         }
     }
 }

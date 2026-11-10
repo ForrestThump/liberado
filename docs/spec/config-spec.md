@@ -377,7 +377,31 @@ Optional top-level string in `topology.toml`. The notification detail API and We
 enabled = false   # master switch; default false
 tasks = true      # used only while enabled
 events = true
+completions = false  # task-completion log; default false
 ```
+
+`completions` writes one row to `liberado.db` each time a vault task goes from open to
+done. It stays off until you set it true, and the master switch must also be on. The tick
+logs every task the Obsidian Tasks global filter accepts, not only `#remind` lines. A task
+the filter rejects is ignored. The same folders are skipped as `task-ping`.
+
+The time on a row has three precisions:
+
+- `tap` — Done was pressed in Liberado. The time is that press, to the second. A normal
+  line is checked, and the next tick copies the Done time when the outbox row was resolved
+  in the last 15 minutes. A line that contains 🔁 is not checked. Done writes the row at
+  the press and leaves the line open, so the series does not end and the tick does not
+  write a second row.
+- `tick` — the box changed in the vault and the minute tick noticed. The time is detection
+  time: about a minute, plus sync delay. Sync is seconds when both devices are online and
+  hours when the phone was offline.
+- `date` — the new checked line has a ✅ date earlier than the detection's local date, and
+  the snapshot had no closed copy of that task. The stored time is local noon of the ✅
+  date. That is a date, not a clock time.
+
+Rows are kept. Unchecking sets `voided_at`. The outbox prune does not delete them.
+Read them with `GET /api/completions`. The first tick after the flag is turned on only
+stores a baseline and writes no rows.
 
 `vault-reminder-tick` walks the same vault folders as `task-ping` and `event-ping`. It
 sends only notes that opt in. The rightmost marker wins:
