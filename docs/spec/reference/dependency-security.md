@@ -56,6 +56,31 @@ replaced.
 the fix, rather than the newest 1.54. The smaller step is the one the lockfile
 can carry on its own.
 
+RUSTSEC-2026-0459 (CVE-2026-119375) is a vulnerability in SQLite before
+3.54.0. `libsqlite3-sys` 0.37.0 bundles 3.51.3. `libsqlite3-sys` 0.39.1
+bundles 3.54.1, which is inside the patched range `>= 0.39.0`. `rusqlite`
+0.41.1 is the crates.io release that depends on `libsqlite3-sys` ^0.39.
+The workspace pin is `=0.41.1` with the `bundled` feature only.
+`bundled-sqlcipher` stays off: that feature still vendors an older SQLite.
+
+`deny.toml` allows the build script `libsqlite3-sys@0.39.1`. The vet
+exemption moved from 0.37.0 to 0.39.1. The `rusqlite` exemption moved from
+0.39.0 to 0.41.1. The 0.39.1 build script is not the 0.37.0 file (33727
+bytes versus 35413). It still compiles the bundled SQLite. The exemptions
+are still debt, not audits.
+
+`rusqlite` 0.41.1 also depends on `hashlink` 0.12.2. `hashlink` 0.11.1
+stays in the graph for other crates, so 0.12.2 is an added exemption with
+the same `safe-to-deploy` criteria. `hashbrown` 0.17.1, which 0.12.2 uses,
+was already exempt. This exemption is debt, not an audit.
+
+`turbovault-vector` at tag `liberado-2026-10-15` requires `rusqlite` ^0.39.
+That requirement cannot select 0.41. `[patch]` replaces that package with
+`patches/turbovault-vector`, whose source is the same tag via the
+`third_party/turbovault` submodule (`69a217a5`). The patch manifest is the
+only delta. CI checkouts set `submodules: true` so the source is present.
+Remove the patch when the tag itself depends on `rusqlite` >= 0.41.
+
 GitHub Actions use full commit SHAs. Dependabot proposes Action SHA changes.
 `turbovault*` and `turbomcp*` are git+tag pins on the public ForrestThump forks.
 `turbovault*` is pinned to `tag = "liberado-2026-10-15"` and `turbomcp*` stays

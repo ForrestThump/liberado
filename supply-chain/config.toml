@@ -1694,6 +1694,10 @@ criteria = "safe-to-deploy"
 version = "0.11.1"
 criteria = "safe-to-deploy"
 
+[[exemptions.hashlink]]
+version = "0.12.2"
+criteria = "safe-to-deploy"
+
 [[exemptions.headers]]
 version = "0.4.1"
 criteria = "safe-to-deploy"
@@ -2035,7 +2039,7 @@ version = "0.1.18"
 criteria = "safe-to-deploy"
 
 [[exemptions.libsqlite3-sys]]
-version = "0.37.0"
+version = "0.39.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.libyaml-rs]]
@@ -2987,7 +2991,7 @@ version = "0.1.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.rusqlite]]
-version = "0.39.0"
+version = "0.41.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.rust-ini]]

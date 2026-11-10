@@ -56,9 +56,10 @@ base64 = "0.22"
 # default-features stays off so ring-io does not pull untrusted 0.7.
 # prebuilt-nasm is the crate's fallback when the Windows assembler is absent.
 aws-lc-rs = { version = "=1.18.1", default-features = false, features = ["alloc", "aws-lc-sys", "prebuilt-nasm"] }
-# Same crate and feature set turbovault-vector already resolves. `bundled` keeps
-# the homelab image off a system libsqlite.
-rusqlite = { version = "=0.39.0", features = ["bundled"] }
+# Exact pin. 0.41.1 pulls libsqlite3-sys 0.39.1, whose bundled SQLite is 3.54.1.
+# That is the patched range for RUSTSEC-2026-0459 (libsqlite3-sys >= 0.39.0).
+# `bundled` keeps the homelab image off a system libsqlite.
+rusqlite = { version = "=0.41.1", features = ["bundled"] }
 ulid = { version = "1", features = ["serde"] }
 ratatui = "0.29"
 crossterm = "0.28"
@@ -160,6 +161,14 @@ turbomcp = { git = "https://github.com/ForrestThump/turbomcp", tag = "liberado-2
 turbomcp-core = { git = "https://github.com/ForrestThump/turbomcp", tag = "liberado-2026-08-27" }
 turbomcp-server = { git = "https://github.com/ForrestThump/turbomcp", tag = "liberado-2026-08-27" }
 turbomcp-types = { git = "https://github.com/ForrestThump/turbomcp", tag = "liberado-2026-08-27" }
+
+# turbovault-vector at liberado-2026-10-15 requires rusqlite ^0.39. That line
+# pulls libsqlite3-sys 0.37.0, which cargo-deny rejects for RUSTSEC-2026-0459.
+# The path package keeps the tag's source (third_party/turbovault @ 69a217a5)
+# and selects rusqlite 0.41.1. Remove this patch when the tag itself depends
+# on rusqlite >= 0.41.
+[patch.'https://github.com/ForrestThump/turbovault']
+turbovault-vector = { path = "patches/turbovault-vector" }
 
 [profile.release]
 lto = true

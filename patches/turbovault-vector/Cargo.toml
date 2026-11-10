@@ -1,0 +1,41 @@
+# Manifest-only override of turbovault-vector at tag liberado-2026-10-15
+# (69a217a5b437fa22b6efaefa2458d485e9378f29). The library source stays in
+# third_party/turbovault. Upstream requires rusqlite ^0.39, which cannot
+# select 0.41. This manifest selects rusqlite 0.41.1 so the bundled SQLite is
+# libsqlite3-sys 0.39.1 (RUSTSEC-2026-0459). tempfile is a normal dependency
+# because a non-member path package does not link dev-dependencies, and the
+# tag's unit tests use it. Every pin is a version already in Cargo.lock.
+[package]
+name = "turbovault-vector"
+version = "1.6.0"
+edition = "2024"
+rust-version = "1.90.0"
+license = "MIT"
+publish = false
+description = "Optional dense-vector semantic search for TurboVault (fastembed + usearch + SQLite)"
+
+[features]
+default = ["local"]
+local = ["dep:fastembed", "dep:usearch", "dep:rusqlite"]
+remote = ["local", "dep:reqwest"]
+
+[dependencies]
+turbovault-parser = { git = "https://github.com/ForrestThump/turbovault", tag = "liberado-2026-10-15" }
+async-trait = "=0.1.89"
+serde = { version = "=1.0.228", features = ["derive"] }
+serde_json = "=1.0.150"
+thiserror = "=2.0.18"
+anyhow = "=1.0.103"
+tokio = { version = "=1.53.3", features = ["io-util", "macros", "rt-multi-thread", "sync", "time", "fs"] }
+tracing = "=0.1.44"
+sha2 = "=0.11.0"
+chrono = { version = "=0.4.45", features = ["serde"] }
+walkdir = "=2.5.0"
+tempfile = "=3.27.0"
+fastembed = { version = "=5.17.3", optional = true }
+usearch = { version = "=2.26.0", optional = true }
+rusqlite = { version = "=0.41.1", features = ["bundled"], optional = true }
+reqwest = { version = "=0.12.28", features = ["json"], optional = true }
+
+[lib]
+path = "../../third_party/turbovault/crates/turbovault-vector/src/lib.rs"
