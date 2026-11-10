@@ -2795,6 +2795,18 @@
     "functions": 11,
     "cyclomatic": 22
   },
+  "crates/daemon/src/vault_pings/completions.rs": {
+    "ploc": 197,
+    "lloc": 55,
+    "functions": 18,
+    "cyclomatic": 47
+  },
+  "crates/daemon/src/vault_pings/completions_tests.rs": {
+    "ploc": 360,
+    "lloc": 193,
+    "functions": 26,
+    "cyclomatic": 29
+  },
   "crates/daemon/src/vault_pings/date.rs": {
     "ploc": 12,
     "lloc": 6,
@@ -4409,6 +4421,42 @@
     "functions": 2,
     "cyclomatic": 4
   },
+  "crates/outbox/src/completion_diff.rs": {
+    "ploc": 60,
+    "lloc": 16,
+    "functions": 3,
+    "cyclomatic": 10
+  },
+  "crates/outbox/src/completion_diff_tests.rs": {
+    "ploc": 80,
+    "lloc": 31,
+    "functions": 13,
+    "cyclomatic": 17
+  },
+  "crates/outbox/src/completion_time.rs": {
+    "ploc": 111,
+    "lloc": 12,
+    "functions": 14,
+    "cyclomatic": 22
+  },
+  "crates/outbox/src/completion_time_tests.rs": {
+    "ploc": 77,
+    "lloc": 35,
+    "functions": 8,
+    "cyclomatic": 9
+  },
+  "crates/outbox/src/completions.rs": {
+    "ploc": 368,
+    "lloc": 58,
+    "functions": 26,
+    "cyclomatic": 85
+  },
+  "crates/outbox/src/completions_tests.rs": {
+    "ploc": 181,
+    "lloc": 70,
+    "functions": 11,
+    "cyclomatic": 12
+  },
   "crates/outbox/src/copy.rs": {
     "ploc": 210,
     "lloc": 39,
@@ -4510,6 +4558,18 @@
     "lloc": 30,
     "functions": 21,
     "cyclomatic": 52
+  },
+  "crates/outbox/src/task_line.rs": {
+    "ploc": 39,
+    "lloc": 12,
+    "functions": 5,
+    "cyclomatic": 12
+  },
+  "crates/outbox/src/task_line_tests.rs": {
+    "ploc": 31,
+    "lloc": 15,
+    "functions": 5,
+    "cyclomatic": 6
   },
   "crates/outbox/src/time.rs": {
     "ploc": 10,
@@ -4943,6 +5003,18 @@
     "functions": 2,
     "cyclomatic": 11
   },
+  "crates/server/src/api/completions.rs": {
+    "ploc": 57,
+    "lloc": 11,
+    "functions": 5,
+    "cyclomatic": 14
+  },
+  "crates/server/src/api/completions_http_tests.rs": {
+    "ploc": 92,
+    "lloc": 33,
+    "functions": 4,
+    "cyclomatic": 5
+  },
   "crates/server/src/api/goals.rs": {
     "ploc": 543,
     "lloc": 99,
@@ -5103,6 +5175,12 @@
     "ploc": 99,
     "lloc": 36,
     "functions": 6,
+    "cyclomatic": 10
+  },
+  "crates/server/src/api/recurring_done_http_tests.rs": {
+    "ploc": 174,
+    "lloc": 70,
+    "functions": 9,
     "cyclomatic": 10
   },
   "crates/server/src/api/reminders.rs": {
