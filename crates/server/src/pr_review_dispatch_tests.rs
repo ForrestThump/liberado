@@ -29,6 +29,8 @@ fn remote_only_pr() -> (tempfile::TempDir, tempfile::TempDir, String, String) {
         &["config", "user.email", "test@example.invalid"],
     );
     git(source.path(), &["config", "user.name", "Liberado Test"]);
+    // A host with commit.gpgsign=true looks for a key this temp repo does not have.
+    git(source.path(), &["config", "commit.gpgsign", "false"]);
     std::fs::write(source.path().join("review.txt"), "base\n").expect("write base");
     git(source.path(), &["add", "review.txt"]);
     git(source.path(), &["commit", "-m", "base"]);
