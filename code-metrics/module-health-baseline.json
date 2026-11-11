@@ -2154,10 +2154,10 @@
     "cyclomatic": 8
   },
   "crates/config-loader/src/model/config.rs": {
-    "ploc": 1048,
-    "lloc": 303,
-    "functions": 87,
-    "cyclomatic": 237
+    "ploc": 1022,
+    "lloc": 296,
+    "functions": 86,
+    "cyclomatic": 234
   },
   "crates/config-loader/src/model/config_builtin_editor.rs": {
     "ploc": 49,
@@ -2237,6 +2237,12 @@
     "functions": 8,
     "cyclomatic": 9
   },
+  "crates/config-loader/src/model/schedule_rules.rs": {
+    "ploc": 90,
+    "lloc": 19,
+    "functions": 3,
+    "cyclomatic": 17
+  },
   "crates/config-loader/src/model/shepherd.rs": {
     "ploc": 207,
     "lloc": 35,
@@ -2278,6 +2284,24 @@
     "lloc": 28,
     "functions": 4,
     "cyclomatic": 5
+  },
+  "crates/config-loader/src/model/weekly_spending.rs": {
+    "ploc": 423,
+    "lloc": 83,
+    "functions": 51,
+    "cyclomatic": 120
+  },
+  "crates/config-loader/src/model/weekly_spending/weekly_spending_defaults.rs": {
+    "ploc": 3,
+    "lloc": 0,
+    "functions": 1,
+    "cyclomatic": 2
+  },
+  "crates/config-loader/src/model/weekly_spending_tests.rs": {
+    "ploc": 254,
+    "lloc": 137,
+    "functions": 13,
+    "cyclomatic": 15
   },
   "crates/config-loader/src/source.rs": {
     "ploc": 23,
@@ -2836,6 +2860,36 @@
     "lloc": 108,
     "functions": 27,
     "cyclomatic": 29
+  },
+  "crates/daemon/src/weekly_net.rs": {
+    "ploc": 400,
+    "lloc": 92,
+    "functions": 55,
+    "cyclomatic": 108
+  },
+  "crates/daemon/src/weekly_net_tests.rs": {
+    "ploc": 444,
+    "lloc": 105,
+    "functions": 23,
+    "cyclomatic": 34
+  },
+  "crates/daemon/src/weekly_push.rs": {
+    "ploc": 172,
+    "lloc": 30,
+    "functions": 17,
+    "cyclomatic": 37
+  },
+  "crates/daemon/src/weekly_spending.rs": {
+    "ploc": 450,
+    "lloc": 97,
+    "functions": 41,
+    "cyclomatic": 93
+  },
+  "crates/daemon/src/weekly_spending_tests.rs": {
+    "ploc": 580,
+    "lloc": 149,
+    "functions": 37,
+    "cyclomatic": 49
   },
   "crates/dispatch-pack/src/lib.rs": {
     "ploc": 361,
@@ -5020,6 +5074,18 @@
     "lloc": 42,
     "functions": 4,
     "cyclomatic": 7
+  },
+  "crates/server/src/api/push.rs": {
+    "ploc": 118,
+    "lloc": 25,
+    "functions": 13,
+    "cyclomatic": 31
+  },
+  "crates/server/src/api/push_http_tests.rs": {
+    "ploc": 99,
+    "lloc": 36,
+    "functions": 6,
+    "cyclomatic": 10
   },
   "crates/server/src/api/reminders.rs": {
     "ploc": 191,
