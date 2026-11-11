@@ -56,6 +56,7 @@ pub(crate) fn owner_only_routes(state: &Arc<AppState>) -> Router {
                 .delete(api::delete_subscription),
         )
         .route("/api/push/test", axum::routing::post(api::push_test))
+        .route("/api/push/weekly", axum::routing::post(api::push_weekly))
         .route(
             "/api/client-errors",
             axum::routing::post(api::report_client_error),

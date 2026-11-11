@@ -194,9 +194,24 @@ fn reminder_tick_stays_quiet_when_nothing_is_due() {
 }
 
 #[test]
-fn only_the_reminder_tick_is_a_system_schedule() {
+fn weekly_spending_describes_one_push_and_no_model() {
+    let mut schedule = bare();
+    schedule.job = Some("weekly-spending-push".into());
+    assert_eq!(
+        schedule_description(&schedule),
+        "Background system job. Monday through Sunday at the configured clock, sends one Web Push for last week's spending. Stays quiet when the reminder is off, keys are missing, or this week's notice was already sent. No model session."
+    );
+}
+
+#[test]
+fn reminder_tick_and_weekly_spending_are_system_schedules() {
     assert_eq!(schedule_category(Some("vault-reminder-tick")), "system");
     assert_eq!(schedule_category(Some("  vault-reminder-tick  ")), "system");
+    assert_eq!(schedule_category(Some("weekly-spending-push")), "system");
+    assert_eq!(
+        schedule_category(Some("  weekly-spending-push  ")),
+        "system"
+    );
     assert_eq!(schedule_category(Some("habit-ping")), "automation");
     assert_eq!(schedule_category(Some("task-ping")), "automation");
     assert_eq!(schedule_category(Some("Vault-Reminder-Tick")), "automation");

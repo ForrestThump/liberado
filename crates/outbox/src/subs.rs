@@ -38,6 +38,16 @@ pub struct SubscriptionKeys {
     pub auth: String,
 }
 
+/// One phone, plus the Monday date it last received the weekly reminder.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WeekTarget {
+    pub id: i64,
+    pub endpoint: String,
+    pub p256dh: String,
+    pub auth: String,
+    pub last_sent_week: Option<String>,
+}
+
 impl Outbox {
     pub fn upsert_subscription(&self, sub: &NewSubscription, now: DateTime<Utc>) -> Result<i64> {
         check_subscription(sub)?;
@@ -132,6 +142,45 @@ impl Outbox {
             )
             .optional()
             .map_err(Into::into)
+    }
+
+    /// True when at least one phone has not been sent `week_id`.
+    pub fn needs_week(&self, week_id: &str) -> Result<bool> {
+        let count: i64 = self.lock().query_row(
+            "SELECT COUNT(*) FROM push_subscriptions
+             WHERE last_sent_week IS NULL OR last_sent_week != ?1",
+            [week_id],
+            |row| row.get(0),
+        )?;
+        Ok(count > 0)
+    }
+
+    pub fn week_targets(&self) -> Result<Vec<WeekTarget>> {
+        let conn = self.lock();
+        let mut stmt = conn.prepare(
+            "SELECT id, endpoint, p256dh, auth, last_sent_week
+             FROM push_subscriptions ORDER BY id",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(WeekTarget {
+                id: row.get(0)?,
+                endpoint: row.get(1)?,
+                p256dh: row.get(2)?,
+                auth: row.get(3)?,
+                last_sent_week: row.get(4)?,
+            })
+        })?;
+        rows.collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(Into::into)
+    }
+
+    /// Record a successful weekly send. A failed send must not call this.
+    pub fn mark_week_sent(&self, id: i64, week_id: &str) -> Result<()> {
+        self.lock().execute(
+            "UPDATE push_subscriptions SET last_sent_week = ?1 WHERE id = ?2",
+            params![week_id, id],
+        )?;
+        Ok(())
     }
 
     pub fn subscription_count(&self) -> Result<u32> {

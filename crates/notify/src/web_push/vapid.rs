@@ -12,6 +12,7 @@ use super::b64;
 
 const TWELVE_HOURS: u64 = 12 * 60 * 60;
 
+#[derive(Clone)]
 pub struct VapidMaterial {
     public_b64: String,
     public: Vec<u8>,
@@ -44,7 +45,8 @@ impl VapidMaterial {
     }
 }
 
-pub(crate) fn from_parts(
+/// Build keys from caller-supplied material. Tests use this so they do not read the environment.
+pub fn from_parts(
     public_b64: &str,
     private_b64: &str,
     subject: &str,

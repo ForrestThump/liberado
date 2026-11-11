@@ -225,6 +225,14 @@ async fn push_handlers_keep_expected_statuses() {
         .await
         .unwrap();
     assert_eq!(status.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(status.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(json["reminder_enabled"], false);
+    assert_eq!(json["vapid_configured"], false);
+    assert_eq!(json["subscription_count"], 0);
+    assert!(json["public_key"].is_null());
 
     let vapid = app
         .clone()

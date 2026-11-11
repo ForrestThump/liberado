@@ -11,7 +11,12 @@ pub fn run(args: &mut impl Iterator<Item = String>) -> Result<(), Box<dyn std::e
         // is printed, not just the first failure: the first `no` is rarely the only one, and
         // discovering them one deploy at a time is the slow path.
         Some("explain") => run_explain(args),
-        Some("vapid-keys") => run_vapid_keys(),
+        Some("vapid-keys") => {
+            if args.next().is_some() {
+                return Err("usage: liberado config vapid-keys".into());
+            }
+            run_vapid_keys()
+        }
         _ => Err("usage: liberado config <check|explain|vapid-keys>".into()),
     }
 }

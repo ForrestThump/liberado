@@ -1,8 +1,8 @@
 //! One Web Push POST.
 //!
-//! Ported from `origin/feat/weekly-spending-push` @ `ac9a7fa4` (PR #317). The week
-//! topic and the JSON subscription file stayed on that branch. This file sends one
-//! payload. 2xx is acceptance. 404 and 410 mean the subscription is gone.
+//! Ported from `origin/feat/weekly-spending-push` @ `ac9a7fa4` (PR #317). This file
+//! sends one payload. An optional `Topic` collapses a repeat of the same week.
+//! 2xx is acceptance. 404 and 410 mean the subscription is gone.
 
 use std::time::Duration;
 
@@ -40,6 +40,8 @@ pub struct PushRequest<'a> {
     pub payload: &'a [u8],
     pub ttl_secs: u64,
     pub urgency: &'a str,
+    /// Web Push `Topic`. Empty means the header is omitted.
+    pub topic: Option<&'a str>,
 }
 
 pub use super::attempt::PushAttemptIds;
@@ -201,6 +203,7 @@ struct Prepared {
     authorization: String,
     ttl: u64,
     urgency: String,
+    topic: Option<String>,
 }
 
 async fn post(
@@ -209,13 +212,19 @@ async fn post(
 ) -> Result<reqwest::StatusCode, String> {
     let prepared = prepare(keys, request)?;
     let client = http_client()?;
-    let response = client
+    let mut builder = client
         .post(request.endpoint)
         .header("Content-Type", "application/octet-stream")
         .header("Content-Encoding", "aes128gcm")
         .header("TTL", prepared.ttl.to_string())
         .header("Urgency", prepared.urgency)
-        .header("Authorization", prepared.authorization)
+        .header("Authorization", prepared.authorization);
+    if let Some(topic) = prepared.topic.as_deref()
+        && !topic.is_empty()
+    {
+        builder = builder.header("Topic", topic);
+    }
+    let response = builder
         .body(prepared.body)
         .send()
         .await
@@ -242,6 +251,7 @@ fn prepare(keys: &VapidMaterial, request: &PushRequest<'_>) -> Result<Prepared, 
         authorization,
         ttl: request.ttl_secs,
         urgency: request.urgency.to_string(),
+        topic: request.topic.map(str::to_string),
     })
 }
 
@@ -341,6 +351,7 @@ mod tests {
                 payload: payload.as_bytes(),
                 ttl_secs: REMINDER_TTL,
                 urgency: "high",
+                topic: None,
             },
             PushAttemptIds {
                 row_ids: &[1],
@@ -366,6 +377,7 @@ mod tests {
                 payload: payload.as_bytes(),
                 ttl_secs: REMINDER_TTL,
                 urgency: "high",
+                topic: None,
             },
             PushAttemptIds {
                 row_ids: &[1],
@@ -717,6 +729,7 @@ mod tests {
             payload,
             ttl_secs: REMINDER_TTL,
             urgency: "high",
+            topic: None,
         }
     }
 

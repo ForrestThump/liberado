@@ -78,6 +78,7 @@ fn app_with(config: liberado_bootstrap::Config) -> (Router, Arc<GoalSessionHub>)
         approval_hub: None,
         outbox: None,
         outbox_delivery: None,
+        spending: None,
     });
     let app = Router::new()
         .route("/api/goals", axum::routing::post(goals_start))
@@ -189,6 +190,7 @@ async fn domains_list_omits_coding_when_the_pack_is_not_registered() {
         approval_hub: None,
         outbox: None,
         outbox_delivery: None,
+        spending: None,
     });
     let app = Router::new()
         .route("/api/goals/domains", axum::routing::get(goals_domains))

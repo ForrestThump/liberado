@@ -3588,6 +3588,30 @@ body {
     font-size: 0.8125rem;
 }
 
+.push-card {
+    margin: 0 0 1rem;
+    padding-bottom: 0.75rem;
+    border-bottom: 1px solid var(--grok-rail-border);
+}
+
+.push-card-title {
+    margin: 0 0 0.25rem;
+    font-size: 0.875rem;
+    font-weight: 500;
+}
+
+.push-card-note {
+    margin: 0 0 0.5rem;
+    color: var(--grok-subtitle);
+    font-size: 0.8125rem;
+}
+
+.push-card-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+}
+
 .automation-system .automation-row {
     background: transparent;
 }

@@ -42,6 +42,10 @@ impl OutboxDelivery {
     pub fn vapid_configured(&self) -> bool {
         self.vapid.is_some()
     }
+
+    pub fn vapid_keys(&self) -> Option<web_push::VapidKeys> {
+        self.vapid.clone()
+    }
 }
 
 impl TelegramReminderSender {
@@ -154,6 +158,7 @@ impl OutboxDelivery {
                 payload: payload.as_bytes(),
                 ttl_secs: REMINDER_TTL,
                 urgency: "high",
+                topic: None,
             },
             web_push::PushAttemptIds {
                 row_ids: &row_ids,

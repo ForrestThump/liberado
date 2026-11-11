@@ -257,6 +257,15 @@ pub struct Daemon {
     pub(crate) outbox: Option<std::sync::Arc<liberado_outbox::Outbox>>,
     pub(crate) reminders_config: liberado_config::RemindersConfig,
     pub(crate) outbox_delivery: Option<std::sync::Arc<crate::reminders::OutboxDelivery>>,
+    /// Weekly spending table. Default off.
+    pub(crate) weekly_spending: liberado_config::WeeklySpendingConfig,
+    /// True when the table is on and one enabled schedule names the job.
+    pub(crate) weekly_catchup: bool,
+    /// Local open clock from the enabled schedule. Default 07:00.
+    pub(crate) weekly_open_hour: u32,
+    pub(crate) weekly_open_minute: u32,
+    /// Test double. `None` builds the HTTP client from the environment at send time.
+    pub(crate) spending_source: Option<Arc<dyn crate::weekly_spending::SpendingSource>>,
 }
 
 #[cfg(test)]

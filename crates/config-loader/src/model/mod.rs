@@ -18,11 +18,13 @@ mod config_turn_budgets;
 mod policy;
 mod reminders;
 mod schedule_form;
+mod schedule_rules;
 mod shepherd;
 mod topology;
 mod topology_default;
 mod tuning;
 mod vault_reminders;
+mod weekly_spending;
 
 pub use api::{ApiClientConfig, ApiConfig, CredentialRef, DEFAULT_BIND, WebAuthnConfig};
 pub use builder::ConfigBuilder;
@@ -48,3 +50,7 @@ pub use tuning::{
     ProposalTuning, SubagentIsolation, TelegramApprovalsTuning, Tuning,
 };
 pub use vault_reminders::VaultRemindersConfig;
+pub use weekly_spending::{
+    UnmappedPolicy, WEEKLY_SPENDING_JOB, WeeklySpendingConfig, has_enabled_weekly_schedule,
+    weekly_open_clock,
+};

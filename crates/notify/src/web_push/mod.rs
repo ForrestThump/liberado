@@ -2,7 +2,7 @@
 //!
 //! The private VAPID key comes from the environment. This module never logs it.
 //! The crypto is ported from `origin/feat/weekly-spending-push` @ `ac9a7fa4` (PR #317).
-//! Weekly spending and its per-subscription week stamp stayed on that branch.
+//! Weekly spending sends through [`post_push`] and stores the week on the outbox row.
 
 mod aesgcm;
 mod attempt;
@@ -14,7 +14,7 @@ pub use send::{
     DEFAULT_SNOOZE_MINUTES, PushAttemptIds, PushDelivery, PushRequest, REMINDER_TTL,
     ReminderPushInput, notification_url, post_push, reminder_payload,
 };
-pub use vapid::vapid_env_lines;
+pub use vapid::{from_parts as keys_from_parts, vapid_env_lines};
 
 use vapid::VapidMaterial;
 

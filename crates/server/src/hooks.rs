@@ -378,6 +378,7 @@ mod tests {
             approval_hub: None,
             outbox: None,
             outbox_delivery: None,
+            spending: None,
         });
 
         let app = Router::new()
@@ -455,6 +456,7 @@ mod tests {
             approval_hub: None,
             outbox: None,
             outbox_delivery: None,
+            spending: None,
         });
         let app = Router::new()
             .route("/api/hooks/{name}", axum::routing::post(trigger_hook))
@@ -516,6 +518,7 @@ mod tests {
             approval_hub: None,
             outbox: None,
             outbox_delivery: None,
+            spending: None,
         });
         let app = Router::new()
             .route("/api/hooks/{name}", axum::routing::post(trigger_hook))
@@ -671,6 +674,7 @@ mod tests {
             approval_hub: None,
             outbox: None,
             outbox_delivery: None,
+            spending: None,
         });
         state.drain.begin_drain();
         assert!(!state.drain.is_accepting());

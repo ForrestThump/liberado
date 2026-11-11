@@ -52,8 +52,9 @@ pub use liberado_config_loader::{
     ModelCompactionSettings, Policy, PoolConfig, ProjectConfig, ProviderFallback, ProviderProfile,
     RemindersConfig, ResolvedProfile, RoleOverride, ScheduleTiming, SessionProfile,
     ShepherdAuthConfig, ShepherdConfig, ShepherdProjectConfig, ShepherdReviewConfig,
-    SubagentIsolation, TelegramApprovalsTuning, ToolImpact, Topology, Tuning, VaultRemindersConfig,
-    WebAuthnConfig, ZonePolicy, managed_binary_path, resolve_declared_zone,
+    SubagentIsolation, TelegramApprovalsTuning, ToolImpact, Topology, Tuning, UnmappedPolicy,
+    VaultRemindersConfig, WEEKLY_SPENDING_JOB, WebAuthnConfig, WeeklySpendingConfig, ZonePolicy,
+    has_enabled_weekly_schedule, managed_binary_path, resolve_declared_zone, weekly_open_clock,
 };
 
 /// Records which source file contributed each section of a loaded [`Config`],

@@ -47,7 +47,7 @@ pub use row_detail::OutboxRecord;
 pub use rows::{EnqueueOutcome, NewReminder, OutboxCounts, VisibleReminder};
 pub use source::OutboxSource;
 pub use store::Outbox;
-pub use subs::{NewSubscription, SubscriptionKeys, SubscriptionView};
+pub use subs::{NewSubscription, SubscriptionKeys, SubscriptionView, WeekTarget};
 
 #[cfg(test)]
 mod fault_tests;

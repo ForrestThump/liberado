@@ -69,6 +69,7 @@ pub async fn push_status(State(state): State<Arc<AppState>>) -> impl IntoRespons
         .unwrap_or(0);
     Json(serde_json::json!({
         "vapid_configured": state.outbox_delivery.as_ref().is_some_and(|d| d.vapid_configured()),
+        "reminder_enabled": state.config.topology.weekly_spending.enabled,
         "subscription_count": count,
         "public_key": state.outbox_delivery.as_ref().and_then(|d| d.vapid_public_key()),
     }))

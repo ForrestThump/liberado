@@ -6,7 +6,7 @@ use rusqlite::Connection;
 use crate::error::{Error, Result};
 use crate::time::stamp;
 
-pub const SCHEMA_VERSION: i64 = 3;
+pub const SCHEMA_VERSION: i64 = 4;
 
 const V2_TABLES: &str = "
 CREATE TABLE IF NOT EXISTS accounts (
@@ -98,13 +98,33 @@ fn migrate_v2_to_v3(conn: &Connection) -> Result<()> {
     if !column_exists(conn, "outbox", "resolution")? {
         conn.execute("ALTER TABLE outbox ADD COLUMN resolution TEXT", [])?;
     }
+    set_version(conn, 3)?;
+    Ok(())
+}
+
+fn table_exists(conn: &Connection, table: &str) -> Result<bool> {
+    let count: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?1",
+        [table],
+        |row| row.get(0),
+    )?;
+    Ok(count > 0)
+}
+
+fn migrate_v3_to_v4(conn: &Connection) -> Result<()> {
+    if table_exists(conn, "push_subscriptions")?
+        && !column_exists(conn, "push_subscriptions", "last_sent_week")?
+    {
+        conn.execute(
+            "ALTER TABLE push_subscriptions ADD COLUMN last_sent_week TEXT",
+            [],
+        )?;
+    }
     set_version(conn, SCHEMA_VERSION)?;
     Ok(())
 }
 
-/// Apply pending migrations. Idempotent when already at [`SCHEMA_VERSION`].
-pub fn migrate(conn: &Connection) -> Result<()> {
-    let version = read_version(conn)?;
+fn upgrade(conn: &Connection, version: i64) -> Result<()> {
     if version >= SCHEMA_VERSION {
         return Ok(());
     }
@@ -112,15 +132,23 @@ pub fn migrate(conn: &Connection) -> Result<()> {
         conn.execute_batch(V2_TABLES)?;
         seed_owner_account(conn)?;
         set_version(conn, 2)?;
-        migrate_v2_to_v3(conn)?;
-    } else if version == 2 {
-        migrate_v2_to_v3(conn)?;
-    } else {
-        return Err(Error::Invalid(format!(
-            "unsupported liberado.db schema version {version}"
-        )));
+        return upgrade(conn, 2);
     }
-    Ok(())
+    if version == 2 {
+        migrate_v2_to_v3(conn)?;
+        return upgrade(conn, 3);
+    }
+    if version == 3 {
+        return migrate_v3_to_v4(conn);
+    }
+    Err(Error::Invalid(format!(
+        "unsupported liberado.db schema version {version}"
+    )))
+}
+
+/// Apply pending migrations. Idempotent when already at [`SCHEMA_VERSION`].
+pub fn migrate(conn: &Connection) -> Result<()> {
+    upgrade(conn, read_version(conn)?)
 }
 
 #[cfg(test)]
@@ -294,6 +322,7 @@ VALUES (1, 'owner', 'Owner', x'00', '2026-01-01T00:00:00Z');
             .query_row("SELECT COUNT(*) FROM push_subscriptions", [], |r| r.get(0))
             .unwrap();
         assert_eq!(sub_rows, 1);
+        assert!(column_exists(&conn, "push_subscriptions", "last_sent_week").unwrap());
         let handle: String = conn
             .query_row("SELECT handle FROM accounts WHERE id = 1", [], |r| r.get(0))
             .unwrap();
@@ -317,5 +346,37 @@ VALUES (1, 'owner', 'Owner', x'00', '2026-01-01T00:00:00Z');
             .query_row("SELECT COUNT(*) FROM accounts", [], |r| r.get(0))
             .unwrap();
         assert_eq!(accounts, 1);
+    }
+
+    #[test]
+    fn v3_database_gains_the_week_stamp_and_keeps_the_phone() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("liberado.db");
+        let conn = Connection::open(&path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE schema_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+             INSERT INTO schema_meta(key, value) VALUES ('version', '3');
+             CREATE TABLE push_subscriptions (
+                 id INTEGER PRIMARY KEY,
+                 endpoint TEXT NOT NULL UNIQUE,
+                 p256dh TEXT NOT NULL,
+                 auth TEXT NOT NULL,
+                 label TEXT NOT NULL,
+                 created_at TEXT NOT NULL
+             );
+             INSERT INTO push_subscriptions(endpoint, p256dh, auth, label, created_at)
+             VALUES ('https://push.example.test/phone', 'k', 'a', 'phone', '2026-10-01T00:00:00Z');",
+        )
+        .unwrap();
+        migrate(&conn).unwrap();
+        assert_eq!(read_version(&conn).unwrap(), SCHEMA_VERSION);
+        let endpoint: String = conn
+            .query_row(
+                "SELECT endpoint FROM push_subscriptions WHERE last_sent_week IS NULL",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(endpoint, "https://push.example.test/phone");
     }
 }

@@ -4,7 +4,7 @@
     "proven_invariant": 65,
     "local_failure": 0,
     "process_fatal": 45,
-    "files_scanned": 779,
+    "files_scanned": 786,
     "files_with_unwraps": 49
   },
   "files": {
@@ -1273,7 +1273,7 @@
       "occurrences": [
         {
           "file": "crates/server/src/t1_conformance.rs",
-          "line": 175,
+          "line": 176,
           "column": 20,
           "method": "unwrap",
           "snippet": "self\n            .app\n            .clone()\n            .oneshot(\n                Request::builder()\n                    .method(\"POST\")\n                    .uri(uri)\n                    .header(\"content-type\", \"application/json\")\n                    .body(Body::from(body.to_string()))\n                    .unwrap(),\n            )\n            .await\n            .unwrap()",
@@ -1284,7 +1284,7 @@
         },
         {
           "file": "crates/server/src/t1_conformance.rs",
-          "line": 179,
+          "line": 180,
           "column": 17,
           "method": "unwrap",
           "snippet": "Request::builder()\n                    .method(\"POST\")\n                    .uri(uri)\n                    .header(\"content-type\", \"application/json\")\n                    .body(Body::from(body.to_string()))\n                    .unwrap()",
@@ -1295,7 +1295,7 @@
         },
         {
           "file": "crates/server/src/t1_conformance.rs",
-          "line": 189,
+          "line": 190,
           "column": 21,
           "method": "unwrap",
           "snippet": "axum::body::to_bytes(resp.into_body(), 64 * 1024)\n            .await\n            .unwrap()",
@@ -1306,7 +1306,7 @@
         },
         {
           "file": "crates/server/src/t1_conformance.rs",
-          "line": 199,
+          "line": 200,
           "column": 20,
           "method": "unwrap",
           "snippet": "self\n            .app\n            .clone()\n            .oneshot(\n                Request::builder()\n                    .method(\"GET\")\n                    .uri(uri)\n                    .body(Body::empty())\n                    .unwrap(),\n            )\n            .await\n            .unwrap()",
@@ -1317,7 +1317,7 @@
         },
         {
           "file": "crates/server/src/t1_conformance.rs",
-          "line": 203,
+          "line": 204,
           "column": 17,
           "method": "unwrap",
           "snippet": "Request::builder()\n                    .method(\"GET\")\n                    .uri(uri)\n                    .body(Body::empty())\n                    .unwrap()",
@@ -1328,7 +1328,7 @@
         },
         {
           "file": "crates/server/src/t1_conformance.rs",
-          "line": 212,
+          "line": 213,
           "column": 21,
           "method": "unwrap",
           "snippet": "axum::body::to_bytes(resp.into_body(), 64 * 1024)\n            .await\n            .unwrap()",
@@ -1339,7 +1339,7 @@
         },
         {
           "file": "crates/server/src/t1_conformance.rs",
-          "line": 277,
+          "line": 278,
           "column": 9,
           "method": "unwrap",
           "snippet": "self.calls\n            .lock()\n            .unwrap()",
@@ -1350,7 +1350,7 @@
         },
         {
           "file": "crates/server/src/t1_conformance.rs",
-          "line": 576,
+          "line": 577,
           "column": 10,
           "method": "unwrap",
           "snippet": "self.saw.lock().unwrap()",
@@ -1361,7 +1361,7 @@
         },
         {
           "file": "crates/server/src/t1_conformance.rs",
-          "line": 1161,
+          "line": 1162,
           "column": 9,
           "method": "unwrap",
           "snippet": "self.ran.lock().unwrap()",
@@ -1372,7 +1372,7 @@
         },
         {
           "file": "crates/server/src/t1_conformance.rs",
-          "line": 1303,
+          "line": 1304,
           "column": 5,
           "method": "unwrap",
           "snippet": "serde_json::from_str::<serde_json::Value>(&body).unwrap()[\"session_id\"]\n        .as_str()\n        .unwrap()",
@@ -1383,7 +1383,7 @@
         },
         {
           "file": "crates/server/src/t1_conformance.rs",
-          "line": 1303,
+          "line": 1304,
           "column": 5,
           "method": "unwrap",
           "snippet": "serde_json::from_str::<serde_json::Value>(&body).unwrap()",

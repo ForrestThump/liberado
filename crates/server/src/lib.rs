@@ -232,7 +232,8 @@ async fn assemble_daemon(
         guidance,
     )
     // Every reaction is a hosted background session on the hub (E3) — joinable, cancellable.
-    .with_goal_hub(goals.clone());
+    .with_goal_hub(goals.clone())
+    .with_weekly_runtime(liberado_daemon::weekly_runtime(&config.topology));
     if let (Some(outbox), Some(delivery)) = (daemon.outbox(), daemon.outbox_delivery()) {
         let display_zone = daemon
             .user_timezone()
@@ -317,6 +318,7 @@ async fn assemble_daemon(
         approval_hub,
         outbox,
         outbox_delivery,
+        spending: None,
     });
 
     channels::spawn_configured_channels(

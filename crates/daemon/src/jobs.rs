@@ -178,6 +178,10 @@ impl Daemon {
     pub(crate) fn handle_mechanical(&self, event: &Event) -> Option<ReactionOutcome> {
         let name = crate::helpers::cron_schedule_name(&event.source).unwrap_or("job");
         let request = JobRequest::from_event(name, &event.payload.data)?;
+        if request.kind == liberado_config::WEEKLY_SPENDING_JOB {
+            self.spawn_weekly(crate::weekly_spending::RunMode::Send);
+            return Some(ReactionOutcome::Observed);
+        }
         let (today, zone) = self.mechanical_clock();
         let tick = self.reminder_tick();
         let outbox = self.outbox.is_some() && self.outbox_delivery.is_some();
@@ -186,6 +190,7 @@ impl Daemon {
     }
 
     pub(crate) fn run_startup_jobs(&self) {
+        self.catch_up_weekly_spending();
         let (today, zone) = self.mechanical_clock();
         let tick = self.reminder_tick();
         let outbox = self.outbox.is_some() && self.outbox_delivery.is_some();

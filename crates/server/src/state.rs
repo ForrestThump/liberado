@@ -101,6 +101,8 @@ pub struct AppState {
     /// Durable reminder store (`<data_dir>/liberado.db`).
     pub outbox: Option<Arc<liberado_outbox::Outbox>>,
     pub outbox_delivery: Option<Arc<liberado_daemon::reminders::OutboxDelivery>>,
+    /// Test double for the budget API. Production is `None` and reads env at call time.
+    pub spending: Option<Arc<dyn liberado_daemon::SpendingSource>>,
 }
 
 /// Build the kernel [`liberado_main_agent::CompactionConfig`] from topology: absolute triggers
@@ -282,6 +284,7 @@ impl AppState {
             approval_hub: None,
             outbox: None,
             outbox_delivery: None,
+            spending: None,
         }
     }
 }

@@ -52,7 +52,7 @@ The bundle is **mounted** into the daemon's container; `ServeDir` re-reads it pe
 
 `crates/webui/`:
 
-- **Shell**: `index.html` (PWA), `public/{manifest.json, sw.js, icon-*.png}`.
+- **Shell**: `index.html` (PWA), `public/{manifest.json, sw.js, icon-*.png}`. `sw.js` shows a Web Push and focuses the app on click. It does not cache and it does not intercept `/api/`.
 - **App**: `src/main.rs` (App + `Route` match + `api_base`), `src/shell.rs` (`GrokAppHeader`, `PhoneMenuFab`, viewport helpers), `src/back_nav.rs` (phone Back: history entries mirror open layers), `src/pwa.rs` (PWA-shell assertions), `src/theme.rs` (`theme_css_vars(&Theme)` → `:root { --lib-* }`), `src/icons.rs`.
 - **Styles**: `src/styles/main.css` — all styling, 279 semantic classes.
 - **Components** (`src/components/`): chat pipeline (`chat.rs`, `chat_input.rs` with the pure `stream_url()` builder, `chat_fold.rs`, `chat_reasoning.rs`, `chat_scroll.rs` + tests, `chat_submission.rs`, `chat_tool_events.rs`, `message_row.rs`, `markdown.rs` — `pulldown-cmark` with trailing-WS trim, `conversation_row.rs`); slash commands (`slash_commands.rs`, `slash_palette.rs`); routes (one component per Route: `library.rs`, `automations.rs`, `projects.rs`, `plugins.rs`, `imagine.rs` — Route::Imagine reserved); sidebar submodule (`sidebar/mod.rs` — `Route` enum + `Sidebar` — `sidebar/{rail,agents,projects,profile_api,row_menu,tests}.rs`, `sidebar_agent_creator.rs`, `sidebar_shelf.rs`); header overlays (`incognito.rs`, `grants_popover.rs` Tools, `model_browser.rs`, `profile_browser.rs`, `profile_surface.rs`, `picker.rs`); helpers (`approval_card.rs`, `mcp_panel.rs`, `project_data.rs`).

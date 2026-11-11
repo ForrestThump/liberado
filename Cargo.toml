@@ -55,6 +55,7 @@ base64 = "0.22"
 # cargo-vet exempt. A caret range could pull an unaudited patch.
 # default-features stays off so ring-io does not pull untrusted 0.7.
 # prebuilt-nasm is the crate's fallback when the Windows assembler is absent.
+# A machine that has NASM still compiles the assembly itself.
 aws-lc-rs = { version = "=1.18.1", default-features = false, features = ["alloc", "aws-lc-sys", "prebuilt-nasm"] }
 # Exact pin. 0.41.1 pulls libsqlite3-sys 0.39.1, whose bundled SQLite is 3.54.1.
 # That is the patched range for RUSTSEC-2026-0459 (libsqlite3-sys >= 0.39.0).

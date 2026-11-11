@@ -146,6 +146,7 @@ impl T1Harness {
             approval_hub: None,
             outbox: None,
             outbox_delivery: None,
+            spending: None,
         });
 
         let app = Router::new()

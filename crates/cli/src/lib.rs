@@ -13,6 +13,7 @@
 //!   LIBERADO_VAULT=\\<\1\\> liberado  same, taking the vault from the environment
 //!   liberado chat [session-id]       the streaming terminal client of a running daemon
 //!   liberado config check            load + validate config, print a summary (or an error)
+//!   liberado config vapid-keys       print Web Push key env lines for the homelab env file
 //!   liberado ci                      full local CI, including the CRAP diff gate
 //!   liberado ci check                ship preflight (fmt, clippy, tests, deny)
 //!   liberado ci crap                 CRAP diff gate against the merge-base
@@ -359,6 +360,20 @@ mod dispatch_tests {
                 "got: {err}"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn config_vapid_keys_rejects_extra_arguments() {
+        let args = [
+            "config".to_string(),
+            "vapid-keys".to_string(),
+            "extra".to_string(),
+        ];
+        let err = dispatch(&mut args.into_iter())
+            .await
+            .expect_err("extra")
+            .to_string();
+        assert!(err.contains("usage: liberado config vapid-keys"), "{err}");
     }
 
     #[tokio::test(flavor = "multi_thread")]

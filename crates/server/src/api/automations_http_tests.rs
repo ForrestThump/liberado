@@ -54,6 +54,7 @@ fn app_with_topology(schedules: Vec<CronSchedule>, hooks: Vec<HookConfig>) -> Ro
         approval_hub: None,
         outbox: None,
         outbox_delivery: None,
+        spending: None,
         surfaces: crate::surfaces::LiveSurfaces::inert(),
     });
     Router::new()

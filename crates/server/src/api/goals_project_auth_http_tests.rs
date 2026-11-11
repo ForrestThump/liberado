@@ -127,6 +127,7 @@ fn coding_goals_app_with(
         approval_hub: None,
         outbox: None,
         outbox_delivery: None,
+        spending: None,
     });
     Router::new()
         .route("/api/goals", axum::routing::post(goals_start))

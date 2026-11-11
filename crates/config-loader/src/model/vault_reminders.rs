@@ -42,14 +42,24 @@ impl Default for VaultRemindersConfig {
 /// A disabled schedule may still name the job, so an example can show the tick without
 /// turning reminders on.
 pub(super) fn refuse_tick_while_disabled(schedule: &CronSchedule, enabled: bool) -> Result<()> {
+    refuse_gated_job(schedule, enabled, TICK_JOB, "vault_reminders")
+}
+
+/// An enabled schedule for `job` is a load error while that table's switch is off.
+pub(super) fn refuse_gated_job(
+    schedule: &CronSchedule,
+    enabled: bool,
+    job: &str,
+    table: &str,
+) -> Result<()> {
     if enabled || !schedule.enabled {
         return Ok(());
     }
-    if schedule.job.as_deref() != Some(TICK_JOB) {
+    if schedule.job.as_deref() != Some(job) {
         return Ok(());
     }
     Err(Error::Config(format!(
-        "topology.schedules['{}'] job {TICK_JOB} requires [vault_reminders] enabled = true",
+        "topology.schedules['{}'] job {job} requires [{table}] enabled = true",
         schedule.name
     )))
 }

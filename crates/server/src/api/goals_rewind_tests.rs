@@ -191,6 +191,7 @@ fn rewind_app() -> (Router, Arc<GoalSessionHub>, Arc<GoalSessionStore>) {
         approval_hub: None,
         outbox: None,
         outbox_delivery: None,
+        spending: None,
     });
 
     let app = Router::new()

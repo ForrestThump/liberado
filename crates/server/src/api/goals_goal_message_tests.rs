@@ -96,6 +96,7 @@ fn goals_app() -> (Router, Arc<GoalSessionHub>) {
         approval_hub: None,
         outbox: None,
         outbox_delivery: None,
+        spending: None,
     });
 
     let app = Router::new()
@@ -170,6 +171,7 @@ async fn goals_app_with_chat() -> (
         approval_hub: None,
         outbox: None,
         outbox_delivery: None,
+        spending: None,
     });
 
     let app = Router::new()
@@ -651,6 +653,7 @@ async fn fork_app(
         approval_hub: None,
         outbox: None,
         outbox_delivery: None,
+        spending: None,
     });
 
     let app = Router::new()

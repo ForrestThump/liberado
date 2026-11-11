@@ -19,6 +19,7 @@ mod outbox_detail_http_tests;
 mod outbox_log;
 mod plugins;
 mod profiles;
+mod push;
 mod reminders;
 #[cfg(test)]
 mod reminders_http_tests;
@@ -50,6 +51,7 @@ pub use outbox_action::outbox_action_with_state;
 pub use outbox_detail::{complete_outbox, get_outbox_detail, snooze_outbox};
 pub use plugins::set_plugin_enabled;
 pub use profiles::{delete_profile, rename_profile};
+pub use push::push_weekly;
 pub use reminders::{
     delete_subscription, list_outbox, list_subscriptions, outbox_ack_with_state, push_status,
     push_test, report_client_error, retry_outbox, upsert_subscription, vapid_public_key,
