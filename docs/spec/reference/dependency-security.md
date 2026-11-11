@@ -56,9 +56,39 @@ replaced.
 the fix, rather than the newest 1.54. The smaller step is the one the lockfile
 can carry on its own.
 
+RUSTSEC-2026-0459 (CVE-2026-119375) is a vulnerability in SQLite before
+3.54.0. `libsqlite3-sys` 0.37.0 bundles 3.51.3. `libsqlite3-sys` 0.39.1
+bundles 3.54.1, which is inside the patched range `>= 0.39.0`. `rusqlite`
+0.41.1 is the crates.io release that depends on `libsqlite3-sys` ^0.39.
+The workspace pin is `=0.41.1` with the `bundled` feature only.
+`bundled-sqlcipher` stays off: that feature still vendors an older SQLite.
+
+`deny.toml` allows the build script `libsqlite3-sys@0.39.1`. The vet
+exemption moved from 0.37.0 to 0.39.1. The `rusqlite` exemption moved from
+0.39.0 to 0.41.1. The 0.39.1 build script is not the 0.37.0 file (33727
+bytes versus 35413). It still compiles the bundled SQLite. The exemptions
+are still debt, not audits.
+
+`rusqlite` 0.41.1 also depends on `hashlink` 0.12.2. `hashlink` 0.11.1
+stays in the graph for other crates, so 0.12.2 is an added exemption with
+the same `safe-to-deploy` criteria. `hashbrown` 0.17.1, which 0.12.2 uses,
+was already exempt. This exemption is debt, not an audit.
+
+`turbovault*` is pinned to tag `liberado-2026-11-10`
+(`260dc271735b8db206788296fdca6f15f1fc5430`). That tag's
+`turbovault-vector` requires `rusqlite` 0.41.1 with the `bundled` feature,
+so the graph has one `libsqlite3-sys`, 0.39.1. The previous tag,
+`liberado-2026-10-15`, required `rusqlite` ^0.39 and kept `libsqlite3-sys`
+0.37.0 in the graph. The git-SHA vet exemptions for the TurboVault crates
+moved from `69a217a5` to `260dc271`. The criteria stay `safe-to-deploy`.
+The exemptions are still debt, not audits. TurboVault's own lockfile on
+this commit also bumps its transitive crates. Liberado resolves those
+crates from the published requirements, and this bump did not add a new
+crates.io version to Liberado's graph.
+
 GitHub Actions use full commit SHAs. Dependabot proposes Action SHA changes.
 `turbovault*` and `turbomcp*` are git+tag pins on the public ForrestThump forks.
-`turbovault*` is pinned to `tag = "liberado-2026-10-15"` and `turbomcp*` stays
+`turbovault*` is pinned to `tag = "liberado-2026-11-10"` and `turbomcp*` stays
 on `tag = "liberado-2026-08-27"`. `Cargo.lock` records the resolved commit SHA.
 Update tags, lockfile entries, and matching cargo-vet exemptions together after
 reviewing the fork diff. Checkout credentials are never persisted into a

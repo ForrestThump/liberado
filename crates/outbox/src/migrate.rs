@@ -201,6 +201,21 @@ CREATE TABLE IF NOT EXISTS schedule_cursor (
 );
 ";
 
+    #[test]
+    fn bundled_sqlite_is_at_least_3_54() {
+        let conn = Connection::open_in_memory().unwrap();
+        let version: String = conn
+            .query_row("SELECT sqlite_version()", [], |row| row.get(0))
+            .unwrap();
+        let mut parts = version.split('.');
+        let major: u64 = parts.next().unwrap().parse().unwrap();
+        let minor: u64 = parts.next().unwrap().parse().unwrap();
+        assert!(
+            major > 3 || (major == 3 && minor >= 54),
+            "RUSTSEC-2026-0459 needs SQLite >= 3.54.0, got {version}"
+        );
+    }
+
     fn open_v1_with_rows(dir: &TempDir) -> Connection {
         let path = dir.path().join("liberado.db");
         let conn = Connection::open(&path).unwrap();
