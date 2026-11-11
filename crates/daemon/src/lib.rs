@@ -18,15 +18,19 @@
 mod debounce;
 mod helpers;
 mod jobs;
+mod jobs_mechanical;
 mod proposals;
 mod react;
+pub mod reminders;
 mod types;
 mod vault_pings;
 mod vault_source;
 mod weekly_net;
+mod weekly_push;
 mod weekly_spending;
 
 pub use jobs::{JobOptions, JobRequest};
+pub use weekly_push::{WeekPush, WeekSender, inert_week_sender};
 pub use weekly_spending::{
     CategorySpend, HttpBudget, RunMode, RunOutcome, SpendingSource, WeeklyRuntime, local_now,
     run_weekly, week_window, weekly_runtime,
@@ -86,7 +90,9 @@ impl Daemon {
             user_timezone: None,
             inbox_ignore_globs: Vec::new(),
             capture_scope: vault_source::CaptureScope::production_default(),
-            push: std::sync::Arc::new(liberado_notify::PushHub::inert()),
+            outbox: None,
+            reminders_config: liberado_config::RemindersConfig::default(),
+            outbox_delivery: None,
             weekly_spending: liberado_config::WeeklySpendingConfig::default(),
             weekly_catchup: false,
             weekly_open_hour: 7,
@@ -218,6 +224,29 @@ impl Daemon {
         self
     }
 
+    /// Wire the durable reminder outbox and its delivery sink.
+    pub fn with_outbox(
+        mut self,
+        outbox: Arc<liberado_outbox::Outbox>,
+        config: liberado_config::RemindersConfig,
+        delivery: Arc<crate::reminders::OutboxDelivery>,
+    ) -> Self {
+        self.outbox = Some(outbox);
+        self.reminders_config = config;
+        self.outbox_delivery = Some(delivery);
+        self
+    }
+
+    /// Shared outbox handle for the HTTP control plane.
+    pub fn outbox(&self) -> Option<Arc<liberado_outbox::Outbox>> {
+        self.outbox.clone()
+    }
+
+    /// Delivery sink metadata (VAPID public key, etc.).
+    pub fn outbox_delivery(&self) -> Option<Arc<crate::reminders::OutboxDelivery>> {
+        self.outbox_delivery.clone()
+    }
+
     /// Turn the minute tick on and choose where fired minutes are recorded.
     ///
     /// `state_path` is outside the vault. Production passes `data_dir()/vault-reminder-fires.json`.
@@ -228,12 +257,6 @@ impl Daemon {
     ) -> Self {
         self.vault_reminders = settings;
         self.reminder_state_path = state_path.into();
-        self
-    }
-
-    /// Share the process Web Push hub with the HTTP server.
-    pub fn with_push(mut self, push: Arc<liberado_notify::PushHub>) -> Self {
-        self.push = push;
         self
     }
 

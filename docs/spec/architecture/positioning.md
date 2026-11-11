@@ -1,4 +1,15 @@
+---
+kind: architecture
+status: historical
+authority: advisory
+domain: product
+canonical_for: positioning-2026-07
+open_items: false
+---
+
 # Positioning
+
+> **Historical.** This page is a July 2026 competitive note. It is not the product order. Current direction: [direction.md](../../direction.md). The work queue is the [backlog](../../future-work/backlog.md).
 
 Liberado is **not** trying to win the agent-framework market. The goal is narrower and more honest:
 **build something objectively more useful *for its author* than the existing free alternatives** — the

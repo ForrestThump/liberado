@@ -4,7 +4,7 @@ use chat_client_contract::{ReactionEvent, ReactionOutcome};
 
 async fn fetch_reactions(api_base: String) -> Result<Vec<ReactionEvent>, String> {
     let url = format!("{api_base}/api/reactions?limit=20");
-    let resp = reqwest::get(&url).await.map_err(|e| format!("{e}"))?;
+    let resp = crate::http::get(&url).await.map_err(|e| format!("{e}"))?;
     let events: Vec<ReactionEvent> = resp.json().await.map_err(|e| format!("{e}"))?;
     Ok(events)
 }

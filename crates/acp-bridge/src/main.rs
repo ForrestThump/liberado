@@ -34,6 +34,9 @@
 //! - `LIBERADO_ACP_MAX_TURNS` — per-launch override of `[acp] max_turns`
 //! - `LIBERADO_CONFIG_DIR` — optional Liberado config (topology + `[coder]` tuning)
 //! - `LIBERADO_SERVER` — face-mode daemon base URL (default `http://127.0.0.1:4201`)
+//! - `LIBERADO_API_TOKEN` — face-mode `Authorization: Bearer` when the daemon has `[api]`
+//!   credentials. Use a `[[api.clients]]` token. Leave it unset when `[api]` is absent.
+//!   Zed, Paseo, and any other ACP host must put this in the environment of `liberado-acp`.
 //!
 //! Model catalog: live `GET /models` from the configured backend, A–Z by id.
 

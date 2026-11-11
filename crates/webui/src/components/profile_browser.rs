@@ -62,7 +62,7 @@ fn name_from_label(label: &str) -> &str {
 
 async fn fetch_profiles(api_base: String) -> Result<Vec<ProfileRow>, String> {
     let url = format!("{api_base}/api/profiles");
-    let body: ProfilesResponse = reqwest::get(&url)
+    let body: ProfilesResponse = crate::http::get(&url)
         .await
         .map_err(|e| format!("Failed to reach daemon: {e}"))?
         .json()
@@ -82,10 +82,7 @@ async fn select_profile(
     name: Option<String>,
 ) -> Result<(), String> {
     let url = format!("{api_base}/api/conversations/{session}/profile");
-    let resp = reqwest::Client::new()
-        .post(&url)
-        .json(&serde_json::json!({ "name": name }))
-        .send()
+    let resp = crate::http::post_json(&url, &serde_json::json!({ "name": name }))
         .await
         .map_err(|e| format!("Failed to reach daemon: {e}"))?;
     if resp.status().is_success() {

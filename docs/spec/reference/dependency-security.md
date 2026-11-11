@@ -19,6 +19,12 @@ cargo-vet before any job may compile a build script or procedural macro.
    entries, and the cargo-vet exemptions together.
 4. Run `just dependency-security` and request the CODEOWNER review.
 
+`deny.toml` allows the build script `libz-sys@1.1.31`. The vet exemption in
+`supply-chain/config.toml` moved from 1.1.29 to 1.1.31 for the build-script
+environment leak fixed in 1.1.31. The build script is not the same file as in
+1.1.29; the fix stops logging the zlib probe command. The exemption is still
+debt, not an audit.
+
 `deny.toml` allows the build script `rustls@0.23.46`. The vet exemption
 in `supply-chain/config.toml` names the same version. 0.23.46 is the
 2026-10-14 security release. It replaces 0.23.45, which cargo-deny
@@ -26,14 +32,29 @@ rejects for the unauthenticated ServerHello key-exchange downgrade.
 The build script is the same file as in 0.23.45. The exemption is
 still debt, not an audit.
 
-The same debt covers four patched versions that the live advisory
-database rejects at the previous pins. `tokio` 1.54.1 replaces 1.52.3
-(`RUSTSEC-2026-0386`). `rustls-webpki` 0.103.16 replaces 0.103.15
-(`RUSTSEC-2026-0382`). `webpki-roots` 1.0.11 and `webpki-root-certs`
-1.0.11 replace 1.0.8 (`RUSTSEC-2026-0381`, `RUSTSEC-2026-0383`).
-Each exemption version moved with the lockfile. No new exemption was
-added. `aws-lc-rs` stays at 1.18.1 with default features off, so the
-direct pin does not pull `untrusted` 0.7.
+`deny.toml` allows the build script `pulldown-cmark@0.13.6`. The vet exemption
+in `supply-chain/config.toml` moved from 0.13.5 to 0.13.6 for
+RUSTSEC-2026-0433, quadratic parsing when wikilinks are enabled.
+0.13.6 is the patched release.
+The build script is the same file as in 0.13.5 (9313 bytes, byte-identical).
+The exemption is still debt, not an audit.
+
+The 2026-10 TLS and Tokio advisories moved four exemptions to the patched
+versions. No exemption was added and no criteria changed; each one names a
+release that fixes the advisory cargo-deny reports against the version it
+replaced.
+
+| Crate | Was | Now | Advisory |
+|---|---|---|---|
+| `libz-sys` | 1.1.29 | 1.1.31 | RUSTSEC-2026-0418, build script printed probe command into build output; 1.1.30 also narrows wasm32 `Z_SOLO` and adds optional aarch64 CRC `-march` forwarding |
+| `rustls-webpki` | 0.103.15 | 0.103.16 | RUSTSEC-2026-0382, distrusted intermediates accepted |
+| `webpki-roots` | 1.0.8 | 1.0.11 | RUSTSEC-2026-0381, bundled emSign roots |
+| `webpki-root-certs` | 1.0.8 | 1.0.11 | RUSTSEC-2026-0383, bundled emSign roots |
+| `tokio` | 1.52.3 | 1.53.3 | RUSTSEC-2026-0386, `AsyncFd::new` I/O safety |
+
+`tokio` is pinned to 1.53.3, the first release in the 1.53 line that carries
+the fix, rather than the newest 1.54. The smaller step is the one the lockfile
+can carry on its own.
 
 GitHub Actions use full commit SHAs. Dependabot proposes Action SHA changes.
 `turbovault*` and `turbomcp*` are git+tag pins on the public ForrestThump forks.
@@ -76,3 +97,18 @@ maintained hard fork of the `serde_yaml` 0.9 API. It depends on
 `unsafe-libyaml-norway` instead of `unsafe-libyaml`, so that advisory is not
 in the graph. The callers are `liberado-common`, `liberado-cli`, and
 `liberado-memory-store`.
+
+Passkey support in `liberado-server` adds `webauthn-rs@0.5.5` as a normal
+dependency and `webauthn-authenticator-rs@0.5.5` with the `softpasskey` feature
+as a dev-dependency for HTTP integration tests only. On Windows only,
+`liberado-server` also depends on `openssl@0.10.81` with the `vendored`
+feature so CI can build OpenSSL from `openssl-src` (Linux keeps system
+OpenSSL). `deny.toml` allows the
+build scripts `oid-registry@0.7.1`, `openssl-src@300.6.1+3.6.3`,
+`webauthn-attestation-ca@0.5.5`,
+`webauthn-rs-core@0.5.5`, and `webauthn-authenticator-rs@0.5.5`. Matching
+cargo-vet exemptions in `supply-chain/config.toml` cover the webauthn 0.5.5
+crate set; `webauthn-authenticator-rs` and `serde_bytes@0.11.19` (transitive
+only through the authenticator) use the dev `safe-to-run` criteria. Version
+0.5.5 was chosen over 0.6.2 because 0.6.2 pulls `rsa` with RUSTSEC-2023-0071;
+no advisory ignore was added. These exemptions are debt, not audits.

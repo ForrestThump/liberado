@@ -4,7 +4,7 @@ use chat_client_contract::VaultInfo;
 
 async fn fetch_vault(api_base: String) -> Result<VaultInfo, String> {
     let url = format!("{api_base}/api/vault");
-    let resp = reqwest::get(&url).await.map_err(|e| format!("{e}"))?;
+    let resp = crate::http::get(&url).await.map_err(|e| format!("{e}"))?;
     let info: VaultInfo = resp.json().await.map_err(|e| format!("{e}"))?;
     Ok(info)
 }

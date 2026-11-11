@@ -361,7 +361,7 @@ fn settled_review_labels_only_on_success_and_preserves_dry_run_state() {
             &cfg,
             &mut pr,
             false,
-            |_| Some("failed".into()),
+            |_| Ok(Some("failed".into())),
             |_, label| labels.push(label)
         )
         .unwrap(),
@@ -376,7 +376,7 @@ fn settled_review_labels_only_on_success_and_preserves_dry_run_state() {
             &cfg,
             &mut pr,
             false,
-            |_| Some("succeeded".into()),
+            |_| Ok(Some("succeeded".into())),
             |_, label| labels.push(label)
         )
         .unwrap(),
@@ -391,7 +391,7 @@ fn settled_review_labels_only_on_success_and_preserves_dry_run_state() {
             &cfg,
             &mut pr,
             true,
-            |_| Some("succeeded".into()),
+            |_| Ok(Some("succeeded".into())),
             |_, label| labels.push(label)
         )
         .unwrap(),

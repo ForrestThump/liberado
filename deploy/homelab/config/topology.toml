@@ -494,3 +494,17 @@ cron_expr = "0 15 8 * * * *"
 job = "git-snapshot"
 git_remote = "origin"
 deliver = false
+
+# --- HTTP control plane (roadmap step 1) -------------------------------------------------------
+# Uncomment before binding beyond loopback. Token values live in env/secrets only.
+#
+# [api]
+# human = { env = "LIBERADO_HUMAN_TOKEN" }
+#
+# [[api.clients]]
+# name = "homelab-cli"
+# token = { env = "LIBERADO_API_TOKEN" }
+#
+# [[api.clients]]
+# name = "operator-dogfood-mcp"
+# token = { env = "LIBERADO_DOGFOOD_API_TOKEN" }

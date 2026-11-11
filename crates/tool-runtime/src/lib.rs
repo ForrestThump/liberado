@@ -118,6 +118,14 @@ pub trait RebindableRuntime: ToolRuntime {
         false
     }
 
+    /// Cheap liveness check used by the reconnect supervisor.
+    ///
+    /// The default succeeds and does not touch the network, so test doubles stay "up".
+    /// The production MCP runtime lists tools. A transport error means the session is dead.
+    async fn probe(&self) -> Result<(), String> {
+        Ok(())
+    }
+
     /// Gracefully shut down the underlying connection and release transport resources.
     ///
     /// Called (on a spawned task, since teardown needs `await`) before a pooled runtime is
@@ -126,4 +134,10 @@ pub trait RebindableRuntime: ToolRuntime {
     /// connections and they pile up server-side. Default is a no-op for peers with no connection
     /// to tear down (stdio children drop their process on `Drop`).
     async fn shutdown(&mut self) {}
+
+    /// [`shutdown`](Self::shutdown) for a runtime shared behind `Arc` (`&self`).
+    ///
+    /// The reconnect supervisor shares one session between chat invokes and the probe loop, so it
+    /// cannot take `&mut self`. The default does nothing. Production sessions abort the transport.
+    async fn shutdown_shared(&self) {}
 }

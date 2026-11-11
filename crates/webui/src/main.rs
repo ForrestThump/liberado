@@ -5,11 +5,18 @@ use dioxus::prelude::*;
 
 mod back_nav;
 mod components;
+mod device_label;
+mod fatal_classifier;
+mod http;
 mod icons;
+mod notification_route;
+mod panic_hook;
+mod push;
 #[cfg(test)]
 mod pwa;
 mod shell;
 mod theme;
+mod webauthn;
 
 use components::chat::Chat;
 use components::sidebar::{Route, Sidebar};
@@ -61,7 +68,10 @@ fn api_base() -> String {
 
 fn main() {
     #[cfg(target_arch = "wasm32")]
-    dioxus::launch(App);
+    {
+        panic_hook::install();
+        dioxus::launch(App);
+    }
 
     #[cfg(not(target_arch = "wasm32"))]
     {
@@ -90,9 +100,49 @@ mod tests {
 #[component]
 fn App() -> Element {
     let base = api_base();
+    let mut auth_ready = use_signal(|| false);
+    let mut need_login = use_signal(|| false);
+    #[cfg(target_arch = "wasm32")]
+    let base_for_session = base.clone();
+    use_effect(move || {
+        #[cfg(target_arch = "wasm32")]
+        {
+            let on_expired = Callback::new(move |_| need_login.set(true));
+            crate::http::set_unauthenticated_handler(std::rc::Rc::new(move || {
+                on_expired.call(());
+            }));
+            let base = base_for_session.clone();
+            wasm_bindgen_futures::spawn_local(async move {
+                match components::login_gate::probe_session(&base).await {
+                    Ok(session) => {
+                        need_login.set(session.login_required && !session.authenticated);
+                        auth_ready.set(true);
+                    }
+                    Err(_) => {
+                        need_login.set(false);
+                        auth_ready.set(true);
+                    }
+                }
+            });
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            auth_ready.set(true);
+        }
+    });
     // Default to Chat — the screenshot says Chat is the open surface. Imagine / Library /
     // Automations / Projects / Plugins are reachable via the sidebar.
     let mut route = use_signal(|| Route::Chat);
+    #[cfg(target_arch = "wasm32")]
+    {
+        if let Some(window) = web_sys::window() {
+            if let Ok(path) = window.location().pathname() {
+                if let Some(parsed) = notification_route::route_from_path(&path) {
+                    route.set(parsed);
+                }
+            }
+        }
+    }
     // The active theme name, restored from the last choice. Chat writes it when `/theme set` lands,
     // and the sidebar's theme swatch writes it through `save_theme_name`. The `theme_epoch`
     // counter below is the bridge: a write through either path bumps it, and the effect re-reads
@@ -169,6 +219,8 @@ fn App() -> Element {
                 tools_open.set(false);
             } else if !sidebar_collapsed() && is_narrow() {
                 sidebar_collapsed.set(true);
+            } else if matches!(route(), Route::NotificationDetail(_)) {
+                route.set(Route::Notifications);
             } else if route() != Route::Chat {
                 route.set(Route::Chat);
             }
@@ -209,7 +261,18 @@ fn App() -> Element {
     rsx! {
         style { {crate::theme::theme_css_vars(&crate::theme::theme_by_name(&theme_name()))} }
         style { {include_str!("./styles/main.css")} }
+        style { {include_str!("./styles/login.css")} }
 
+        if !auth_ready() {
+            div { class: "login-gate-shell",
+                p { class: "login-gate-loading", "Loading session…" }
+            }
+        } else if need_login() {
+            components::login_gate::LoginGate {
+                api_base: base.clone(),
+                on_authenticated: move |_| need_login.set(false),
+            }
+        } else {
         div {
             class: "app",
             if !is_narrow() {
@@ -365,6 +428,52 @@ fn App() -> Element {
                                 }
                             }
                         },
+                        Route::Notifications => rsx! {
+                            div { class: "grok-main-phone-scroll",
+                                if is_narrow() {
+                                    GrokAppHeader {
+                                        shell_class: PHONE_SCROLL_APP_HEADER_CLASS,
+                                        bar_title: shell_route_title(route()),
+                                        drawer_open: drawer_open(),
+                                        sidebar_collapsed,
+                                        active_project,
+                                        active_profile,
+                                        active_surface,
+                                        on_profile_open: open_profile_picker,
+                                        incognito,
+                                        api_base: base.clone(),
+                                        active_conv_id,
+                                        tools_open,
+                                    }
+                                }
+                                crate::components::notifications::Notifications { api_base: base.clone() }
+                            }
+                        },
+                        Route::NotificationDetail(id) => rsx! {
+                            div { class: "grok-main-phone-scroll",
+                                if is_narrow() {
+                                    GrokAppHeader {
+                                        shell_class: PHONE_SCROLL_APP_HEADER_CLASS,
+                                        bar_title: shell_route_title(route()),
+                                        drawer_open: drawer_open(),
+                                        sidebar_collapsed,
+                                        active_project,
+                                        active_profile,
+                                        active_surface,
+                                        on_profile_open: open_profile_picker,
+                                        incognito,
+                                        api_base: base.clone(),
+                                        active_conv_id,
+                                        tools_open,
+                                    }
+                                }
+                                crate::components::notification_detail::NotificationDetailPage {
+                                    api_base: base.clone(),
+                                    outbox_id: id,
+                                    route: route,
+                                }
+                            }
+                        },
                         Route::Projects => rsx! {
                             div { class: "grok-main-phone-scroll",
                                 if is_narrow() {
@@ -438,6 +547,7 @@ fn App() -> Element {
                     }
                 }
             }
+        }
         }
     }
 }

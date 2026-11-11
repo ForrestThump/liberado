@@ -117,5 +117,9 @@ fn read_log_since(path: &Path, start: u64) -> Result<String, Box<dyn std::error:
 /// Pull compiler, test, and CRAP failures out of a child log so the agent
 /// does not have to scan compile progress or passing crates.
 pub(crate) fn extract_ci_failures(output: &str) -> String {
-    liberado_coder_core::extract_failures_capped(output, EXTRACT_MAX_LINES, Some(CI_LOG_FILE))
+    liberado_common::failure_excerpt::extract_failures_capped(
+        output,
+        EXTRACT_MAX_LINES,
+        Some(CI_LOG_FILE),
+    )
 }

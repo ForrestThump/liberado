@@ -19,12 +19,13 @@ this doc defines a narrower profile for a day-to-day slim build.
 | Recipe | What it builds |
 |---|---|
 | `just build` | Full native workspace. CI, mutation campaign, `cargo test --workspace`. |
-| `just build-release` | Release binary of `-p liberado-cli` (the `liberado` binary). Already slim — the package's dep graph is the slim graph. |
+| `just build-release` | Release binary of `-p liberado-cli` (the `liberado` binary), without the `coding` feature. |
 | `just build-slim` | Debug build of every workspace member that is a Liberado product crate. Excludes the sidecars in the next section. |
 | `just build-slim-release` | Release build of the same slim set, e.g. for shipping `liberado-conformance`. |
 
-The Dockerfile is unchanged: it already builds `-p liberado-cli
--p liberado-conformance`, which is exactly the slim set.
+The Dockerfile builds `-p liberado-cli -p liberado-conformance --features coding`.
+That is the homelab image: the live daemon still hosts the coding pack. A default
+`cargo build -p liberado-cli` does not. The image does not pass `coder-full`.
 
 ## Gated packages
 
@@ -73,9 +74,8 @@ cargo build --locked --workspace \
     --exclude liberado-provider-free-proxy
 ```
 
-The release binary stays `just build-release` regardless of profile — the
-`liberado` binary is built from `-p liberado-cli`, which never pulled in the
-gated crates to begin with.
+`just build-release` stays the default graph: `-p liberado-cli` with no features.
+The homelab image is the exception. Its Dockerfile passes `--features coding`.
 
 ## Feature fences on the product graph
 
@@ -84,8 +84,9 @@ Cargo-feature-fenced off the **default** `liberado-cli` / `liberado-server` grap
 
 | Feature | Crate | What it pulls |
 |---|---|---|
+| `coding` | `liberado-cli` (propagates to server, bootstrap, dispatch-pack) | in-process coding pack: coder-agent, coder-core, coder-sandbox, harness-eval. Slim coder-tools (`default-features = false`) |
 | `ci-unwraps` | `liberado-cli` | tree-sitter + tree-sitter-rust for `liberado ci unwraps` |
-| `coder-full` | `liberado-server` / `liberado-cli` | gix + go/python/typescript grammars via coder-tools |
+| `coder-full` | `liberado-server` / `liberado-cli` | requires `coding`, then gix + go/python/typescript grammars via coder-tools |
 | `vector-local` | `liberado-server` / `liberado-cli` | optional `liberado-memory-store` + `turbovault-vector` (fastembed) for in-process guidance |
 
 `liberado-coder-runner` (`liberado-coder-run`) enables full coder tools by default.
@@ -100,7 +101,10 @@ This is a dependency boundary only — not a dispatcher / task-flow redesign.
 The fences above hold for **package-scoped** product builds:
 
 - `cargo build -p liberado-cli` / `-p liberado-server`
-- Docker release / `just build-release` (builds `-p liberado-cli`)
+- `just build-release` (builds `-p liberado-cli` with no features)
+
+The homelab image passes `--features coding` and does not pass `coder-full`.
+Package-scoped `--features coding` stays on slim coder-tools.
 
 They do **not** hold for a single Cargo resolve that also builds
 `liberado-coder-runner` or `liberado-acp-bridge`. Those crates enable

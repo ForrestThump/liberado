@@ -25,7 +25,11 @@ tar xzf "$archive" -C "$stage_path"
   test "$state" = running
   actual="$(docker exec "$container" cat /etc/liberado-build-sha | tr -d '[:space:]')"
   test "$actual" = "$sha"
-  curl -fsS --max-time 15 "$api_url/api/status" >/dev/null
+  auth=()
+  if [ -n "${LIBERADO_API_TOKEN:-}" ]; then
+    auth=(-H "Authorization: Bearer ${LIBERADO_API_TOKEN}")
+  fi
+  curl -fsS --max-time 15 "${auth[@]}" "$api_url/api/health" >/dev/null
 ) 9>"$HOME/.liberado-deploy.lock"
 rm -rf "$stage_path" "$archive"
 "#;
@@ -35,7 +39,11 @@ container="$1"
 container_binary="$2"
 api_url="$3"
 expected_sha="$4"
-status="$(curl -fsS --max-time 15 "$api_url/api/status")"
+auth=()
+if [ -n "${LIBERADO_API_TOKEN:-}" ]; then
+  auth=(-H "Authorization: Bearer ${LIBERADO_API_TOKEN}")
+fi
+status="$(curl -fsS --max-time 15 "${auth[@]}" "$api_url/api/status")"
 printf '%s' "$status" | grep -Eq '"running"[[:space:]]*:[[:space:]]*true'
 actual="$(docker exec "$container" cat /etc/liberado-build-sha | tr -d '[:space:]')"
 if [ -n "$expected_sha" ]; then test "$actual" = "$expected_sha"; fi

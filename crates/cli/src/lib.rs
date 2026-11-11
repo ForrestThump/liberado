@@ -14,13 +14,13 @@
 //!   liberado chat [session-id]       the streaming terminal client of a running daemon
 //!   liberado config check            load + validate config, print a summary (or an error)
 //!   liberado config vapid-keys       print Web Push key env lines for the homelab env file
-//!   liberado ci                      full local CI; ratchet and stage/amend code-metrics/crap-baseline.json
+//!   liberado ci                      full local CI, including the CRAP diff gate
 //!   liberado ci check                ship preflight (fmt, clippy, tests, deny)
-//!   liberado ci crap                 compare CRAP scores to code-metrics/crap-baseline.json (no write)
+//!   liberado ci crap                 CRAP diff gate against the merge-base
+//!   liberado ci complexity           cyclomatic diff gate against the merge-base
 //!   liberado ci ready                final checks + exact Linux CRAP + readiness receipt
 //!   liberado ci verify-ready         reject a stale readiness receipt
 //!   liberado ci crap-linux           native Debian CRAP; Debian WSL on Windows
-//!   liberado ci ratchet              check, write baseline, then stage or amend it
 //!                                    console is a summary; full child log is .liberado/ci.log
 //!   liberado shepherd --once          run the unattended PR shepherd once
 //!   liberado deploy <homelab|webui|smoke|latency> run configured deployment operations
@@ -59,8 +59,11 @@
 mod branch_cleaner_ci;
 mod chat_client;
 mod ci_cmd;
+#[cfg(feature = "coding")]
 mod coder_cmd;
+#[cfg(feature = "coding")]
 mod compare_cmd;
+mod config_cmd;
 mod crate_map_cmd;
 mod dependency_security_cmd;
 mod docs_audit_cmd;
@@ -72,7 +75,9 @@ mod module_health_cmd;
 mod mutants_cmd;
 mod ops_cmd;
 mod readiness_cmd;
+#[cfg(feature = "coding")]
 mod shepherd_cmd;
+#[cfg(feature = "coding")]
 mod summarize_cmd;
 #[cfg(feature = "ci-unwraps")]
 pub mod unwrap_classification_cmd;
@@ -127,7 +132,7 @@ async fn route_named(
     name: &str,
     args: &mut impl Iterator<Item = String>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    if matches!(name, "deploy" | "dev" | "paseo" | "ops") {
+    if command_runs_on_blocking_pool(name) {
         let name = name.to_string();
         let arguments: Vec<String> = args.collect();
         return tokio::task::spawn_blocking(move || run_operations_route(&name, arguments))
@@ -141,37 +146,92 @@ async fn route_named(
     }
 }
 
-/// Operator commands use blocking filesystem, process, SSH, and HTTP clients by design. Keep the
-/// complete command on Tokio's blocking pool: dropping reqwest's blocking client on an async
-/// worker panics because that client owns a small internal runtime.
+/// Commands whose work uses a blocking client, a process, or the filesystem.
+///
+/// `reqwest::blocking` owns a Tokio runtime. Dropping that runtime on an async worker panics
+/// ("Cannot drop a runtime in a context where blocking is not allowed"). `shepherd` is in this
+/// list for that reason. The whole command runs on the blocking pool, same as the operations
+/// commands. The name list is one table so `route_named` does not grow a branch per command.
+fn command_runs_on_blocking_pool(name: &str) -> bool {
+    const COMMANDS: &[&str] = &["deploy", "dev", "paseo", "ops", "shepherd"];
+    COMMANDS.contains(&name)
+}
+
+/// Run one blocking command and stringify its error for the async caller.
 fn run_operations_route(name: &str, arguments: Vec<String>) -> Result<(), String> {
+    dispatch_blocking_command(name, arguments).map_err(|error| error.to_string())
+}
+
+/// The blocking commands. Split from [`run_operations_route`] so that function stays a thin
+/// adapter and this match can name `shepherd` without raising the old function's complexity.
+fn dispatch_blocking_command(
+    name: &str,
+    arguments: Vec<String>,
+) -> Result<(), Box<dyn std::error::Error>> {
     let mut args = arguments.into_iter();
-    let result = match name {
+    match name {
         "deploy" => ops_cmd::run_deploy(&mut args),
         "dev" => ops_cmd::run_dev(&mut args),
         "paseo" => ops_cmd::run_paseo(&mut args),
         "ops" => ops_cmd::run_ops(&mut args),
-        _ => return Err(format!("unknown operations command: {name}")),
-    };
-    result.map_err(|error| error.to_string())
+        "shepherd" => dispatch_shepherd(&mut args),
+        _ => Err(format!("unknown operations command: {name}").into()),
+    }
 }
 
 /// The synchronous sub-command groups, by first argument. Each wrapper owns its own
 /// argument match; `None` means "not a known group", leaving the caller free to fall back.
+///
+/// `shepherd` is not here. It runs on the blocking pool (see [`command_runs_on_blocking_pool`])
+/// so its reqwest blocking client is not dropped on an async worker.
 fn route_sync(
     name: &str,
     args: &mut impl Iterator<Item = String>,
 ) -> Option<Result<(), Box<dyn std::error::Error>>> {
     let route = match name {
-        "coder" => coder_cmd::run(args),
+        "coder" => dispatch_coder(args),
         "mutants" => cmd_mutants(args),
         "ci" => cmd_ci(args),
-        "shepherd" => shepherd_cmd::run(args),
         "docs" => cmd_docs(args),
-        "config" => cmd_config(args),
+        "config" => config_cmd::run(args),
         _ => return None,
     };
     Some(route)
+}
+
+#[cfg(feature = "coding")]
+fn dispatch_shepherd(
+    args: &mut impl Iterator<Item = String>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    shepherd_cmd::run(args)
+}
+
+#[cfg(not(feature = "coding"))]
+fn dispatch_shepherd(
+    args: &mut impl Iterator<Item = String>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let _ = args;
+    Err(coding_feature_missing())
+}
+
+#[cfg(feature = "coding")]
+fn dispatch_coder(
+    args: &mut impl Iterator<Item = String>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    coder_cmd::run(args)
+}
+
+#[cfg(not(feature = "coding"))]
+fn dispatch_coder(
+    args: &mut impl Iterator<Item = String>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let _ = args;
+    Err(coding_feature_missing())
+}
+
+#[cfg(not(feature = "coding"))]
+fn coding_feature_missing() -> Box<dyn std::error::Error> {
+    "built without the `coding` feature".into()
 }
 
 /// `liberado ci …` — ship preflight, CRAP check, or the local check-then-ratchet run.
@@ -234,52 +294,6 @@ fn cmd_docs_auxiliary(
     }
 }
 
-/// `liberado config …`
-fn cmd_config(args: &mut impl Iterator<Item = String>) -> Result<(), Box<dyn std::error::Error>> {
-    dispatch_config(args)
-}
-
-fn dispatch_config(
-    args: &mut impl Iterator<Item = String>,
-) -> Result<(), Box<dyn std::error::Error>> {
-    match args.next().as_deref() {
-        Some("check") => liberado_server::config_check(None),
-        Some("explain") => explain_config(args),
-        Some("vapid-keys") => print_vapid_keys(args),
-        _ => Err("usage: liberado config <check|explain|vapid-keys>".into()),
-    }
-}
-
-fn explain_config(
-    args: &mut impl Iterator<Item = String>,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let component = args.next();
-    let tool = args.next();
-    let path = args.next();
-    match (component, tool, path) {
-        (Some(c), Some(t), Some(p)) => liberado_server::explain_write(None, &c, &t, &p),
-        _ => Err(
-            "usage: liberado config explain <component> <mcp:tool> <vault/path.md>\n  \
-             e.g. liberado config explain dispatcher turbovault:write_note Learning/x.md"
-                .into(),
-        ),
-    }
-}
-
-fn print_vapid_keys(
-    args: &mut impl Iterator<Item = String>,
-) -> Result<(), Box<dyn std::error::Error>> {
-    if args.next().is_some() {
-        return Err("usage: liberado config vapid-keys".into());
-    }
-    let lines = liberado_server::vapid_env_lines()?;
-    println!("{lines}");
-    eprintln!(
-        "Put these in the homelab env file. Set LIBERADO_VAPID_SUBJECT=mailto:you@example.com. Do not commit them."
-    );
-    Ok(())
-}
-
 /// `liberado serve [<vault>]` — run the daemon in the foreground, or fall back to the
 /// `LIBERADO_VAULT` environment variable.
 async fn run_serve(vault: Option<String>) -> Result<(), Box<dyn std::error::Error>> {
@@ -307,7 +321,12 @@ mod dispatch_tests {
     /// arms reach for a daemon or network and stay out of unit tests.
     #[tokio::test]
     async fn named_subcommands_reject_unknown_subarguments_with_usage() {
-        for command in ["ci", "coder", "mutants", "shepherd", "docs", "config"] {
+        let commands = ["ci", "mutants", "docs", "config"];
+        #[cfg(feature = "coding")]
+        let mut commands = commands.to_vec();
+        #[cfg(feature = "coding")]
+        commands.extend(["coder", "shepherd"]);
+        for command in commands {
             let args = [command.to_string(), "not-a-real-subcommand".to_string()];
             let err = dispatch(&mut args.into_iter())
                 .await
@@ -316,6 +335,29 @@ mod dispatch_tests {
             assert!(
                 err.to_lowercase().contains("usage"),
                 "{command}: expected usage text, got: {err}"
+            );
+        }
+    }
+
+    #[cfg(not(feature = "coding"))]
+    #[tokio::test]
+    async fn coder_and_shepherd_report_the_missing_feature() {
+        let cases = [
+            vec!["coder".to_string()],
+            vec!["coder".to_string(), "not-a-real-subcommand".to_string()],
+            vec!["coder".to_string(), "compare".to_string()],
+            vec!["coder".to_string(), "smoke".to_string()],
+            vec!["shepherd".to_string()],
+            vec!["shepherd".to_string(), "--self-test".to_string()],
+        ];
+        for args in cases {
+            let err = dispatch(&mut args.into_iter())
+                .await
+                .expect_err("the command must fail closed");
+            let err = err.to_string();
+            assert!(
+                err.contains("built without the `coding` feature"),
+                "got: {err}"
             );
         }
     }

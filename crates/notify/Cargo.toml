@@ -8,22 +8,27 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 
+[features]
+# Test-only tracing capture shared by daemon and server tests. Production builds leave this off.
+log-capture = []
+
 [dependencies]
 async-trait = { workspace = true }
 aws-lc-rs = { workspace = true }
 base64 = { workspace = true }
-chrono = { workspace = true }
 liberado-common = { workspace = true }
 liberado-messaging = { workspace = true }
 reqwest = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+chrono = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 
 [dev-dependencies]
 wiremock = "0.6"
+liberado-outbox = { path = "../outbox" }
 
 [package.metadata.liberado]
 # Layer role for the layer-rules test + crate-map generator (docs/architecture/contracts.md)

@@ -45,6 +45,46 @@ ssh <box> 'docker exec -e LIBERADO_CONFIG_DIR=/config liberado liberado config c
 
 ## 2. The knobs you will actually reach for
 
+### HTTP control plane — `[api]` in `topology.toml`
+
+The daemon listens on `127.0.0.1:4201` by default. Override with `LIBERADO_BIND`, then
+`[api] bind`, then the legacy `LIBERADO_PORT` (loopback only). A non-loopback bind without
+any credential configured refuses to start.
+
+```toml
+[api]
+bind = "127.0.0.1:4201"
+human = { env = "LIBERADO_HUMAN_TOKEN" }   # owner: WebUI sign-in, approvals, profiles
+
+[[api.clients]]
+name = "cli"
+token = { env = "LIBERADO_API_TOKEN" }     # native clients listed below
+
+# Optional: exact origins for cross-origin dev (e.g. `dx serve` on :8080 → API on :4201)
+# allowed_origins = ["http://127.0.0.1:8080"]
+
+# Optional: passkey sign-in for the WebUI (requires https or localhost in the browser).
+# [api.webauthn]
+# rp_id = "homelab-node-ai.mermaid-halfbeak.ts.net"
+# origins = ["https://homelab-node-ai.mermaid-halfbeak.ts.net:8444"]
+# rp_name = "Liberado"
+```
+
+Never put token values in TOML — only `env` or `file` references. `GET /api/health` stays
+unauthenticated for health checks; everything else needs the human session (browser cookie +
+`X-Liberado-CSRF` on writes) or `Authorization: Bearer` with a client token.
+
+Native clients that send that bearer when `LIBERADO_API_TOKEN` is set: the TUI, `liberado chat`,
+the operator dogfood MCP, acp-bridge face mode (`liberado-acp`, including Zed and Paseo), and
+`liberado shepherd`. Point the variable at one `[[api.clients]]` token when `[api]` credentials
+are configured. Leave it unset when the daemon has no `[api]` table; those clients then send no
+`Authorization` header. Shepherd attaches the token only to its daemon goal calls (`GET` and
+`POST` `/api/goals`). Its GitHub calls use `gh` and do not receive this token.
+
+**Upgrade (step 1):** add `[api]` before exposing the daemon beyond loopback. Set
+`LIBERADO_HUMAN_TOKEN` and at least one `[[api.clients]]` secret. Point Compose at
+`127.0.0.1:4201:4201` and change healthchecks to `/api/health`.
+
 ### Models and per-role tiering — `topology.toml`
 
 ```toml
@@ -247,6 +287,11 @@ Task reminders use the same TurboVault `parse_tasks` + Obsidian Tasks global fil
 path as `task-ping`, so a remind-marked line without the required global-filter tag
 does not fire.
 
+`[reminders]` in `tuning.toml` controls the outbox worker: `once_within` (default `6h`) for cron
+catch-up on mechanical jobs, `max_attempts`, `max_catchup_per_boot`, and `channels.telegram.mode`
+(`fallback` | `always` | `off`, default `fallback`). Web Push is preferred when VAPID keys and at
+least one subscription exist at enqueue time.
+
 The vault is the list. Add a task by writing an Obsidian Tasks line in a note:
 
 ```markdown
@@ -336,6 +381,14 @@ visible in the ordinary coding trace. It does not fetch external documentation o
 Changing these values does not require a rebuild. The next coding run reads them from
 `tuning.toml`. ACP and session-pack entry points do not yet generate a repo map; this toggle is for
 the headless runner used by the current harness comparison.
+
+A daemon built **with** the `coding` feature still fail-fasts on an invalid `[coder]` table:
+startup stops, and the error names the bad setting. A daemon built **without** the feature does
+not parse `[coder]`. Boot succeeds. If any of these are set, it logs one warning that names
+`coding`: a non-empty `[coder]` table, a session profile with `domain = "coding"`, an enabled
+`[[projects]]` row, or `shepherd.review.enabled`. An empty `[coder]` header (comments only, as in
+the example file) does not warn. `liberado coder` and `liberado shepherd` on that binary exit
+non-zero and print `built without the `coding` feature`.
 
 ### Per-dispatch coding write scope
 
@@ -520,7 +573,8 @@ vault-wide tool (`begin_fanout`, `commit_fanout`, `abandon_fanout`, `set_active_
 `Write(Vault("<zone>"))` check doesn't apply. Instead the runtime gate requires the
 **explicit** vault-wide marker grant `Capability::Write(Zone::vault("vault-wide-any"))`,
 checked via `CapabilitySet::holds_vault_wide_grant`. The same capability is what the
-four-button permission card applies when the human picks Once / Session / Everywhere.
+four-button permission card applies when the human picks Once / "Until restart, all chats" /
+Everywhere.
 `Write(<zone>)` for some specific zone is **not** enough: a session that holds
 `Write(Tasks)` can rearrange Tasks, but cannot pick the active vault for the whole
 process or rebuild the index, because those affect every concurrent session. The
@@ -622,6 +676,10 @@ exit code (`0`) remain under `[projects.preflight]`; do not duplicate CI command
 Without a configured project, it reads `SHEPHERD_MAX_KICKBACKS` (2), `SHEPHERD_COLD_REVIEWS` (2),
 `SHEPHERD_MAX_CONCURRENT` (2), `SHEPHERD_POLL_SECONDS` (120), `SHEPHERD_BASE` (`main`),
 `SHEPHERD_PROJECT` (`liberado`), and `LIBERADO_SERVER` (`http://localhost:4201`).
+
+When the daemon has `[api]` credentials configured, set `LIBERADO_API_TOKEN` to a
+`[[api.clients]]` token. Shepherd sends it as `Authorization: Bearer` on daemon goal calls.
+GitHub reads and labels stay on `gh`.
 
 ## 3. Reading what the daemon decided
 

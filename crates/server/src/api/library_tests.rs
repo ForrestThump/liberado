@@ -75,7 +75,8 @@ fn app(vault: &Path, config: liberado_bootstrap::Config) -> Router {
         live_mcp: liberado_bootstrap::LiveMcpController::empty(),
         drain: crate::shutdown::DrainGate::default(),
         approval_hub: None,
-        push: crate::state::inert_push(),
+        outbox: None,
+        outbox_delivery: None,
         spending: None,
         surfaces: crate::surfaces::LiveSurfaces::inert(),
     });
@@ -307,8 +308,8 @@ async fn get_library_returns_vault_items_and_honors_limit() {
 
 #[test]
 fn the_server_registers_get_library() {
-    let src = include_str!("../lib.rs");
-    assert!(src.contains("/api/library"));
-    assert!(src.contains("api::list_library"));
-    assert!(!src.contains("post(api::list_library)"));
+    let router_src = include_str!("../app_router.rs");
+    assert!(router_src.contains("/api/library"));
+    assert!(router_src.contains("api::list_library"));
+    assert!(!router_src.contains("post(api::list_library)"));
 }

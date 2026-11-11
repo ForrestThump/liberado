@@ -202,7 +202,7 @@ pub(crate) fn source_line(effective: GrantSource, profile: Option<&str>) -> Stri
 
 async fn fetch_grants(api_base: &str, conv_id: &str) -> Result<ConversationGrantsResponse, String> {
     let url = format!("{api_base}/api/conversations/{conv_id}/grants");
-    let resp = reqwest::get(&url)
+    let resp = crate::http::get(&url)
         .await
         .map_err(|e| format!("Failed to reach daemon: {e}"))?;
     if !resp.status().is_success() {

@@ -11,7 +11,8 @@ use chrono::{Datelike, NaiveDate, NaiveDateTime, NaiveTime, TimeDelta};
 use liberado_config::{
     UnmappedPolicy, WeeklySpendingConfig, has_enabled_weekly_schedule, weekly_open_clock,
 };
-use liberado_notify::PushHub;
+
+use crate::weekly_push::{WeekReport, WeekSender};
 
 const TITLE: &str = "Weekly spending";
 
@@ -306,12 +307,12 @@ pub async fn run_weekly(
     open_hour: u32,
     open_minute: u32,
     source: Arc<dyn SpendingSource>,
-    hub: Arc<PushHub>,
+    sender: Arc<dyn WeekSender>,
     mode: RunMode,
 ) -> Result<RunOutcome, String> {
     prepare_run(cfg, mode)?;
     let (week_id, start, end) = week_window(local_now, open_hour, open_minute);
-    if skip_fetch(mode, &hub, &week_id) {
+    if skip_fetch(mode, sender.as_ref(), &week_id) {
         return Ok(quiet(&week_id, start, end));
     }
     let rows = source.spending(start, end, &cfg.exclude).await?;
@@ -319,7 +320,7 @@ pub async fn run_weekly(
     let message = render(&allocation.buckets);
     deliver(
         mode,
-        &hub,
+        sender.as_ref(),
         &week_id,
         start,
         end,
@@ -336,8 +337,8 @@ fn prepare_run(cfg: &WeeklySpendingConfig, mode: RunMode) -> Result<(), String> 
     Err("weekly spending is off".into())
 }
 
-fn skip_fetch(mode: RunMode, hub: &PushHub, week_id: &str) -> bool {
-    matches!(mode, RunMode::Send) && !hub.needs_week(week_id)
+fn skip_fetch(mode: RunMode, sender: &dyn WeekSender, week_id: &str) -> bool {
+    matches!(mode, RunMode::Send) && !sender.needs_week(week_id)
 }
 
 fn quiet(week_id: &str, start: NaiveDate, end: NaiveDate) -> RunOutcome {
@@ -356,7 +357,7 @@ fn quiet(week_id: &str, start: NaiveDate, end: NaiveDate) -> RunOutcome {
 
 async fn deliver(
     mode: RunMode,
-    hub: &PushHub,
+    sender: &dyn WeekSender,
     week_id: &str,
     start: NaiveDate,
     end: NaiveDate,
@@ -364,9 +365,9 @@ async fn deliver(
     unmapped: Vec<String>,
 ) -> Result<RunOutcome, String> {
     let report = match mode {
-        RunMode::DryRun => liberado_notify::SendReport::default(),
-        RunMode::Send => hub.send_week(week_id, TITLE, message, false).await,
-        RunMode::Force => hub.send_week(week_id, TITLE, message, true).await,
+        RunMode::DryRun => WeekReport::default(),
+        RunMode::Send => sender.send_week(week_id, TITLE, message, false).await,
+        RunMode::Force => sender.send_week(week_id, TITLE, message, true).await,
     };
     Ok(outcome(week_id, start, end, message, unmapped, report))
 }
@@ -377,7 +378,7 @@ fn outcome(
     end: NaiveDate,
     message: &str,
     unmapped: Vec<String>,
-    report: liberado_notify::SendReport,
+    report: WeekReport,
 ) -> RunOutcome {
     RunOutcome {
         message: message.to_string(),
@@ -398,7 +399,7 @@ pub async fn run_weekly_job(
     hour: u32,
     minute: u32,
     source: Option<Arc<dyn SpendingSource>>,
-    hub: Arc<PushHub>,
+    sender: Arc<dyn WeekSender>,
     mode: RunMode,
 ) {
     let source = match resolve_source(source) {
@@ -408,7 +409,7 @@ pub async fn run_weekly_job(
             return;
         }
     };
-    match run_weekly(&cfg, now, hour, minute, source, hub, mode).await {
+    match run_weekly(&cfg, now, hour, minute, source, sender, mode).await {
         Ok(outcome) => log_outcome(&outcome),
         Err(err) => tracing::warn!("{err}"),
     }

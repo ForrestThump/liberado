@@ -162,6 +162,17 @@ async fn refuse_missing_zones(
     if missing_zones.is_empty() {
         return Ok(None);
     }
+    request_or_deny_missing_zones(runtime, call, &missing_zones).await
+}
+
+async fn request_or_deny_missing_zones(
+    runtime: &RiskGatedToolRuntime,
+    call: &ToolInvocation,
+    missing_zones: &[String],
+) -> Result<Option<String>, String> {
+    if let Some(err) = refuse_case_ambiguous_zone(runtime, call, missing_zones) {
+        return Err(err);
+    }
     runtime.authority_decision(
         "write_capability",
         if runtime.can_ask_human() {
@@ -171,20 +182,92 @@ async fn refuse_missing_zones(
         },
         call,
         Some(missing_zones.first().map(String::as_str).unwrap_or("")),
-        &missing_zone_requirement(&missing_zones),
+        &missing_zone_requirement(missing_zones),
     );
     if runtime.can_ask_human() {
         let first_zone = missing_zones.first().map(String::as_str).unwrap_or("");
         let path = runtime
-            .write_permission_request(call, &missing_zones)
+            .write_permission_request(call, missing_zones)
             .await?;
         return Ok(Some(permission_request_message(
             &path,
             first_zone,
-            &missing_zones,
+            missing_zones,
         )));
     }
-    Err(zone_denial(call, &missing_zones))
+    Err(zone_denial(call, missing_zones))
+}
+
+fn refuse_case_ambiguous_zone(
+    runtime: &RiskGatedToolRuntime,
+    call: &ToolInvocation,
+    missing_zones: &[String],
+) -> Option<String> {
+    let ambiguous = first_ambiguous_zone(runtime, missing_zones)?;
+    runtime.authority_decision(
+        "write_capability",
+        "refused",
+        call,
+        Some(ambiguous.used.as_str()),
+        &format!(
+            "zone '{}' on the path only matches a declared zone '{}' case-insensitively; \
+             refusing rather than guess (declare the case you mean in topology.toml/policy, \
+             or fix the path)",
+            ambiguous.used, ambiguous.declared,
+        ),
+    );
+    tracing::warn!(
+        used = %ambiguous.used,
+        declared = %ambiguous.declared,
+        tool = %call.name,
+        "tool call refused: case-ambiguous zone name"
+    );
+    Some(format!(
+        "not authorized: '{}' writes to zone '{}', which only matches a declared zone '{}' \
+         case-insensitively (zone names are case-sensitive end-to-end). Either fix the path \
+         to use the declared case, or declare the case you mean in topology.toml/policy — the \
+         runtime will not guess.",
+        call.name, ambiguous.used, ambiguous.declared,
+    ))
+}
+
+fn first_ambiguous_zone(
+    runtime: &RiskGatedToolRuntime,
+    missing_zones: &[String],
+) -> Option<AmbiguousZone> {
+    let declared: Vec<&str> = runtime
+        .zone_write_classes
+        .iter()
+        .map(|(name, _)| name.as_str())
+        .chain(granted_zone_names(runtime))
+        .collect();
+    for used in missing_zones {
+        for declared_name in &declared {
+            if used.eq_ignore_ascii_case(declared_name) && used != *declared_name {
+                return Some(AmbiguousZone {
+                    used: used.clone(),
+                    declared: (*declared_name).to_string(),
+                });
+            }
+        }
+    }
+    None
+}
+
+struct AmbiguousZone {
+    used: String,
+    declared: String,
+}
+
+fn granted_zone_names(runtime: &RiskGatedToolRuntime) -> impl Iterator<Item = &str> {
+    runtime
+        .capabilities
+        .capabilities
+        .iter()
+        .filter_map(|cap| match cap {
+            Capability::Write(Zone::Vault(name) | Zone::Named(name)) => Some(name.as_str()),
+            _ => None,
+        })
 }
 
 fn missing_zone_requirement(missing_zones: &[String]) -> String {

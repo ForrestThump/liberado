@@ -19,7 +19,7 @@ use crate::components::picker::Picker;
 
 async fn fetch_models(api_base: String) -> Result<ModelsResponse, String> {
     let url = format!("{api_base}/api/models");
-    reqwest::get(&url)
+    crate::http::get(&url)
         .await
         .map_err(|e| format!("Failed to reach daemon: {e}"))?
         .json::<ModelsResponse>()
@@ -41,10 +41,7 @@ async fn fetch_models(api_base: String) -> Result<ModelsResponse, String> {
 async fn select_model(api_base: String, model: String, conversation: String) -> Result<(), String> {
     let url = format!("{api_base}/api/conversations/{conversation}");
     let body = serde_json::json!({ "pending_model": model });
-    let resp = reqwest::Client::new()
-        .patch(&url)
-        .json(&body)
-        .send()
+    let resp = crate::http::patch_json(&url, &body)
         .await
         .map_err(|e| format!("Failed to reach daemon: {e}"))?;
     if resp.status().is_success() {

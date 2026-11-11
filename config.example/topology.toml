@@ -643,6 +643,9 @@ name = "researcher"
 component = "research"
 description = "Read-only research hat chat (Agents shelf)"
 enabled = true
+# A read-only grant resolves to delegation = false when this key is omitted.
+# The key is set so the example states that default.
+delegation = false
 
 [[session_profiles]]
 name = "operator"
@@ -730,3 +733,9 @@ tier = "work_plane"
 input = 0.14
 output = 0.28
 cached_input = 0.0028
+
+# Optional: passkey sign-in for the WebUI (https or localhost in the browser).
+# [api.webauthn]
+# rp_id = "homelab-node-ai.mermaid-halfbeak.ts.net"
+# origins = ["https://homelab-node-ai.mermaid-halfbeak.ts.net:8444"]
+# rp_name = "Liberado"

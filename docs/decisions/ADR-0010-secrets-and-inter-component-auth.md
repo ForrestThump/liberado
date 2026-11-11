@@ -11,13 +11,17 @@ open_items: false
 
 | Field | Value |
 |-------|-------|
-| Status | accepted |
+| Status | not implemented |
 | Date | 2026-07-02 (from consolidated decision log; see git history) |
 | ID | ADR-0010 |
 
+The metadata `status` stays `accepted` because the decision vocabulary has no `not implemented` value. `accepted` means the design was selected. The status table is the implementation mark.
+
+The bind and component-auth mechanisms in this decision are not in the code. `crates/server/src/lib.rs` binds `0.0.0.0` and applies `CorsLayer::permissive()`. The HTTP API has no caller authentication. Local MCPs use stdio or streamable HTTP (`McpTransport` in `crates/config-loader`), not Unix sockets. Two pieces of this decision do exist: hook webhooks check a shared secret (`crates/server/src/hooks.rs`), and `secret_refs` must be set in the environment (`crates/config-loader`).
+
 ## Context
 
-See **Full historical body** for the original framing, open questions, and design discussion.
+See **Full historical body** for the original framing, open questions, and design discussion. The historical body still says "Status: Complete". That sentence is the July 2026 log.
 
 ## Decision
 

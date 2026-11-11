@@ -94,7 +94,8 @@ fn goals_app() -> (Router, Arc<GoalSessionHub>) {
         live_mcp: liberado_bootstrap::LiveMcpController::empty(),
         drain: crate::shutdown::DrainGate::default(),
         approval_hub: None,
-        push: crate::state::inert_push(),
+        outbox: None,
+        outbox_delivery: None,
         spending: None,
     });
 
@@ -168,7 +169,8 @@ async fn goals_app_with_chat() -> (
         live_mcp: liberado_bootstrap::LiveMcpController::empty(),
         drain: crate::shutdown::DrainGate::default(),
         approval_hub: None,
-        push: crate::state::inert_push(),
+        outbox: None,
+        outbox_delivery: None,
         spending: None,
     });
 
@@ -649,7 +651,8 @@ async fn fork_app(
         live_mcp: liberado_bootstrap::LiveMcpController::empty(),
         drain: crate::shutdown::DrainGate::default(),
         approval_hub: None,
-        push: crate::state::inert_push(),
+        outbox: None,
+        outbox_delivery: None,
         spending: None,
     });
 

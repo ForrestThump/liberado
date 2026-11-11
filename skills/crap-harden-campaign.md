@@ -33,7 +33,7 @@ full instrumented rebuild + suite run, 20-40 minutes), not per site:
 cargo llvm-cov --workspace --exclude liberado-webui --lcov \
   --output-path .liberado/crap.lcov --ignore-run-fail
 
-cargo crap --workspace --lcov .liberado/crap.lcov --min 150        # ceiling
+cargo crap --workspace --lcov .liberado/crap.lcov --min 150        # ranking filter, not the gate
 cargo crap --workspace --lcov .liberado/crap.lcov --format json \
   --sort crap --output .liberado/crap-current.json                 # ranked table
 python - <<'PY'
@@ -56,20 +56,23 @@ LCOV (binary `main`s, excluded crates, test-only modules), and counts
 every `?` / `ok_or_else` as a branch. Prefer `let-else` over chains of
 `?` in the function you are measuring; a tail `?` is free.
 
-### 3. Ratchet rules
+### 3. Diff-gate rules
 
-`code-metrics/crap-baseline.json` is committed at the repo root (the last best
-per-function score). Ubuntu CI runs the per-function ratchet
-(`liberado ci crap` — `--fail-regression` with `--min 10`); Windows and other hosts are
-ceiling-only (150). A current score below 10 is not a regression. To compare locally run:
+There is no committed per-function baseline. `liberado ci crap` scores functions whose
+line span intersects the diff since the merge-base (default `origin/main`). A new
+function must land at CRAP ≤ 29.9 and cyclomatic ≤ 20. A touched function that already
+exists on the merge-base may stay over a limit, and that score must not rise. A rename
+or a move keeps the old cap. A copy, while the original still exists, is new and must
+meet the limits. A split keeps the original as legacy; each extracted function is new.
 
 ```bash
-cargo run --locked --quiet -p liberado-cli -- ci crap
+cargo run --locked -p liberado-cli -- ci crap
+cargo run --locked -p liberado-cli -- ci complexity
 ```
 
 - Adding tests lowers scores — always safe
-- Splitting a function creates new names with no baseline — ceiling only
-- Never raise a function's score; if a refactor would, do not ship it
+- Splitting a function makes the extracted pieces new — they must meet both limits
+- Never raise a touched function's score above its merge-base score; if a refactor would, do not ship it
 
 ## Per-site flow
 
@@ -112,9 +115,9 @@ RUSTDOCFLAGS="-D rustdoc::broken_intra_doc_links" cargo doc \
 cargo deny check        # needs cargo-deny; the yaml: taiki-e/install-action
 ```
 
-CI runs `fmt --check` and the per-function ratchet on Ubuntu only; a
-Windows host lints the `#[cfg(windows)]` code the Ubuntu leg cannot see.
-Clippy runs on both OSes for exactly that reason.
+CI runs `fmt --check` on Ubuntu. The CRAP diff gate runs on the Ubuntu CRAP job
+and inside `just ci` on every host. A Windows host also lints the `#[cfg(windows)]`
+code the Ubuntu leg cannot see. Clippy runs on both OSes for exactly that reason.
 
 ## Rules that trip people
 
@@ -134,9 +137,11 @@ Clippy runs on both OSes for exactly that reason.
 ## Campaign record (2026-08, branch `harden-main-crap`)
 
 This playbook went through one full campaign and reached its terminal state — **zero
-functions above CRAP 150** (3,285 analyzed). The committed `--fail-above` ceiling is now
-**150** (`.cargo-crap.toml` `threshold`, `liberado ci crap`). Recorded here so a future
-reader does not mistake 0-over-150 for unfinished 300-ceiling work.
+functions above CRAP 150** (3,285 analyzed). That record is historical. The live gate is
+the diff gate: a new function must land at or under 29.9 (`.cargo-crap.toml` `threshold`),
+and a touched legacy function must not get worse than the merge-base. There is no
+committed per-function baseline. Recorded here so a future reader does not mistake
+0-over-150 for the current limit.
 
 What cleared each band (each site committed once, full CI gate green per commit):
 

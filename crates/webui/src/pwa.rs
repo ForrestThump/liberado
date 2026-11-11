@@ -86,49 +86,7 @@ fn icons_claim_size(icons: &[Value], size: &str) -> bool {
     })
 }
 
-/// The worker must own `/` (not `/assets/`) and must not intercept `/api/`.
-fn service_worker_errors(text: &str) -> Vec<String> {
-    let mut errors = Vec::new();
-    if !text.contains("addEventListener(\"fetch\"") && !text.contains("addEventListener('fetch'") {
-        errors.push("service worker has no fetch handler".into());
-    }
-    if !text.contains("pathname.startsWith(\"/api/\")")
-        && !text.contains("pathname.startsWith('/api/')")
-    {
-        errors.push("service worker does not bypass /api/".into());
-    }
-    if text.contains("caches.") {
-        errors.push("service worker caches responses; that can pin a stale WASM".into());
-    }
-    errors
-}
-
-fn push_worker_errors(text: &str) -> Vec<String> {
-    let mut errors = Vec::new();
-    require_push_listener(text, &mut errors);
-    require_push_actions(text, &mut errors);
-    errors
-}
-
-fn require_push_listener(text: &str, errors: &mut Vec<String>) {
-    if text.contains("addEventListener(\"push\"") || text.contains("addEventListener('push'") {
-        return;
-    }
-    errors.push("service worker has no push handler".into());
-}
-
-fn require_push_actions(text: &str, errors: &mut Vec<String>) {
-    if !text.contains("showNotification") {
-        errors.push("service worker does not show a notification".into());
-    }
-    if !text.contains("notificationclick") {
-        errors.push("service worker has no notificationclick handler".into());
-    }
-    if !text.contains("openWindow") {
-        errors.push("service worker does not open the app on click".into());
-    }
-}
-
+/// Install-shell HTML must link the manifest, mount point, and root-scoped service worker.
 fn index_html_errors(text: &str) -> Vec<String> {
     let mut errors = Vec::new();
     if !text.contains("rel=\"manifest\"") {
@@ -229,6 +187,10 @@ fn css_rule<'a>(text: &'a str, selector: &str) -> &'a str {
 }
 
 #[cfg(test)]
+#[path = "pwa_sw_checks.rs"]
+mod pwa_sw_checks;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -240,20 +202,18 @@ mod tests {
 
     #[test]
     fn shipped_service_worker_bypasses_the_daemon_api() {
-        let errors = service_worker_errors(&read_crate_file("public/sw.js"));
+        let errors = super::pwa_sw_checks::service_worker_errors(&read_crate_file("public/sw.js"));
         assert!(errors.is_empty(), "{errors:?}");
     }
 
     #[test]
-    fn shipped_service_worker_shows_a_push_and_opens_the_app() {
-        let text = read_crate_file("public/sw.js");
-        let errors = push_worker_errors(&text);
-        assert!(errors.is_empty(), "{errors:?}");
-        assert!(
-            push_worker_errors("addEventListener(\"fetch\"")
-                .iter()
-                .any(|e| e.contains("push"))
-        );
+    fn service_worker_notification_actions_run_in_node() {
+        let status = std::process::Command::new("node")
+            .arg("sw_node_test.mjs")
+            .current_dir(std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("public"))
+            .status()
+            .expect("node must be installed to run sw_node_test.mjs");
+        assert!(status.success(), "sw_node_test.mjs failed");
     }
 
     #[test]
@@ -378,7 +338,9 @@ mod tests {
 
     #[test]
     fn service_worker_without_fetch_handler_fails() {
-        let errors = service_worker_errors("self.addEventListener('install', function () {});");
+        let errors = super::pwa_sw_checks::service_worker_errors(
+            "self.addEventListener('install', function () {});",
+        );
         assert!(
             errors.iter().any(|e| e.contains("fetch handler")),
             "{errors:?}"
@@ -390,14 +352,14 @@ mod tests {
         let no_bypass = r#"self.addEventListener("fetch", function (event) {
             event.respondWith(fetch(event.request));
         });"#;
-        let errors = service_worker_errors(no_bypass);
+        let errors = super::pwa_sw_checks::service_worker_errors(no_bypass);
         assert!(errors.iter().any(|e| e.contains("/api/")), "{errors:?}");
 
         let caches = r#"self.addEventListener("fetch", function (event) {
             if (new URL(event.request.url).pathname.startsWith("/api/")) { return; }
             caches.open("v1");
         });"#;
-        let errors = service_worker_errors(caches);
+        let errors = super::pwa_sw_checks::service_worker_errors(caches);
         assert!(errors.iter().any(|e| e.contains("caches")), "{errors:?}");
     }
 

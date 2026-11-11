@@ -331,7 +331,7 @@ async fn a_profile_survives_reopening_the_store() {
 
 /// A lookup failure must not quietly become an authority change in either direction.
 #[tokio::test]
-async fn an_unknown_session_falls_back_to_the_process_grant() {
+async fn an_unknown_session_fails_closed_with_no_tools() {
     let dir = tempfile::tempdir().unwrap();
     let process_grant =
         CapabilitySet::from_iter([liberado_common::Capability::ExecuteMcp("tasks-mcp".into())]);
@@ -344,7 +344,13 @@ async fn an_unknown_session_falls_back_to_the_process_grant() {
 
     assert_eq!(
         sessions.session_capabilities(Ulid::new()).await,
-        process_grant
+        CapabilitySet::empty(),
+        "an unreadable header must NOT widen to the process-wide grant"
+    );
+    assert_ne!(
+        sessions.session_capabilities(Ulid::new()).await,
+        process_grant,
+        "explicit negative: the fail-closed path must differ from the legacy fall-back"
     );
 }
 
@@ -400,6 +406,35 @@ async fn a_profile_silent_on_delegation_inherits_the_daemon_setting() {
     assert_eq!(
         sessions.turn_settings(id).await.delegation,
         sessions.delegation_mode_for_test()
+    );
+}
+
+/// A read-only profile that omits `delegation` must not inherit an on switch.
+/// An empty grant still inherits. That case is the test above.
+#[tokio::test]
+async fn a_read_only_profile_silent_on_delegation_does_not_delegate() {
+    use liberado_common::{Capability, Zone};
+
+    let dir = tempfile::tempdir().unwrap();
+    let sessions = sessions_at(dir.path(), vec![])
+        .await
+        .with_delegation_mode(true);
+    let id = sessions
+        .create_with_grant(
+            None,
+            SessionGrant {
+                capabilities: CapabilitySet::from_iter([Capability::Read(Zone::vault("tasks"))]),
+                profile: Some("researcher".into()),
+                delegation: None,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+    assert!(
+        !sessions.turn_settings(id).await.delegation,
+        "a read-only researcher chat must not delegate"
     );
 }
 
@@ -695,7 +730,7 @@ async fn tool_only_grants_still_get_a_scoped_runtime() {
     let id = sessions.create(None).await.unwrap();
 
     let caps = CapabilitySet::from_iter([Capability::ExecuteTool("tasks-mcp:add".into())]);
-    let runtime = sessions.scoped_extras_runtime("u", id, caps);
+    let runtime = sessions.scoped_extras_runtime("u", id, caps, None);
     let names: Vec<String> = runtime.catalog().iter().map(|t| t.name.clone()).collect();
     assert_eq!(
         names,

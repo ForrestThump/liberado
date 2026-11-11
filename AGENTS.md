@@ -19,7 +19,7 @@ not required; leftover directories stay gitignored if present.
 
 ```bash
 just build-slim                               # day-to-day build (excludes heavy sidecars)
-just ci                                        # full local CI + CRAP ratchet; run before you push
+just ci                                        # full local CI + CRAP diff gate; run before you push
 # Caps rustc jobs from free RAM (override LIBERADO_CI_JOBS). Workspace Clippy is the memory hog.
 just preflight                                 # fmt / clippy / test / deny, no llvm-cov
 just ready                                     # final gate + exact Linux CRAP + HEAD/tree receipt
@@ -83,19 +83,17 @@ uncommitted work.
 **`cargo test` stops at the first failing test binary.** Use `--no-fail-fast` whenever you need the
 complete failure set — comparing a branch against its base is meaningless with a truncated list.
 
-**Run `just ci` before you push — CRAP is a per-function ratchet.** `code-metrics/crap-baseline.json` is the last
-best score for each function, scored on Ubuntu (the GitHub job's host). GitHub only *reads* it
-(`liberado ci crap` / job `CRAP regression`); it never writes the file. A function at 40 that goes
-to 45 fails, even under the 29.9 new-function ceiling. A current score below 10 is ignored, so a 4→5 move does
-not fail the job. New functions must land below 30. Existing functions may sit above 30; the per-function ratchet holds them. Linux `just ci`
-runs that same per-function compare and may rewrite the file. On other hosts, `just ci` defers
-coverage to the exact Linux check that `just ready` runs natively or through Debian WSL. Host
-coverage numbers are not a reliable proxy. Do not raise the file by hand. Split the function or
-add tests. cargo-crap first matches **file + function name + line**, then uses move-aware
-fallbacks: adding a line above a function does not reset its score, and duplicate same-name
-entries stay distinct. Adding branches inside it does, and GitHub will fail. A green `just ci`
-is a few lines; the full child log
-is always `.liberado/ci.log`.
+**Run `just ci` before you push — CRAP and cyclomatic complexity are a diff gate.** The gate
+scores a function only when its line span intersects a line the pull request changed. Untouched
+functions are not scored. There is no committed per-function baseline and no waiver. A new
+function must land at CRAP ≤ 29.9 and cyclomatic ≤ 20. A function that already exists on the
+merge-base may stay over a limit, and that score must not rise above the score measured on the
+merge-base. A rename or a move keeps that cap. A copy, while the original still exists, is new.
+`just ci` runs the CRAP half on every host. It measures merge-base coverage only when a touched
+legacy function is over 29.9, and it caches that report at `.liberado/crap-base-<sha>.json`.
+`just ready` still runs the exact Linux CRAP diff gate, natively or through Debian WSL. Split
+the function or add tests. Do not edit a baseline by hand. A green `just ci` is a few lines; the
+full child log is always `.liberado/ci.log`.
 
 **Module-health and unwrap baselines write only on Linux `just ci`.** GitHub only reads
 `code-metrics/module-health-baseline.json` and `code-metrics/unwrap-classification-baseline.json`. Windows `just ci`
@@ -163,7 +161,7 @@ production entry point still reads it.
 - `crates/executor/` — the bounded decide/act loop shared by all agents.
 - `skills/` — task playbooks (e.g. `cold-review-pr.md`, `mutants-campaign.md`).
 - `skills/coder/` — compile-time + runtime coder prompts (`include_str!` in `liberado-coder-core`).
-- `code-metrics/` — CRAP / complexity / module-health / unwrap baselines and configs; mutants ledger.
+- `code-metrics/` — CRAP and complexity limit configs, module-health and unwrap baselines, mutants ledger.
   (Root `.cargo-crap.toml` remains for cargo-crap discovery; keep it identical to `code-metrics/cargo-crap.toml`.)
 - `liberado shepherd` — drives agent PRs to ready-or-blocked on the same differential rule.
 - `crates/harness-eval/` and `liberado coder compare prepare|run|save|submit|await` — own durable Liberado/Pi comparisons: pinned

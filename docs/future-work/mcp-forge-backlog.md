@@ -9,7 +9,7 @@ open_items: true
 
 > **Not the work queue** (2026-09-22). Retained design, not selectable work.
 > The only implementation queue is [`backlog.md`](backlog.md).
-> The current item is operator dogfood: use the system and write down what hurts.
+> The work queue is [`backlog.md`](backlog.md). Take the first open row there. This file is not that queue.
 
 # mcp-forge backlog — what gets wired in as an independent project vs. built core
 

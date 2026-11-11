@@ -8,6 +8,8 @@
 //! 3. Every `policy.secret_refs` entry must be set as an environment variable.
 //! 4. Every `topology.hooks[].secret_ref` must be set as an environment variable, same as #3.
 //! 5. Every non-`read_only` MCP must declare the zone its writes land in (F1).
+//! 6. Every `[api]` credential names exactly one of `env` or `file`, client names are unique,
+//!    and `api.allowed_origins` holds no wildcard.
 //!
 //! These checks are the "merged-config" slice of Decision 14's fail-fast contract.
 //! They live here — in the loader crate — alongside the merging machinery, so that
@@ -318,12 +320,29 @@ fn validate_risk_waivers(config: &Config) -> Result<(), ConfigLoadError> {
 /// Returns the first violation found. Each error message names the offending entry so the user
 /// can fix it without a debugger.
 pub fn validate_merged_config(config: &Config) -> Result<(), ConfigLoadError> {
-    validate_grants(config)?;
-    validate_mcp_zones(config)?;
-    validate_report_sink(config)?;
-    validate_policy_secrets(config)?;
-    validate_hook_secrets(config)?;
+    for validate in [
+        validate_grants,
+        validate_mcp_zones,
+        validate_report_sink,
+        validate_policy_secrets,
+        validate_hook_secrets,
+        validate_api,
+    ] {
+        validate(config)?;
+    }
     Ok(())
+}
+
+/// Validate `[api]`: one source per credential, unique client names, no `*` origin.
+///
+/// Boot-time rather than first-request: an `[api]` table that names two sources for the owner
+/// token, or repeats a client name, is a deployment whose author has two beliefs about which
+/// credential is live. The daemon refusing to start is the cheap version of finding out.
+fn validate_api(config: &Config) -> Result<(), ConfigLoadError> {
+    match config.topology.api.problems().first() {
+        Some(problem) => Err(validation_error(problem.clone())),
+        None => Ok(()),
+    }
 }
 /// The bare name a zone capability references, regardless of vault/named kind — both
 /// are matched against `policy.zones` by name (zones are declared by name, not by kind).

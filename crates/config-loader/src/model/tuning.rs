@@ -2,6 +2,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use super::reminders::RemindersConfig;
+
 // ---------------------------------------------------------------------------
 // Tuning — benign behavior knobs. Every field defaults to its specced value.
 // ---------------------------------------------------------------------------
@@ -38,6 +40,8 @@ pub struct Tuning {
     pub mcp_pooling: McpPoolingTuning,
     /// Proposal lifecycle: expiry reaper interval, etc.
     pub proposals: ProposalTuning,
+    /// Durable reminder outbox (`[reminders]` in `tuning.toml`).
+    pub reminders: RemindersConfig,
     /// The `[tuning.coder]` section, kept **opaque** here — the coding pack owns its own config
     /// vocabulary (`liberado_coder_core::CoderTuning::from_value` parses + validates it at
     /// composition time). The config stack stays pack-agnostic: it knows a pack section exists,

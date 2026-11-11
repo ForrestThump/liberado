@@ -453,7 +453,7 @@ mod tests {
             outcome,
             ResolveOutcome::AlreadyDecided {
                 action: "session",
-                label: "Approved for this session".into(),
+                label: "Approved until restart, for all chats".into(),
             }
         );
     }
@@ -586,9 +586,9 @@ mod tests {
             (
                 ResolveOutcome::AlreadyDecided {
                     action: "session",
-                    label: "Approved for this session".into(),
+                    label: "Approved until restart, for all chats".into(),
                 },
-                Some("already decided: Approved for this session"),
+                Some("already decided: Approved until restart, for all chats"),
                 None,
             ),
             (ResolveOutcome::NotFound, Some("Request not found."), None),

@@ -16,7 +16,7 @@ fn run_reconciles_parked_sessions_after_pack_registration() {
         .expect("daemon startup must call parked-session reconciliation");
     for registration in [
         "goals_hub.register_pack(Arc::new(liberado_session::LifeOpsDemoRunner))",
-        "goals_hub.register_pack(Arc::clone(pack)",
+        ".register_pack(Arc::clone(pack)",
         "goals_hub.register_pack(Arc::new(pack))",
     ] {
         let registered = run

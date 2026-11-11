@@ -8,6 +8,9 @@
 //! - **`grants`** — read-only `GET /api/conversations/{id}/grants` view.
 //! - **`surface_mode`** — `SurfaceMode` (`chat` | `agent`) shelf stamp; kept as its own
 //!   module so `wire.rs` stays at its function baseline.
+//! - **`wire_mcp_status`** — `McpPeerStatus`, kept beside `wire` so `wire.rs` stays under
+//!   its physical-line review boundary. Re-exported from `wire`.
+//! - **`wire_outbox_status`** — outbox counters on `DaemonStatus`, same boundary reason.
 //! - **`wire`** — All wire DTOs (`DaemonStatus`, `ReactionEvent`, `SessionEvent`, etc.).
 //!   Pure `serde` — no native deps, compiles to `wasm32-unknown-unknown`. The clients'
 //!   actual shared boundary lives here: [`wire::SessionEvent::from_sse_data`] turns one decoded
@@ -16,6 +19,8 @@
 //!   (The old chat-only `ChatEvent` was folded into it; a prior `ChatClient` trait in `native`
 //!   promised a fuller shared client abstraction but was never implemented by either real client
 //!   and was removed — see `docs/future-work/archive/hygiene-audit-2026-07-05.md`.)
+//! - **`api_auth`** — optional `Authorization: Bearer` value from `LIBERADO_API_TOKEN`
+//!   (gated: `#[cfg(not(target_arch = "wasm32"))]`). Callers must not log the value.
 //! - **`native`** — `SseDecoder`/`SseEvent` (gated: `#[cfg(not(target_arch = "wasm32"))]`).
 //!   Pulls in `async-trait`, `tokio`, `futures`, `ulid` — not available on WASM. The incremental
 //!   SSE framing parser, shared by the TUI and the `liberado chat` CLI client (each used to carry
@@ -28,6 +33,11 @@ pub mod grants;
 pub mod session_kind;
 pub mod surface_mode;
 pub mod wire;
+mod wire_mcp_status;
+mod wire_outbox_status;
+
+#[cfg(not(target_arch = "wasm32"))]
+pub mod api_auth;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub mod native;
@@ -39,3 +49,4 @@ pub use session_kind::{
 };
 pub use surface_mode::SurfaceMode;
 pub use wire::*;
+pub use wire_outbox_status::DaemonOutboxStatus;

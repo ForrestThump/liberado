@@ -175,17 +175,7 @@ impl Config {
             .iter()
             .find(|p| p.enabled && p.name == name);
         match found {
-            Some(p) => Ok(ResolvedProfile {
-                name: Some(p.name.clone()),
-                description: p.description.clone(),
-                domain: p.domain.clone(),
-                capabilities: self.profile_capabilities(p),
-                overrides: p.overrides.clone(),
-                max_idle_secs: p.max_idle_secs,
-                delegation: p.delegation,
-                model: p.model.clone(),
-                prompt_append: p.prompt_append.clone(),
-            }),
+            Some(p) => Ok(super::config_readonly_delegation::declared_profile(self, p)),
             None => super::config_builtin_editor::profile_or_unknown(self, name),
         }
     }
@@ -201,7 +191,7 @@ impl Config {
     /// The narrowing is `CapabilitySet::narrow`, which understands that `ExecuteMcp` subsumes
     /// `ExecuteTool` — so a ceiling granting the whole `turbovault` server permits a profile that
     /// asks for two of its tools, which is the case this feature exists for.
-    fn profile_capabilities(&self, profile: &SessionProfile) -> CapabilitySet {
+    pub(super) fn profile_capabilities(&self, profile: &SessionProfile) -> CapabilitySet {
         if !profile.declares_authority() {
             return self.policy.capabilities_for(profile.component_key());
         }
@@ -369,25 +359,6 @@ impl Config {
             return Err(Error::Config(format!("topology.timezone: {e}")));
         }
         Ok(())
-    }
-
-    fn validate_tuning_bounds(&self) -> Result<()> {
-        if self.tuning.dispatch.max_concurrent_subagents == 0 {
-            return Err(Error::Config(
-                "tuning.dispatch.max_concurrent_subagents must be >= 1".into(),
-            ));
-        }
-        if self.tuning.dispatch.max_concurrent_coding_subagents == 0 {
-            return Err(Error::Config(
-                "tuning.dispatch.max_concurrent_coding_subagents must be >= 1".into(),
-            ));
-        }
-        if self.tuning.concurrency.max_reaction_depth == 0 {
-            return Err(Error::Config(
-                "tuning.concurrency.max_reaction_depth must be >= 1".into(),
-            ));
-        }
-        self.validate_turn_budgets()
     }
 
     /// `[tuning.capture]` parses and validates. `inbox_ignore_globs`, `inbox_path`,

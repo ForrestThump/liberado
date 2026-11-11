@@ -5,9 +5,13 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use async_trait::async_trait;
+use chrono::Utc;
 use chrono::{NaiveDate, NaiveDateTime};
 use liberado_config::{UnmappedPolicy, WeeklySpendingConfig};
-use liberado_notify::{NewSubscription, PushHub};
+use liberado_notify::web_push::keys_from_parts;
+use liberado_outbox::{NewSubscription, Outbox};
+
+use crate::weekly_push::{WeekPush, WeekSender, inert_week_sender};
 
 use super::{
     CategorySpend, HttpBudget, RunMode, SpendingSource, round_dollars, run_weekly, run_weekly_job,
@@ -132,7 +136,7 @@ async fn the_fixture_counts_shipping_and_excludes_rent() {
         7,
         0,
         Arc::new(FixedSource::rows(rows)),
-        Arc::new(PushHub::inert()),
+        inert_week_sender(),
         RunMode::DryRun,
     )
     .await
@@ -193,7 +197,7 @@ async fn count_still_names_the_unmapped_category() {
         7,
         0,
         source,
-        Arc::new(PushHub::inert()),
+        inert_week_sender(),
         RunMode::DryRun,
     )
     .await
@@ -219,7 +223,7 @@ async fn the_default_counts_shipping_into_everything_else_and_logs_dollars() {
             spend("Shipping", -1_200),
             spend("Postage", -400),
         ])),
-        Arc::new(PushHub::inert()),
+        inert_week_sender(),
         RunMode::DryRun,
     )
     .await
@@ -256,7 +260,7 @@ async fn ignore_logs_the_amount_and_leaves_the_bucket_unchanged() {
             spend("Dining Out", -13_500),
             spend("Shipping", -800),
         ])),
-        Arc::new(PushHub::inert()),
+        inert_week_sender(),
         RunMode::DryRun,
     )
     .await
@@ -281,7 +285,7 @@ async fn a_dry_run_fetches_while_the_switch_is_off_and_does_not_send() {
         7,
         0,
         Arc::clone(&source) as Arc<dyn SpendingSource>,
-        Arc::new(PushHub::inert()),
+        inert_week_sender(),
         RunMode::DryRun,
     )
     .await
@@ -300,7 +304,7 @@ async fn a_send_while_the_switch_is_off_does_not_fetch() {
         7,
         0,
         Arc::clone(&source) as Arc<dyn SpendingSource>,
-        Arc::new(PushHub::inert()),
+        inert_week_sender(),
         RunMode::Send,
     )
     .await
@@ -322,7 +326,7 @@ async fn a_send_with_nobody_due_does_not_fetch() {
         7,
         0,
         Arc::clone(&source) as Arc<dyn SpendingSource>,
-        Arc::new(PushHub::inert()),
+        inert_week_sender(),
         RunMode::Send,
     )
     .await
@@ -429,7 +433,7 @@ async fn dry_message(rows: Vec<CategorySpend>) -> String {
         7,
         0,
         Arc::new(FixedSource::rows(rows)),
-        Arc::new(PushHub::inert()),
+        inert_week_sender(),
         RunMode::DryRun,
     )
     .await
@@ -453,8 +457,30 @@ fn phone(endpoint: &str) -> NewSubscription {
     }
 }
 
-fn hub_path(name: &str) -> std::path::PathBuf {
-    std::env::temp_dir().join(format!("liberado-weekly-{name}-{}", std::process::id()))
+struct Opened {
+    _dir: tempfile::TempDir,
+    outbox: Arc<Outbox>,
+    sender: Arc<WeekPush>,
+}
+
+fn opened(with_keys: bool) -> Opened {
+    let dir = tempfile::tempdir().expect("dir");
+    let outbox = Arc::new(Outbox::open(&dir.path().join("liberado.db")).expect("db"));
+    let keys = with_keys
+        .then(|| keys_from_parts(AS_PUBLIC, AS_PRIVATE, "mailto:push@example.com").expect("keys"));
+    let sender = Arc::new(WeekPush::new(Arc::clone(&outbox), keys));
+    Opened {
+        _dir: dir,
+        outbox,
+        sender,
+    }
+}
+
+fn subscribe(opened: &Opened, endpoint: &str) {
+    opened
+        .outbox
+        .upsert_subscription(&phone(endpoint), Utc::now())
+        .expect("subscribe");
 }
 
 /// Clears the budget env for this test and writes the previous values back on drop.
@@ -500,71 +526,63 @@ fn restore_env(name: &str, value: Option<String>) {
 async fn a_job_sends_once_and_the_next_send_does_not_fetch() {
     let server = wiremock::MockServer::start().await;
     wiremock::Mock::given(wiremock::matchers::method("POST"))
+        .and(wiremock::matchers::header("content-encoding", "aes128gcm"))
+        .and(wiremock::matchers::header("ttl", "86400"))
+        .and(wiremock::matchers::header("topic", "spend20261019"))
         .respond_with(wiremock::ResponseTemplate::new(201))
         .expect(1)
         .mount(&server)
         .await;
-    let path = hub_path("send");
-    let hub = Arc::new(
-        PushHub::with_keys(
-            path.clone(),
-            AS_PUBLIC,
-            AS_PRIVATE,
-            "mailto:push@example.com",
-        )
-        .expect("keys"),
-    );
+    let opened = opened(true);
     let endpoint = format!("{}/fake-subscription", server.uri());
-    hub.upsert(phone(&endpoint)).expect("subscribe");
+    subscribe(&opened, &endpoint);
     let source = Arc::new(FixedSource::rows(vec![spend("Groceries", -100)]));
     let now = at(2026, 10, 23, 15, 0);
     let injected = Arc::clone(&source) as Arc<dyn SpendingSource>;
+    let sender = Arc::clone(&opened.sender) as Arc<dyn crate::WeekSender>;
     run_weekly_job(
         enabled_config(),
         now,
         7,
         0,
         Some(Arc::clone(&injected)),
-        Arc::clone(&hub),
+        Arc::clone(&sender),
         RunMode::Send,
     )
     .await;
     assert_eq!(source.calls(), 1);
-    assert!(!hub.needs_week("2026-10-19"));
+    assert!(!sender.needs_week("2026-10-19"));
     run_weekly_job(
         enabled_config(),
         now,
         7,
         0,
         Some(injected),
-        hub,
+        sender,
         RunMode::Send,
     )
     .await;
     assert_eq!(source.calls(), 1);
-    let _ = std::fs::remove_file(path);
 }
 
 #[tokio::test]
 async fn a_job_keeps_the_week_due_when_the_source_errors() {
-    let path = hub_path("source-err");
-    let hub = Arc::new(PushHub::at_path(path.clone()));
-    hub.upsert(phone("https://push.example.test/fake-subscription"))
-        .expect("subscribe");
+    let opened = opened(false);
+    subscribe(&opened, "https://push.example.test/fake-subscription");
     let source = Arc::new(FixedSource::fail("budget down"));
+    let sender = Arc::clone(&opened.sender) as Arc<dyn crate::WeekSender>;
     run_weekly_job(
         enabled_config(),
         at(2026, 10, 23, 15, 0),
         7,
         0,
         Some(Arc::clone(&source) as Arc<dyn SpendingSource>),
-        Arc::clone(&hub),
+        sender,
         RunMode::Send,
     )
     .await;
     assert_eq!(source.calls(), 1);
-    assert!(hub.needs_week("2026-10-19"));
-    let _ = std::fs::remove_file(path);
+    assert!(opened.sender.needs_week("2026-10-19"));
 }
 
 #[tokio::test]
@@ -572,20 +590,47 @@ async fn a_job_stops_when_the_budget_env_is_missing() {
     let _guard = ClearedBudgetEnv::clear();
     let err = budget_config_error(HttpBudget::from_env());
     assert_eq!(err, "budget API is not configured");
-    let path = hub_path("no-env");
-    let hub = Arc::new(PushHub::at_path(path.clone()));
-    hub.upsert(phone("https://push.example.test/fake-subscription"))
-        .expect("subscribe");
+    let opened = opened(false);
+    subscribe(&opened, "https://push.example.test/fake-subscription");
+    let sender = Arc::clone(&opened.sender) as Arc<dyn crate::WeekSender>;
     run_weekly_job(
         enabled_config(),
         at(2026, 10, 23, 15, 0),
         7,
         0,
         None,
-        Arc::clone(&hub),
+        sender,
         RunMode::Send,
     )
     .await;
-    assert!(hub.needs_week("2026-10-19"));
-    let _ = std::fs::remove_file(path);
+    assert!(opened.sender.needs_week("2026-10-19"));
+}
+
+#[tokio::test]
+async fn a_410_removes_the_phone_and_does_not_stamp_the_week() {
+    let server = wiremock::MockServer::start().await;
+    wiremock::Mock::given(wiremock::matchers::method("POST"))
+        .respond_with(wiremock::ResponseTemplate::new(410))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let opened = opened(true);
+    let endpoint = format!("{}/fake-subscription", server.uri());
+    subscribe(&opened, &endpoint);
+    let source = Arc::new(FixedSource::rows(vec![spend("Groceries", -100)]));
+    let sender = Arc::clone(&opened.sender) as Arc<dyn crate::WeekSender>;
+    let outcome = run_weekly(
+        &enabled_config(),
+        at(2026, 10, 23, 15, 0),
+        7,
+        0,
+        Arc::clone(&source) as Arc<dyn SpendingSource>,
+        sender,
+        RunMode::Send,
+    )
+    .await
+    .expect("send");
+    assert_eq!(outcome.removed, 1);
+    assert_eq!(outcome.sent, 0);
+    assert_eq!(opened.outbox.subscription_count().expect("count"), 0);
 }

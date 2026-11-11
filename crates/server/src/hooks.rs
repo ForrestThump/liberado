@@ -376,7 +376,8 @@ mod tests {
             live_mcp: liberado_bootstrap::LiveMcpController::empty(),
             drain: crate::shutdown::DrainGate::default(),
             approval_hub: None,
-            push: crate::state::inert_push(),
+            outbox: None,
+            outbox_delivery: None,
             spending: None,
         });
 
@@ -453,7 +454,8 @@ mod tests {
             live_mcp: liberado_bootstrap::LiveMcpController::empty(),
             drain: crate::shutdown::DrainGate::default(),
             approval_hub: None,
-            push: crate::state::inert_push(),
+            outbox: None,
+            outbox_delivery: None,
             spending: None,
         });
         let app = Router::new()
@@ -514,7 +516,8 @@ mod tests {
             live_mcp: liberado_bootstrap::LiveMcpController::empty(),
             drain: crate::shutdown::DrainGate::default(),
             approval_hub: None,
-            push: crate::state::inert_push(),
+            outbox: None,
+            outbox_delivery: None,
             spending: None,
         });
         let app = Router::new()
@@ -669,7 +672,8 @@ mod tests {
             live_mcp: liberado_bootstrap::LiveMcpController::empty(),
             drain: crate::shutdown::DrainGate::default(),
             approval_hub: None,
-            push: crate::state::inert_push(),
+            outbox: None,
+            outbox_delivery: None,
             spending: None,
         });
         state.drain.begin_drain();

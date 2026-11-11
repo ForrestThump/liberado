@@ -43,16 +43,17 @@ pub use schedule_write::{
 };
 
 pub use liberado_config_loader::{
-    AcpConfig, AgentWorkspaceTuning, BUILTIN_AUTOMATION_EDITOR_PROFILE,
+    AcpConfig, AgentWorkspaceTuning, ApiClientConfig, ApiConfig, BUILTIN_AUTOMATION_EDITOR_PROFILE,
     COMPACTION_TRIGGER_PCT_DEFAULT, COMPACTION_TRIGGER_TOKENS_FALLBACK, CURRENT_SCHEMA_VERSION,
     CaptureTuning, CodingAuthError, CodingWorkspaceAuth, CompactionSettings,
-    CompactionTriggerSource, ConcurrencyTuning, Config, ConfigBuilder, ContextTuning, CronSchedule,
-    DEFAULT_POOL, DispatchTuning, Grant, HookConfig, MainAgentConfig, MaintenanceTuning, McpConfig,
-    McpPoolingTuning, McpTransport, ModelCompactionSettings, Policy, PoolConfig, ProjectConfig,
-    ProviderFallback, ProviderProfile, ResolvedProfile, RoleOverride, ScheduleTiming,
-    SessionProfile, ShepherdAuthConfig, ShepherdConfig, ShepherdProjectConfig,
-    ShepherdReviewConfig, SubagentIsolation, TelegramApprovalsTuning, ToolImpact, Topology, Tuning,
-    UnmappedPolicy, VaultRemindersConfig, WEEKLY_SPENDING_JOB, WeeklySpendingConfig, ZonePolicy,
+    CompactionTriggerSource, ConcurrencyTuning, Config, ConfigBuilder, ContextTuning,
+    CredentialRef, CronSchedule, DEFAULT_BIND, DEFAULT_POOL, DispatchTuning, Grant, HookConfig,
+    MainAgentConfig, MaintenanceTuning, McpConfig, McpPoolingTuning, McpTransport,
+    ModelCompactionSettings, Policy, PoolConfig, ProjectConfig, ProviderFallback, ProviderProfile,
+    RemindersConfig, ResolvedProfile, RoleOverride, ScheduleTiming, SessionProfile,
+    ShepherdAuthConfig, ShepherdConfig, ShepherdProjectConfig, ShepherdReviewConfig,
+    SubagentIsolation, TelegramApprovalsTuning, ToolImpact, Topology, Tuning, UnmappedPolicy,
+    VaultRemindersConfig, WEEKLY_SPENDING_JOB, WebAuthnConfig, WeeklySpendingConfig, ZonePolicy,
     has_enabled_weekly_schedule, managed_binary_path, resolve_declared_zone, weekly_open_clock,
 };
 
@@ -1085,6 +1086,7 @@ transport = { kind = "stdio", command = "tasks-mcp", args = [] }
         // directory nothing had written to since, so the agent's own history search quietly returned
         // a frozen archive and nothing the human had said since. Every reader of the session logs
         // must come through this one function.
+        let _env_guard = crate::survivor_tests::env_lock().lock().unwrap();
         assert_eq!(sessions_dir(), data_dir().join("sessions"));
     }
 

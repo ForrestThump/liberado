@@ -32,7 +32,7 @@ struct GoalSpecLite {
 
 async fn fetch_goals(api_base: String) -> Result<Vec<GoalSessionRow>, String> {
     let url = format!("{api_base}/api/goals");
-    let resp = reqwest::get(&url)
+    let resp = crate::http::get(&url)
         .await
         .map_err(|e| format!("Failed to list goals: {e}"))?;
     if !resp.status().is_success() {
@@ -51,10 +51,7 @@ fn cancel_accepted(status: u16) -> bool {
 
 async fn cancel_goal(api_base: String, id: String) -> Result<(), String> {
     let url = format!("{api_base}/api/goals/{id}/cancel");
-    let client = reqwest::Client::new();
-    let resp = client
-        .post(&url)
-        .send()
+    let resp = crate::http::post_empty(&url)
         .await
         .map_err(|e| format!("cancel request failed: {e}"))?;
     if cancel_accepted(resp.status().as_u16()) {

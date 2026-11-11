@@ -26,10 +26,13 @@ use liberado_messaging::{
 };
 
 mod http_error;
+#[cfg(any(test, feature = "log-capture"))]
+pub mod log_capture;
 mod outbound_cards;
-mod web_push;
+mod telegram_ack;
+pub mod web_push;
 pub use outbound_cards::{OutboundCards, TelegramCardUpdater};
-pub use web_push::{NewSubscription, PushHub, SendReport, vapid_env_lines};
+pub use telegram_ack::telegram_send_accepted;
 
 /// Something that can be told about an event worth a human's attention.
 #[async_trait]
@@ -233,6 +236,39 @@ impl TelegramNotifier {
         }
         let body = response.text().await.unwrap_or_default();
         Ok(outbound_cards::message_id_from_body(&body))
+    }
+
+    /// One callback update, when it is from the configured chat and the payload parses.
+    fn inbound_from_callback(&self, cq: &serde_json::Value) -> Option<InboundEvent> {
+        let message = cq.get("message");
+        if !message
+            .map(|msg| self.message_is_from_allowed_chat(msg))
+            .unwrap_or(false)
+        {
+            tracing::debug!(
+                chat = ?message.and_then(|m| m.get("chat")).and_then(|c| c.get("id")),
+                "Telegram callback from non-configured chat — ignored"
+            );
+            return None;
+        }
+        let event_id = cq["id"].as_str().unwrap_or("").to_string();
+        let data = cq["data"].as_str().unwrap_or("");
+        let message_ref = cq
+            .get("message")
+            .and_then(|m| m.get("message_id"))
+            .and_then(|id| id.as_i64())
+            .map(|id| id.to_string());
+        if let Some((action, correlation_id)) = Self::parse_callback_data(data) {
+            Some(InboundEvent::Action {
+                action: action.to_string(),
+                correlation_id: correlation_id.to_string(),
+                event_id,
+                message_ref,
+            })
+        } else {
+            tracing::warn!(data, "unexpected Telegram callback_data format");
+            None
+        }
     }
 
     fn message_is_from_allowed_chat(&self, msg: &serde_json::Value) -> bool {
@@ -516,24 +552,8 @@ impl MessagingChannel for TelegramNotifier {
             *cursor = (update_id + 1).to_string();
 
             if let Some(cq) = update.get("callback_query") {
-                let event_id = cq["id"].as_str().unwrap_or("").to_string();
-                let data = cq["data"].as_str().unwrap_or("");
-                // The message the button lives on — its id lets us edit it (strip buttons + stamp a
-                // receipt) once the tap is handled.
-                let message_ref = cq
-                    .get("message")
-                    .and_then(|m| m.get("message_id"))
-                    .and_then(|id| id.as_i64())
-                    .map(|id| id.to_string());
-                if let Some((action, correlation_id)) = Self::parse_callback_data(data) {
-                    events.push(InboundEvent::Action {
-                        action: action.to_string(),
-                        correlation_id: correlation_id.to_string(),
-                        event_id,
-                        message_ref,
-                    });
-                } else {
-                    tracing::warn!(data, "unexpected Telegram callback_data format");
+                if let Some(event) = self.inbound_from_callback(cq) {
+                    events.push(event);
                 }
                 continue;
             }

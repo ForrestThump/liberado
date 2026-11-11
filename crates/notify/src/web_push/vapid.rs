@@ -12,7 +12,8 @@ use super::b64;
 
 const TWELVE_HOURS: u64 = 12 * 60 * 60;
 
-pub(crate) struct VapidMaterial {
+#[derive(Clone)]
+pub struct VapidMaterial {
     public_b64: String,
     public: Vec<u8>,
     private: Vec<u8>,
@@ -30,7 +31,7 @@ impl std::fmt::Debug for VapidMaterial {
 }
 
 impl VapidMaterial {
-    pub(crate) fn public_b64(&self) -> &str {
+    pub fn public_key(&self) -> &str {
         &self.public_b64
     }
 
@@ -42,6 +43,15 @@ impl VapidMaterial {
         let jwt = sign_jwt(&self.private, &self.public, &self.subject, origin, now)?;
         Ok(format!("vapid t={jwt}, k={}", self.public_b64))
     }
+}
+
+/// Build keys from caller-supplied material. Tests use this so they do not read the environment.
+pub fn keys_from_parts(
+    public_b64: &str,
+    private_b64: &str,
+    subject: &str,
+) -> Result<VapidMaterial, String> {
+    from_parts(public_b64, private_b64, subject)
 }
 
 pub(crate) fn from_parts(
@@ -61,12 +71,31 @@ pub(crate) fn from_parts(
     })
 }
 
-pub(crate) fn from_env() -> Result<VapidMaterial, String> {
-    from_values(
-        std::env::var("LIBERADO_VAPID_PUBLIC_KEY").ok(),
-        std::env::var("LIBERADO_VAPID_PRIVATE_KEY").ok(),
-        std::env::var("LIBERADO_VAPID_SUBJECT").ok(),
+/// `Ok(None)` when all three variables are unset. A partial set is an error that names them.
+pub(crate) fn load_optional() -> Result<Option<VapidMaterial>, String> {
+    load_from(
+        env_nonempty("LIBERADO_VAPID_PUBLIC_KEY"),
+        env_nonempty("LIBERADO_VAPID_PRIVATE_KEY"),
+        env_nonempty("LIBERADO_VAPID_SUBJECT"),
     )
+}
+
+pub(crate) fn load_from(
+    public: Option<String>,
+    private: Option<String>,
+    subject: Option<String>,
+) -> Result<Option<VapidMaterial>, String> {
+    if public.is_none() && private.is_none() && subject.is_none() {
+        return Ok(None);
+    }
+    from_values(public, private, subject).map(Some)
+}
+
+fn env_nonempty(key: &str) -> Option<String> {
+    std::env::var(key)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
 }
 
 fn from_values(
@@ -263,6 +292,14 @@ mod tests {
         .expect_err("subject");
         assert!(subject.contains("mailto:"), "{subject}");
         assert!(!subject.contains("https://example.com"), "{subject}");
+    }
+
+    #[test]
+    fn unset_keys_are_absent_and_a_partial_set_is_an_error() {
+        let absent = load_from(None, None, None).expect("absent");
+        assert!(absent.is_none());
+        let partial = load_from(Some("AAAA".into()), None, None).expect_err("partial");
+        assert!(partial.contains("LIBERADO_VAPID_PUBLIC_KEY"), "{partial}");
     }
 
     fn field(lines: &str, key: &str) -> String {

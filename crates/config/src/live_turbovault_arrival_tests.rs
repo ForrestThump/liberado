@@ -184,6 +184,7 @@ fn runtime_for_grant(
         rt = rt.with_approval(ApprovalStamp {
             session_id: "live-tv".into(),
             origin: liberado_common::ApprovalOrigin::Web,
+            grant_component: None,
         });
     }
     rt
@@ -287,6 +288,7 @@ async fn a_read_does_not_raise_a_permission_card() {
     .with_approval(ApprovalStamp {
         session_id: "live-tv".into(),
         origin: liberado_common::ApprovalOrigin::Web,
+        grant_component: None,
     });
     for tool in [
         "turbovault:read_note",

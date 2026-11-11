@@ -8,10 +8,15 @@
 //! the shared trait object, so re-modelling the daemon's provider would change the model for
 //! every other holder — the chat face agent included.
 
+#[cfg(feature = "coding")]
 use std::sync::Arc;
 
+#[cfg(feature = "coding")]
 use super::{build_provider_from_profile, parse_reasoning_level};
-use liberado_config::{Config, ProviderProfile};
+use liberado_config::Config;
+#[cfg(feature = "coding")]
+use liberado_config::ProviderProfile;
+#[cfg(feature = "coding")]
 use liberado_provider::Provider;
 
 /// A `CoderProviderFactory` that honours the model each coding role asks for, and which lives in
@@ -24,7 +29,9 @@ use liberado_provider::Provider;
 pub struct ProfileProviderFactory {
     /// Cloned once at construction; needed at every `provider_for` call to resolve the
     /// configured fallback provider by name (fallback wiring is part of the profile).
+    #[cfg(feature = "coding")]
     config: Config,
+    #[cfg(feature = "coding")]
     profile: ProviderProfile,
 }
 
@@ -35,12 +42,15 @@ impl ProfileProviderFactory {
         let profile = super::resolve_provider_profile(config, &config.topology.provider)?.clone();
         std::env::var(&profile.api_key_env).ok()?;
         Some(Self {
+            #[cfg(feature = "coding")]
             config: config.clone(),
+            #[cfg(feature = "coding")]
             profile,
         })
     }
 }
 
+#[cfg(feature = "coding")]
 impl liberado_coder_agent::CoderProviderFactory for ProfileProviderFactory {
     fn provider_for(
         &self,

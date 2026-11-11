@@ -27,8 +27,15 @@ share everything.
                    └────────────────────┘        └────────────────────┘
 ```
 
-The server wraps the daemon + the conversational agent; clients are thin and stateless. Conversation
-state (history) lives **server-side**, persisted by the `ConversationStore` (Decision 17) and keyed
+The server wraps the daemon + the conversational agent; clients are thin and stateless. Every
+matched `/api/*` request is logged at INFO with `method`, `path` (no query string), `status`, and
+`latency_ms`. These routes log at DEBUG instead so polling and long-lived streams do not flood
+INFO: `GET /api/health`, `GET /api/auth/session`, `GET /api/status` (Status view poll, 10s),
+`GET /api/chat/stream`, `GET /api/conversations/{id}/attach`, `GET /api/conversations/{id}/approvals`
+(approval cards poll, 3s), and `GET /api/goals/{id}/stream`. Bodies, headers, cookies, and query
+strings are never logged. Push subscribe/unsubscribe/test
+handlers log outcome with push service host and subscription id/count only (never endpoint paths or
+keys). Conversation state (history) lives **server-side**, persisted by the `ConversationStore` (Decision 17) and keyed
 by session id — the server rehydrates a conversation per turn from the store, so a client only sends
 the next message (plus the session id) and renders the stream back.
 
@@ -37,23 +44,26 @@ the next message (plus the session id) and renders the stream back.
 Domain-neutral goal sessions (`liberado-session`) let TUI/WebUI **start / watch / cancel** goals
 without owning the loop, and — for *interactive* sessions — **answer** a session that has paused for
 human input. Packs registered at boot: **`life`** (always, second-domain demo) and **`coding`**
-(when a provider is configured).
+(when a provider is configured **and** the daemon was built with the `coding` feature).
+A default build omits `coding` from `GET /api/goals/domains`. `POST /api/goals` with
+`domain` `coding`, and rewind of a coding session, return 400 and the body contains
+`` `coding` ``.
 
 | Method | Path | Body / notes |
 |---|---|---|
 | GET | `/api/sessions` | **Every session, newest first — chats *and* goal sessions in one list (S5′).** `goal` is absent on a chat and present on a session that runs to a terminal status; that `Option` is the only difference. Also carries `title`, `status`, `awaiting_input`, `visibility` (`foreground`/`background`), and `parent_session` (a real id, so the session tree is walkable). This is what a switcher should read. |
-| GET | `/api/goals/domains` | The **registered packs** — `{ "domains": ["life","coding","dispatch"] }` when a provider is configured. `dispatch` is the dispatcher + orchestrator pair as a pack, so cron, webhooks and `delegate` are hosted sessions on the same hub as `/spawn` rather than a second engine. |
+| GET | `/api/goals/domains` | The **registered packs** — `{ "domains": ["life","coding","dispatch"] }` when a provider is configured and the daemon was built with `coding`. Without that feature the list has no `coding` entry. `dispatch` is the dispatcher + orchestrator pair as a pack, so cron, webhooks and `delegate` are hosted sessions on the same hub as `/spawn` rather than a second engine. |
 | GET | `/api/schedules` | **Read-only** reflection of `[[schedules]]` from loaded topology: `{ "schedules": [{ "name", "enabled", "cron_expr", "days", "at", "goal", "job", "category", "profile", "next_fire": null, "description", "schedule_text", "timezone" }] }`. A structured row (`days` + `at`) is evaluated in its `timezone`, or in `topology.timezone` when the row omits one. `schedule_text` for that row is civil English such as `Every Tuesday at 8:00 PM America/Chicago`. A `cron_expr` row is UTC unless it sets `timezone`, in which case its fields are civil time in that zone. `next_fire` is the next fire in the zone used for that row, for example `Tue Nov 3, 8:00 PM CST`. It is null when the row does not compile. `description` is plain text for what that row runs, built from its kind, goal, profile, and delivery fields. `category` is `system` for jobs `vault-reminder-tick` and `weekly-spending-push`, and `automation` for every other row. For a UTC `cron_expr`, `schedule_text` converts the clock into `topology.timezone` using the offset at request time. An expression the reader cannot describe exactly is returned unchanged as `schedule_text`. No enable/disable, run-now, or topology write. |
 | GET | `/api/hooks` | **Read-only** list of configured webhook hooks: `{ "hooks": [{ "name", "enabled" }] }`. Never returns `secret_ref` or secret values. Triggers remain `POST /api/hooks/{name}` with `X-Liberado-Hook-Secret`. |
 | GET | `/api/push/status` | `{ "vapid_configured", "reminder_enabled", "subscription_count", "public_key" }`. `public_key` is null when Web Push keys are missing. No private key. |
 | GET | `/api/push/vapid-public-key` | `{ "public_key" }` or 503 `{ "error": "Web Push keys are not configured" }`. |
 | POST | `/api/push/subscriptions` | Body `{ "endpoint", "keys": { "p256dh", "auth" }, "label" }`. Upsert by endpoint. 400 when the endpoint or keys are unusable. |
 | DELETE | `/api/push/subscriptions` | Body `{ "endpoint" }`. Removes that phone. |
-| POST | `/api/push/test` | Optional `{ "endpoint" }`. 503 when keys are missing, 409 when no phone is subscribed, 404 when the named endpoint is absent. Does not change `last_sent_week`. |
+| POST | `/api/push/test` | Optional `{ "endpoint" }` or `{ "id" }`. Enqueues one test row for that phone. 503 when keys are missing, 409 when no phone is subscribed, 404 when the named phone is absent. Does not change `last_sent_week`. |
 | POST | `/api/push/weekly` | Body `{ "dry_run": false, "force": false }`. Returns `{ "message", "week_id", "start", "end", "unmapped", "sent", "failed", "skipped", "removed" }`. Each `unmapped` entry is a category and signed cents, for example `Shipping $5.55`. The message names each bucket as spent of budget, then `$X left` or `over by $X`. `dry_run` wins over `force` and works while the reminder is off. A real send while the reminder is off is 409. A missing budget URL or key is 503 `budget API is not configured`. |
 | POST | `/api/sessions/{id}/fork` | **Branch a conversation, keeping the original.** Body: `{"after_turn": <n>?, "title": <string>?}`. `after_turn` is 1-based and names the branch point by the *human's* turn — keep through turn `n` and the reply it got, dropping everything after, i.e. "go back to just after turn n and take a different path". Omit it to fork the whole conversation as it stands. The server resolves turn → node; the store speaks node ids. Returns `{id, forked_from, kept_turns, total_turns}`. **Copy, not reference**: the prefix is copied into the fork's own log, so continuing the original afterwards does not move the fork, and every session's log stays self-contained. 400 if the session has no message transcript (a goal session records *events*, not turns), 404 if unknown. |
 | GET | `/api/goals` | The **kernel lens**: only goal-bearing sessions (newest first). A goal-less session has no `GoalSessionRecord` representation, so it cannot appear here. Prefer `/api/sessions` for a list; this is for callers that specifically want run-to-terminal sessions. |
-| POST | `/api/goals` | JSON `GoalSpec`: `description`, `domain` (`life`\|`coding`\|`dispatch`), `success_criteria`, optional `profile`, optional `max_idle_secs`, optional `payload` |
+| POST | `/api/goals` | JSON `GoalSpec`: `description`, `domain` (`life`\|`coding`\|`dispatch`), `success_criteria`, optional `profile`, optional `max_idle_secs`, optional `payload`. Domain `coding` is accepted only when the daemon was built with the `coding` feature. Otherwise the response is 400 and the body contains `` `coding` ``. |
 | GET | `/api/goals/{id}` | Snapshot: record (incl. `awaiting_input`) + event history |
 | GET | `/api/goals/{id}/stream` | SSE: catch-up then live `session_started`, `tool_*`, `awaiting_input`, `session_finished`, … |
 | POST | `/api/goals/{id}/cancel` | Cooperative cancel |
@@ -215,7 +225,7 @@ Their profile is cleared, so the next turn uses the process default grant. Unkno
 | GET | `/api/models` | Live catalog from the provider's OpenAI-compatible `GET /models`, plus `current`. Soft-fails: always **200** with optional `error` so clients can still show `current`. Shape: `{"models":["…"],"current"?:"…","error"?:"…"}`. |
 | POST | `/api/models/select` | Body `{"model":"…"}` hot-swaps the daemon-wide model. Body `{"model":"…","conversation":"<ulid>"}` records an in-memory pick for that chat's next turn. The durable per-chat pick is `pending_model` on `PATCH /api/conversations/{id}`. The turn uses the in-memory pick when one is set, otherwise the stored `pending_model`, and stamps that exact string. Empty model → `400`; no provider on the daemon-wide form → `503`. |
 
-`GET /api/status` reports `model_name` from the live provider (so it tracks hot-swap, not only boot-time config). In-flight turns keep whatever model they already started with.
+`GET /api/status` reports `model_name` from the live provider (so it tracks hot-swap, not only boot-time config). In-flight turns keep whatever model they already started with. The same payload includes `mcp`: a list of `{name, state, attempts, tools}` plus optional `last_error` and `next_retry_ms`. `state` is `connected` or `degraded`. The list is empty until the chat supervisor has started. `GET /api/health` stays `{"ok": true}` with HTTP 200 while a peer is down; the Docker healthcheck only requires that 200.
 
 TUI: `/model` opens a full-screen searchable browser over `GET /api/models`; Enter calls
 `POST /api/models/select`.
@@ -282,6 +292,12 @@ their results to corrupt the next turn. The conversation lock is released immedi
 message starts fresh. This is one primitive that works identically for every client, which is why
 it's a connection lifecycle event and not a bespoke endpoint.
 
+**Cancel cascades to delegated work.** A turn blocked in `delegate` is waiting on a hub session.
+Aborting the turn alone left that child running with its own grant and nobody watching it, so a
+cancel now also cancels every non-terminal hub session whose `origin.conversation_id` is this
+conversation. The child ends `cancelled`, the same cooperative stop as
+`POST /api/goals/{id}/cancel`. Workers started by other conversations are not touched.
+
 Properties that make this client-agnostic:
 - **Standard SSE** — consumable by browser `fetch`-streaming (WASM can't use reqwest streaming) and
   by native `reqwest` byte-streaming in the TUI. Same bytes, two parsers.
@@ -337,12 +353,17 @@ Both native clients are landed and share code (`chat-client-contract`'s `ChatEve
   (`crates/cli`, `chat_client.rs`) that streams the *same* `POST /api/chat/stream` and prints the
   conversation. It embeds no agent logic — it learns the session id from the `session` event and
   reuses it. Run it against a running server (`LIBERADO_SERVER` overrides the default
-  `http://127.0.0.1:4201`).
+  `http://127.0.0.1:4201`). When `[api]` credentials are configured, set
+  `LIBERADO_API_TOKEN` to a `[[api.clients]]` token.
 - **`crates/tui`** (ratatui) — a native client hitting the *same* endpoints with `reqwest`: a chat
   pane consuming `/api/chat/stream`, a status line from `/api/status`, slash commands via
   `liberado-commands`, full-screen `/session` browser and `/model` model picker (`GET`/`POST`
   models APIs). Confirms the API is genuinely client-agnostic — model hot-swap and session
   browsing are ordinary HTTP, not client-specific RPC.
+
+acp-bridge face mode and `liberado shepherd` are native daemon clients of the same API. When
+`[api]` credentials are configured, set `LIBERADO_API_TOKEN` to a `[[api.clients]]` token for
+each of them. Shepherd sends that bearer only on its goal calls. GitHub access stays on `gh`.
 
 ### Persistence paths (ops, not vault)
 
@@ -361,58 +382,80 @@ Both native clients are landed and share code (`chat-client-contract`'s `ChatEve
 3. **Server owns state, clients stay thin.** Conversation/session/history live server-side; a client
    is a renderer + an input box.
 
-## Trust boundary: the API is unauthenticated and agent-reachable
+## Trust boundary: credentials, sessions, and passkeys
 
-**Known gap, recorded 2026-07-28. Not yet fixed.**
+The HTTP API is **not** open on the tailnet by default: it binds loopback unless you configure
+`[api]` and widen `bind`. Every route under `/api` (except the small unauthenticated band documented
+above) requires either:
 
-The daemon's HTTP API has no authentication. That is defensible on its own — it binds a LAN address
-and every client is the operator's. What makes it a real exposure is the second half:
+- **`Authorization: Bearer`** with the owner human token or a `[[api.clients]]` token, or
+- A **browser session** minted by `POST /api/auth/login` (emergency token) or passkey sign-in,
+  carried as `HttpOnly` cookies plus `X-Liberado-CSRF` on mutating requests.
 
-**A granted web-fetching MCP can call it.** `spider-mcp` performs no loopback or private-IP check on
-its target URLs (no `is_loopback`, no private-range filter anywhere in `crates/…/scraper`), so a
-model that can reach it can also reach `http://127.0.0.1:4201/api/…`. The agent's *information*
-channel therefore terminates inside the daemon's own control surface — a channel crossing
-[`channels-and-interactivity.md`](../../spec/architecture/channels-and-interactivity.md) otherwise keeps
-separate.
+Owner-only routes (approvals resolve, profile changes, push admin, …) require the **human**
+principal — client tokens authenticate but cannot decide.
 
-What is reachable today, given spider-mcp fetches with `GET`:
+When `[api.webauthn]` is configured, the WebUI can register and sign in with passkeys on the listed
+https origins (or `http://localhost` for dev). Sessions are stored hashed in `liberado.db` with a
+30-day absolute lifetime and 14-day idle timeout. The human token remains available for scripts
+(`Authorization: Bearer`) and emergency browser sign-in.
 
-| Endpoint | Consequence |
-|---|---|
-| `GET /api/conversations` | Every conversation id and title |
-| `GET /api/conversations/{id}` | A full transcript, system prompt included |
-| `GET /api/conversations/search?q=` | Grep across every stored chat |
-| `GET /api/status`, `/api/catalog` | Model, MCP fleet, capability grants |
+Cross-origin browser access still requires explicit `allowed_origins`; there is no wildcard CORS.
+Agent tools that can `GET` URLs may still reach loopback if granted a web-fetch MCP — treat MCP
+grants as part of the trust boundary.
 
-So the live exposure through spider-mcp is **disclosure, not escalation**: no `GET` mutates
-anything. `PATCH /api/profiles/{name}`, `DELETE /api/profiles/{name}`, and `PUT /api/plugins/{id}`
-are not `GET` and are not agent tools. An incognito chat
-is not listed and has no file, so it cannot be found by listing or search — but it *is* readable at
-`GET /api/conversations/{id}` by anyone holding the id.
+Mutating routes use `POST`/`PATCH`/`DELETE` so a `GET`-only fetcher cannot decide approvals or
+change profiles. A web-fetching MCP granted to an agent can still read anything exposed via `GET`
+on loopback if it can reach the bind address — scope MCP grants accordingly.
 
-### What this means for anything claiming to be human-only
+## Reminders and Web Push (owner + device)
 
-Do not rest such a claim on "no tool in the catalog does this". That is true and useful — it is why
-the agent cannot re-authorize its own session — but it is a statement about the tool catalog, not
-about reachability. Two rules follow:
+| Endpoint | Auth | Role |
+|---|---|---|
+| `GET /api/push/status` | owner | VAPID configured, `reminder_enabled` (`[weekly_spending].enabled`), subscription count, public key |
+| `GET /api/push/vapid-public-key` | owner | Application server key for `pushManager.subscribe` |
+| `GET/POST/DELETE /api/push/subscriptions` | owner | List, upsert, remove device subscriptions |
+| `POST /api/push/test` | owner | Enqueue a test Web Push row for one subscription (`endpoint` or `id` in the JSON body; must match a registered device). Does not change `last_sent_week`. |
+| `POST /api/push/weekly` | owner | Body `{ "dry_run": false, "force": false }`. Returns `{ "message", "week_id", "start", "end", "unmapped", "sent", "failed", "skipped", "removed" }`. `dry_run` wins over `force` and works while the reminder is off. A real send while the reminder is off is 409. A missing budget URL or key is 503 `budget API is not configured`. A successful send stores that Monday on the subscription. A failed send does not. |
+| `POST /api/client-errors` | owner | Truncated WebUI panic/client error text at WARN (no secrets) |
+| `GET /api/outbox` | owner | Visible pending/failed reminder rows |
+| `GET /api/outbox/{id}` | owner | One outbox row for the notification detail page (`title`, `body`, `kind`, `due_at`, `late`, `source`, delivery/ack state, `resolution`, `resolved_at`, optional `snooze_until_local`, optional `obsidian_url`) |
+| `POST /api/outbox/{id}/retry` | owner | Retry a failed row |
+| `POST /api/outbox/{id}/complete` | owner | Mark a vault task done (`task_due` + `vault_note` source) or dismiss other kinds; sets `resolution` (`completed` or `dismissed`) when not already resolved (409 if resolved) |
+| `POST /api/outbox/{id}/snooze` | owner | `{minutes}` — atomically resolve the row as `snoozed`, enqueue one follow-up due at now+minutes (not delivered until that due time), idempotency key `snooze/{id}` |
+| `POST /api/outbox/ack` | none | `{id, token}` from the push payload; sets `acked_at` only |
+| `POST /api/outbox/action` | none | `{id, token, action, minutes?}` — `action` is `done` or `snooze`. The per-row push token must match that row. `done` completes the source vault task. `snooze` uses `minutes`, or 15 when `minutes` is omitted. Same row transitions as the owner complete and snooze routes. Wrong or unknown token: 403, no change. Already resolved: 409. Unknown action, bad minutes, or a row that is not a completable vault task: 400, no change. Success JSON is `{notice}` |
 
-1. **Mutating authority endpoints must not be `GET`.** A `POST`/`PATCH`/`DELETE` is out of reach of a
-   fetcher that only issues `GET`s, which is an incidental defence but a real one. The session-profile
-   switch is a `POST` for exactly this reason. `POST /api/approvals/{id}/resolve` is too: it records
-   a vault-zone permission decision (Deny / Once / Session / Everywhere) and it is not registered as
-   an agent tool or on the operator dogfood MCP. `GET /api/conversations/{id}/approvals` only lists
-   the cards, the same disclosure class as reading a transcript. Opening a conversation
-   (`GET /api/conversations/{id}`) includes the same list on `approvals`.
-   `GET /api/approvals/pending` lists open permission requests (`id`, `conversation`, `tool`,
-   `zone`, `created_at`) and does not decide one. `GET /api/conversations/{id}/grant` returns the
-   grant stored on the current session header. The operator dogfood MCP reads both. It still has
-   no approve tool and no resolve tool. See
-   [`operator-dogfood-mcp.md`](operator-dogfood-mcp.md).
-2. **A real fix has to distinguish surface traffic from agent traffic** — a shared secret the MCPs are
-   not given, a separate bind address for mutating routes, or an egress filter that refuses
-   loopback/private targets in the fetching MCPs themselves. The last is the most general: it fixes
-   every future endpoint at once, and it belongs in the MCPs, which are the things making the
-   requests.
+`POST /api/outbox/ack` and `POST /api/outbox/action` take no owner credential. The service worker
+has no owner cookie and no CSRF token, and it must keep working after sign-out. The push token
+is the capability. It is compared in constant time to that row's stored hash and authorizes only
+that row: ack sets `acked_at`, and action runs the owner complete or snooze logic for a `task_due`
+row whose source is a vault note. A token does not grant any other route. Both posts use the same
+default JSON body limit as the rest of the API. Ack has no rate limiter, and action does not add
+one. Subscription management and the owner detail, complete, and snooze routes stay owner-only.
 
-Until then, treat any capability reachable over `GET` as readable by any session granted a
-web-fetching MCP.
+Web Push JSON is version `v: 2`. The service worker reads `title`, `body`, `tag`, `rows`, and
+`url` (single rows → `/notifications/<id>`, digest → `/notifications`). A body tap
+(`notificationclick` with an empty `action`) acks every `{id, token}` in `rows` via
+`POST /api/outbox/ack`, then focuses an open window or opens `url`.
+
+`actions` and `snooze_minutes` are present only for one completable vault task (`kind` is
+`task_due`, `source.type` is `vault_note`, and `rows` has one entry). The buttons are Done and
+Snooze 15m. The 15 minutes are `DEFAULT_SNOOZE_MINUTES` in `crates/notify/src/web_push/send.rs`.
+The detail page's short snooze uses that same length. Digests, tests, other kinds, and approvals
+omit `actions`. Older workers ignore the extra fields. A platform that shows no action buttons
+still opens the detail page on a body tap. The worker does not read `Notification.maxActions`,
+so the notification is still shown.
+
+Done posts `{action:"done"}` and does not open a window. On success the worker shows a
+confirmation with the same tag and no actions (`notice`, for example `Done: <title>`). Snooze
+posts `{action:"snooze", minutes: snooze_minutes}`. The confirmation is `Snoozed until HH:MM`
+in the operator zone. Any failure (network, or a status that is not 2xx) acks the rows and opens
+`url`, so the owner can finish on the detail page. A row completed or snoozed from the tray is
+the same resolved row `GET /api/outbox/{id}` returns.
+
+Additional fields include `kind`, `outbox_id`, `due_at` (RFC 3339 UTC), `late`, `source`, and
+digest `items`. Outbox rows store nullable `kind`, `source_json`, `resolution`, and `resolved_at` (schema v3 in `liberado.db`).
+
+`topology.obsidian_vault_name` (optional) overrides the vault name embedded in server-built
+`obsidian://open` links; when unset, the basename of `topology.vault_path` is used.

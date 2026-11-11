@@ -11,15 +11,16 @@ last_verified: 2026-10-12
 # Operator dogfood MCP
 
 `liberado-operator-dogfood-mcp` is a stdio MCP for an external operator agent.
-It calls the daemon HTTP API the WebUI already uses. It does not add an
-authentication scheme. The network boundary (Tailscale) is the trust boundary,
-the same boundary as the WebUI.
+It calls the daemon HTTP API the WebUI already uses. When `[api]` credentials are
+configured, set `LIBERADO_API_TOKEN` to a `[[api.clients]]` token so requests
+send `Authorization: Bearer …`. Loopback daemons with no `[api]` table still
+accept unauthenticated callers.
 
 Build it with `cargo build --release --bin liberado-operator-dogfood-mcp`.
 Point the operator agent's stdio MCP config at that binary. Set `LIBERADO_SERVER`
 to the origin the WebUI already uses. When unset, the base is loopback port
-4201. The client sends no `Authorization` header and rejects a base URL that
-carries userinfo, a path, a query, or a fragment. Redirects are not followed.
+4201. The client rejects a base URL that carries userinfo, a path, a query, or
+a fragment. Redirects are not followed.
 
 The example block in `config.example/topology.toml` stays commented. Do not
 grant this MCP to `main-agent`. `send_human_message` posts a human turn, and
@@ -95,7 +96,7 @@ This tool does not change the grant.
 ## No approve tool
 
 There is no approve tool and no resolve tool. `POST /api/approvals/{id}/resolve`
-records a human decision (Deny / Once / Session / Everywhere). That route is
+records a human decision (Deny / Once / "Until restart, all chats" / Everywhere). That route is
 not a `GET`, and it is not registered on this MCP. A test scans the tool
 declarations and fails if an approve or resolve tool appears. A second test
 fails if `list_pending_approvals` or `get_agent_grants` stop using `GET`.

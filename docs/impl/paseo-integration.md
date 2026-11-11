@@ -15,7 +15,7 @@
 | **coding** (default) | Interactive conversation + coding tools on a durable worktree | No |
 | **goal** | One-shot coding pack ([`LiberadoLoopBackend`](../../crates/coder-agent/)) to a terminal | No |
 | **chat** | In-process `Conversation` + executor (no file tools) | No |
-| **face** | HTTP SSE to `liberado serve` (`POST /api/chat/stream`) — vault tools + `delegate` | Yes (`liberado serve`) |
+| **face** | HTTP SSE to `liberado serve` (`POST /api/chat/stream`) — vault tools + `delegate` | Yes (`liberado serve`, plus `LIBERADO_API_TOKEN` when `[api]` is set) |
 
 - Switch modes mid-session with ACP `session/set_mode` (Paseo mode picker when present),
   or set the process default:
@@ -95,7 +95,12 @@
    for new sessions (ACP `session/set_mode` can still switch later).
 
 7. Face mode only: `liberado serve <vault>` running, and optional `LIBERADO_SERVER`
-   (default `http://127.0.0.1:4201`).
+   (default `http://127.0.0.1:4201`). When the daemon has `[api]` credentials
+   configured, set `LIBERADO_API_TOKEN` to a `[[api.clients]]` token in the same
+   environment that starts `liberado-acp`. That is the Paseo provider `env` block,
+   or the ACP agent env in Zed and any other editor that spawns this binary. The
+   bridge sends `Authorization: Bearer` on face-mode daemon calls. Leave the
+   variable unset when the daemon has no `[api]` table.
 
 ## Install `liberado-acp` on PATH
 
@@ -214,4 +219,5 @@ you want green rows for launcher binary, ACP `initialize`, and ACP `session/new`
 | Prompt errors about API key | Export `DEEPSEEK_API_KEY` (or peer) in the env that starts Paseo / the agent |
 | Tools write to wrong tree | Session `cwd` comes from Paseo’s workspace; open the project you intend |
 | Face mode: cannot reach daemon | Start `liberado serve <vault>`; check `LIBERADO_SERVER` |
+| Face mode: daemon returned 401 | Set `LIBERADO_API_TOKEN` to a `[[api.clients]]` token when `[api]` credentials are configured |
 | Want pure chat without pack | Paseo mode picker → **chat**, or `LIBERADO_ACP_MODE=chat` / `--mode chat` |

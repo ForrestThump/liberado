@@ -37,16 +37,17 @@ pub use chain::ChainLoader;
 pub use file_source::FileSource;
 pub use liberado_common::DEFAULT_POOL;
 pub use model::{
-    AcpConfig, AgentWorkspaceTuning, BUILTIN_AUTOMATION_EDITOR_PROFILE,
+    AcpConfig, AgentWorkspaceTuning, ApiClientConfig, ApiConfig, BUILTIN_AUTOMATION_EDITOR_PROFILE,
     COMPACTION_TRIGGER_PCT_DEFAULT, COMPACTION_TRIGGER_TOKENS_FALLBACK, CURRENT_SCHEMA_VERSION,
     CaptureTuning, ChatTuning, CodingAuthError, CodingWorkspaceAuth, CompactionSettings,
     CompactionTriggerSource, ConcurrencyTuning, Config, ConfigBuilder, ContextTuning,
-    CronDeliveryTuning, CronSchedule, DispatchTuning, EnterKey, Grant, HookConfig, MainAgentConfig,
-    MaintenanceTuning, McpConfig, McpPoolingTuning, McpTransport, ModelCompactionSettings, Policy,
-    PoolConfig, ProjectConfig, ProviderFallback, ProviderProfile, ResolvedProfile, RoleOverride,
-    ScheduleTiming, SessionProfile, ShepherdAuthConfig, ShepherdConfig, ShepherdProjectConfig,
-    ShepherdReviewConfig, SubagentIsolation, TelegramApprovalsTuning, ToolImpact, Topology, Tuning,
-    UnmappedPolicy, VaultRemindersConfig, WEEKLY_SPENDING_JOB, WebUiConfig, WeeklySpendingConfig,
+    CredentialRef, CronDeliveryTuning, CronSchedule, DEFAULT_BIND, DispatchTuning, EnterKey, Grant,
+    HookConfig, MainAgentConfig, MaintenanceTuning, McpConfig, McpPoolingTuning, McpTransport,
+    ModelCompactionSettings, Policy, PoolConfig, ProjectConfig, ProviderFallback, ProviderProfile,
+    RemindersConfig, ResolvedProfile, RoleOverride, ScheduleTiming, SessionProfile,
+    ShepherdAuthConfig, ShepherdConfig, ShepherdProjectConfig, ShepherdReviewConfig,
+    SubagentIsolation, TelegramApprovalsTuning, ToolImpact, Topology, Tuning, UnmappedPolicy,
+    VaultRemindersConfig, WEEKLY_SPENDING_JOB, WebAuthnConfig, WebUiConfig, WeeklySpendingConfig,
     ZonePolicy, has_enabled_weekly_schedule, managed_binary_path, resolve_declared_zone,
     weekly_open_clock,
 };

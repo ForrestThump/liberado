@@ -8,6 +8,19 @@
 use super::super::*;
 use super::test_fixtures::*;
 
+fn test_live_catalog() -> Arc<CapabilityCatalog> {
+    let catalog = Arc::new(CapabilityCatalog::new());
+    for name in ["email-mcp", "tasks-mcp"] {
+        catalog.register(McpDescriptor {
+            name: name.into(),
+            description: format!("test {name}"),
+            consequence: Consequence::ReadOnly,
+            ..McpDescriptor::default()
+        });
+    }
+    catalog
+}
+
 /// Process grant is `tasks-mcp` only. The named session grant is `email-mcp` only.
 /// The sets are disjoint, so a gate that still reads the process grant cannot both
 /// show `email-mcp:send` and allow the call.
@@ -35,7 +48,7 @@ async fn disjoint_grant_sessions(
         ProposalSigner::random(),
     );
     if live_catalog {
-        sessions = sessions.with_live_catalog(Arc::new(CapabilityCatalog::new()));
+        sessions = sessions.with_live_catalog(test_live_catalog());
     }
     let id = sessions
         .create_with_grant(
@@ -117,7 +130,7 @@ async fn scoped_extras_gates_on_the_session_grant_not_the_process_grant() -> Res
     let dir = tempfile::tempdir().map_err(|err| err.to_string())?;
     let (sessions, id) = disjoint_grant_sessions(dir.path(), false).await?;
     let grant = sessions.turn_settings(id).await.capabilities;
-    let runtime = sessions.scoped_extras_runtime("list mail", id, grant);
+    let runtime = sessions.scoped_extras_runtime("list mail", id, grant, None);
     assert_session_tool_allowed_and_process_tool_refused(runtime.as_ref()).await
 }
 
@@ -129,6 +142,6 @@ async fn build_turn_runtime_gates_on_the_session_grant_not_the_process_grant() -
     // change the capability check; it only proves that branch still uses the session grant.
     let (sessions, id) = disjoint_grant_sessions(dir.path(), true).await?;
     let grant = sessions.turn_settings(id).await.capabilities;
-    let runtime = sessions.build_turn_runtime("list mail", id, &[], &grant);
+    let runtime = sessions.build_turn_runtime("list mail", id, &[], &grant, None);
     assert_session_tool_allowed_and_process_tool_refused(runtime.as_ref()).await
 }

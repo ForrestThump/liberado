@@ -8,9 +8,17 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 
+[features]
+default = []
+coding = [
+    "dep:liberado-coder-agent",
+    "dep:liberado-coder-core",
+    "liberado-dispatch-pack/coding",
+]
+
 [dependencies]
-liberado-coder-agent = { workspace = true }
-liberado-coder-core = { workspace = true }
+liberado-coder-agent = { workspace = true, optional = true }
+liberado-coder-core = { workspace = true, optional = true }
 liberado-common = { workspace = true }
 liberado-config = { workspace = true }
 liberado-cron = { workspace = true }
@@ -18,11 +26,13 @@ liberado-daemon = { workspace = true }
 liberado-dispatcher = { workspace = true }
 liberado-dispatch-pack = { workspace = true }
 liberado-notify = { workspace = true }
+liberado-outbox = { workspace = true }
 liberado-orchestrator = { workspace = true }
 liberado-executor = { workspace = true }
 liberado-mcp = { workspace = true }
 liberado-provider = { workspace = true }
 liberado-provider-openai-compat = { workspace = true }
+chrono = { workspace = true }
 tracing = { workspace = true }
 
 [dev-dependencies]

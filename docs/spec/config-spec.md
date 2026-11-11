@@ -55,8 +55,8 @@ Split by **concern**, not per-module (avoids file proliferation):
 - **Format**: TOML (Rust-idiomatic, unambiguous typing — avoids YAML's coercion surprises). Not in
   the vault, so consistency with Obsidian's YAML frontmatter is not a concern.
 - **Table scope is positional.** A header such as `[main_agent]` owns every key after it until the
-  next table header. Keep top-level keys such as `vault_path`, `daemon_socket`, and `provider`
-  before the first table. This is wrong:
+  next table header. Keep top-level keys such as `vault_path`, `obsidian_vault_name`,
+  `daemon_socket`, and `provider` before the first table. This is wrong:
 
   ```toml
   [main_agent]
@@ -119,7 +119,9 @@ Two files live outside the three section files and are written by the running sy
 
 - **Grants overlay** (`<data_dir>/grants.overlay.toml`). When a human taps
   "Approve everywhere", the daemon appends the grant here - never into the
-  hand-edited `policy.toml`. At boot the overlay is parsed and its
+  hand-edited `policy.toml`. It lands on the component the requesting agent
+  runs as, which a chat stamps onto its request; a request that names none
+  falls back to its pool's component. At boot the overlay is parsed and its
   grants/zones APPENDED to the base policy (base entries keep priority, so
   the overlay can only add authority for a zone the base never declared),
   and the merged candidate is validated like any policy. It is deliberately
@@ -183,6 +185,17 @@ the default backend.
 
 A profile that names a provider, including the daemon default, gets its own client when that key
 is set. Only an omitted `provider` shares the face client.
+
+### Delegation
+
+`delegation` on `[[session_profiles]]` is optional.
+
+- `delegation = true` or `delegation = false` is used as written.
+- Omit the key and the profile inherits `topology.main_agent.delegation_mode`, except when the resolved grant is read-only.
+- A read-only grant is non-empty and every capability is `Read` or `ReadSummary`. That profile resolves to `delegation = false`. `AskHuman` is not a read, so a coding chat that can ask a person still inherits.
+- An empty grant is not read-only. It still inherits the daemon setting.
+
+`delegate`, and a pre-turn dispatch hosted from that chat, gives the child the caller's grant narrowed to the `dispatcher` ceiling. `AskHuman` is then removed. The child is never wider than the caller.
 
 ## 4.5 Schedule file writer
 
@@ -330,6 +343,12 @@ is set, in which case they are civil time in that zone. Set `deliver = false` on
 Telegram-bound chat, and it does not start a session. If the reminder variables are unset, the
 job still runs and the text is logged.
 
+### Obsidian deep links — `obsidian_vault_name`
+
+Optional top-level string in `topology.toml`. The notification detail API and WebUI embed it in
+`obsidian://open?vault=…` links for vault-sourced reminders. When omitted, the basename of
+`vault_path` is used.
+
 ### Timed tick — `[vault_reminders]`
 
 ```toml
@@ -364,6 +383,37 @@ as tuesday-trash can retire once that task carries `#remind`.
 
 Creating or editing a task or event is a vault markdown edit. TurboVault already writes
 those notes. This path has no separate notification record.
+
+### Durable delivery — `[reminders]`
+
+Mechanical reminders enqueue into `<data_dir>/liberado.db` (same file as the outbox). Missing
+`[reminders]` uses defaults: Web Push when VAPID keys and at least one subscription exist;
+otherwise Telegram fallback (`channels.telegram.mode = "fallback"`). See `docs/spec/reference/tuning.md`.
+
+```toml
+[reminders]
+once_within = "6h"          # cron catch-up window for mechanical jobs
+max_attempts = 8
+max_catchup_per_boot = 20
+
+[reminders.channels.telegram]
+mode = "fallback"           # fallback | always | off
+
+[reminders.channels.matrix]
+enabled = false
+```
+
+Vault `#remind` idempotency keys are `remind/{task|event}/{path}/{anchor}/{local-minute}/{id}`
+with fan-out suffix `/{channel}/{target}`. Schedule cursors live in `schedule_cursor` and advance
+only after enqueue commits. First boot anchors at `now` without backfill.
+
+**Operator setup:** generate keys with `liberado config vapid-keys`, install them only in the
+homelab environment (never GitHub), expose the WebUI with Tailscale serve (e.g.
+`tailscale serve --bg --https=8444 http://127.0.0.1:4201` — needs operator approval), install the
+PWA (Android Chrome install; iPhone Share → Add to Home Screen, iOS 16.4+, open from the icon),
+owner sign-in → Notifications (check permission, service worker, and local subscription status on
+the page) → enable push, send test. Persist `<data_dir>` across container
+recreates so `liberado.db` survives.
 
 See ADR-0020.
 

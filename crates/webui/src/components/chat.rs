@@ -128,7 +128,7 @@ struct LoadedConversation {
 
 async fn fetch_conversation(api_base: &str, conv_id: &str) -> Result<LoadedConversation, String> {
     let url = format!("{api_base}/api/conversations/{conv_id}");
-    let resp = reqwest::get(&url)
+    let resp = crate::http::get(&url)
         .await
         .map_err(|e| format!("Failed to reach daemon: {e}"))?;
     let history: chat_client_contract::ConversationHistoryResponse = resp
@@ -261,9 +261,7 @@ pub fn Chat(
     let enter_cfg = use_resource(move || {
         let base = base_for_enter.clone();
         async move {
-            reqwest::Client::new()
-                .get(format!("{base}/api/status"))
-                .send()
+            crate::http::get(&format!("{base}/api/status"))
                 .await
                 .ok()?
                 .json::<chat_client_contract::DaemonStatus>()
@@ -446,7 +444,7 @@ pub fn Chat(
                 let stop_base = api_base.clone();
                 let url = format!("{stop_base}/api/conversations/{id}/cancel");
                 wasm_bindgen_futures::spawn_local(async move {
-                    let _ = reqwest::Client::new().post(&url).send().await;
+                    let _ = crate::http::post_empty(&url).await;
                 });
             }
             crate::components::chat::close_current_stream();
@@ -588,13 +586,15 @@ pub fn Chat(
             },
             &base_for_title,
             incognito(),
-            // Only meaningful when creating: an existing session's profile is already stored, and
-            // the daemon ignores the field when a session id is present.
-            active_profile(),
-            // Unlike the profile, this is honoured with or without a session id — a model is a
-            // property of a turn. Taken (not read) so it applies once and then lives on the log.
-            pending_model.take(),
-            active_project.read().clone(),
+            StreamTurnOptions {
+                // Only meaningful when creating: an existing session's profile is already stored, and
+                // the daemon ignores the field when a session id is present.
+                profile: active_profile(),
+                // Unlike the profile, this is honoured with or without a session id — a model is a
+                // property of a turn. Taken (not read) so it applies once and then lives on the log.
+                model: pending_model.take(),
+                project: active_project.read().clone(),
+            },
         );
         #[cfg(not(target_arch = "wasm32"))]
         {
@@ -967,19 +967,26 @@ struct StreamTargets {
 }
 
 #[cfg(target_arch = "wasm32")]
+struct StreamTurnOptions {
+    profile: Option<String>,
+    model: Option<String>,
+    project: Option<String>,
+}
+
+#[cfg(target_arch = "wasm32")]
 fn open_stream(
     api_base: &str,
     message: &str,
     targets: StreamTargets,
     api_base_for_title: &str,
     incognito: bool,
-    // A profile chosen before this conversation existed. Applied by the request that creates it.
-    pending_profile: Option<String>,
-    // A model chosen for this turn. Unlike the profile, applies whether or not the conversation
-    // already exists — see `ChatRequest::model`.
-    pending_model: Option<String>,
-    pending_project: Option<String>,
+    turn: StreamTurnOptions,
 ) {
+    let StreamTurnOptions {
+        profile: pending_profile,
+        model: pending_model,
+        project: pending_project,
+    } = turn;
     let encoded = urlencoding::encode(message);
     let url = stream_url(
         api_base,
@@ -1053,7 +1060,7 @@ fn connect_stream(
     use web_sys::{EventSource, MessageEvent};
 
     let ghost_base = api_base.to_string();
-    let source = match EventSource::new(&url) {
+    let source = match EventSource::new(url) {
         Ok(s) => Rc::new(s),
         Err(_) => {
             sending.set(false);
@@ -1113,34 +1120,33 @@ fn connect_stream(
     // (chat_client_contract::SessionEvent — same decoder as the TUI/CLI).
     {
         let on_tool = Closure::<dyn FnMut(MessageEvent)>::new(move |e: MessageEvent| {
-            if let Some(data) = e.data().as_string() {
-                if let Ok(chat_client_contract::SessionEvent {
+            if let Some(data) = e.data().as_string()
+                && let Ok(chat_client_contract::SessionEvent {
                     kind: chat_client_contract::SessionEventKind::ToolStarted { name, args_preview },
                     ..
                 }) = chat_client_contract::SessionEvent::from_sse_data("tool_started", &data)
-                {
-                    let clean = chat_fold::clean_args(&args_preview);
-                    messages.with_mut(|m| match m.last_mut() {
-                        Some(last) if last.role == "assistant" => {
-                            last.thinking_steps.push(ThinkingStep {
-                                tool_name: name,
-                                tool_args: clean.clone(),
-                                ok: None,
-                                preview: String::new(),
-                            });
-                        }
-                        _ => {
-                            let mut msg = ChatMsg::new_assistant(String::new());
-                            msg.thinking_steps.push(ThinkingStep {
-                                tool_name: name,
-                                tool_args: clean,
-                                ok: None,
-                                preview: String::new(),
-                            });
-                            m.push(msg);
-                        }
-                    });
-                }
+            {
+                let clean = chat_fold::clean_args(&args_preview);
+                messages.with_mut(|m| match m.last_mut() {
+                    Some(last) if last.role == "assistant" => {
+                        last.thinking_steps.push(ThinkingStep {
+                            tool_name: name,
+                            tool_args: clean.clone(),
+                            ok: None,
+                            preview: String::new(),
+                        });
+                    }
+                    _ => {
+                        let mut msg = ChatMsg::new_assistant(String::new());
+                        msg.thinking_steps.push(ThinkingStep {
+                            tool_name: name,
+                            tool_args: clean,
+                            ok: None,
+                            preview: String::new(),
+                        });
+                        m.push(msg);
+                    }
+                });
             }
         });
         let _ = source
@@ -1197,8 +1203,7 @@ fn connect_stream(
                             &title,
                             project_for_title.as_deref(),
                         );
-                        let client = reqwest::Client::new();
-                        match client.patch(&url).json(&body).send().await {
+                        match crate::http::patch_json(&url, &body).await {
                             Ok(resp) => {
                                 if !resp.status().is_success() {
                                     web_sys::console::log_1(

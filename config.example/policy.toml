@@ -182,10 +182,15 @@ capabilities = [
 
 # --- Machine-owned grants overlay (do NOT hand-edit this file for it) --------------------------
 # When an agent hits a zone it isn't granted, Liberado sends a Telegram permission request with
-# Deny / Once / Session / Everywhere buttons. Tapping "Everywhere" appends the grant to a SEPARATE,
+# Deny / Once / "Until restart, all chats" / Everywhere buttons. "Until restart, all chats" is an
+# in-memory grant keyed by pool: it covers every chat on that pool until the daemon restarts, which
+# is why it is not called "this session". Tapping "Everywhere" appends the grant to a SEPARATE,
 # machine-owned file — `grants.overlay.toml` in the DATA dir (`$LIBERADO_DATA_DIR`, NOT this config
 # dir) — which is merged ON TOP of this policy at boot (its grants/zones are APPENDED, never a
 # rewrite of this hand-edited file). Base zones here always win on write-class, so the overlay can
 # only ever ADD authority for a genuinely-undeclared zone — it can never re-open a `human_only` one.
+# The grant lands on the component the ASKING agent runs as — a request raised in the `researcher`
+# chat widens `research`, not the `dispatcher` ceiling every chat can reach through `delegate`. A
+# background pool request, which names no component, still lands on that pool's component.
 # To revoke every "Everywhere" grant, just delete `grants.overlay.toml` and recreate the container.
 # Agents can't write it (it's outside every vault zone); only a human button tap ever does.

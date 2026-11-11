@@ -2,6 +2,7 @@
 
 use super::*;
 
+#[cfg(feature = "coding")]
 #[test]
 fn windows_extended_prefixes_are_stripped_for_the_wire() {
     use std::path::Path;

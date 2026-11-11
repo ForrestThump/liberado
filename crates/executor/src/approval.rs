@@ -8,11 +8,15 @@
 use async_trait::async_trait;
 use liberado_common::ApprovalOrigin;
 
-/// Session and origin stamped onto a permission proposal before it is signed.
+/// Session, origin and grant component stamped onto a permission proposal before it is signed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ApprovalStamp {
     pub session_id: String,
     pub origin: ApprovalOrigin,
+    /// The `policy.toml` component this session's authority comes from — where an `Everywhere`
+    /// approval lands. `None` leaves the daemon on its pool-keyed fallback.
+    /// See [`liberado_common::Proposal::grant_component`].
+    pub grant_component: Option<String>,
 }
 
 /// Sends the channel scope buttons for a request raised in a bound chat.

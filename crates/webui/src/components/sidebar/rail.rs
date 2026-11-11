@@ -106,6 +106,25 @@ pub(super) fn LibraryGlyph() -> Element {
 }
 
 #[component]
+pub(super) fn BellGlyph() -> Element {
+    rsx! {
+        svg {
+            class: "icon sidebar-icon",
+            xmlns: "http://www.w3.org/2000/svg",
+            view_box: "0 0 22 22",
+            fill: "none",
+            stroke: "currentColor",
+            stroke_width: "1.6",
+            stroke_linecap: "round",
+            stroke_linejoin: "round",
+            "aria-hidden": "true",
+            path { d: "M11 3.5a4 4 0 0 0-4 4v2.5l-1.5 2.5h11l-1.5-2.5V7.5a4 4 0 0 0-4-4z" }
+            path { d: "M9 17.5a2 2 0 0 0 4 0" }
+        }
+    }
+}
+
+#[component]
 pub(super) fn ClockGlyph() -> Element {
     rsx! {
         svg {

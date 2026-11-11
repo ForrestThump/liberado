@@ -23,7 +23,7 @@ async fn sleep_ms(ms: i32) {
 
 async fn fetch_status(api_base: String) -> Result<DaemonStatus, String> {
     let url = format!("{api_base}/api/status");
-    let resp = reqwest::get(&url)
+    let resp = crate::http::get(&url)
         .await
         .map_err(|e| format!("Failed to reach daemon: {e}"))?;
     let status: DaemonStatus = resp

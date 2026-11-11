@@ -172,6 +172,31 @@ fn main_agent_chat_search_is_commented_opt_in_not_granted() {
     );
 }
 
+/// The researcher hat is read-only and does not delegate.
+#[test]
+fn the_researcher_hat_does_not_delegate() {
+    let cfg = shipped_example_config();
+    cfg.validate()
+        .unwrap_or_else(|err| panic!("config.example does not validate: {err}"));
+    let profile = cfg
+        .topology
+        .session_profiles
+        .iter()
+        .find(|profile| profile.name == "researcher")
+        .expect("researcher profile");
+    assert_eq!(profile.component.as_deref(), Some("research"));
+    assert_eq!(profile.delegation, Some(false));
+    let resolved = cfg
+        .resolve_session_profile(Some("researcher"), "dispatch")
+        .expect("researcher resolves");
+    assert_eq!(resolved.delegation, Some(false));
+    assert!(
+        resolved.capabilities.authorizes_only_reads(),
+        "the research grant must stay read-only: {:?}",
+        resolved.capabilities
+    );
+}
+
 /// The Automation Editor hat is empty: no domain, no delegation, no vault write.
 #[test]
 fn the_automation_editor_hat_is_empty() {

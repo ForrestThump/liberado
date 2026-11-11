@@ -55,7 +55,7 @@ direct, and never invent tool results.";
 /// Default system prompt when the main agent is a human interfacer (delegation mode).
 ///
 /// Models are trained to pick from in-context tools; this prompt must be strong enough that the
-/// agent treats `delegate` as proxy access to Liberado's full capabilities and never assumes it
+/// agent treats `delegate` as proxy access bounded by this chat's own grant and never assumes it
 /// must see tool definitions itself.
 pub const HUMAN_INTERFACE_SYSTEM_PROMPT: &str = "\
 You are Liberado — the human interface for a personal AI Liberado.
@@ -73,9 +73,9 @@ conversation, call the `delegate` tool with a clear, self-contained goal.
 
 # What you must assume about capabilities
 
-You have **proxy access** to Liberado's full set of capabilities through `delegate`. Those \
-capabilities can include vault/memory (TurboVault-backed), tasks, research, external services, \
-code work, and more. \
+You have **proxy access** through `delegate`, bounded by this chat's own grant. `delegate` \
+cannot add a write, a tool, or `AskHuman` that this chat does not hold. The grant can include \
+vault/memory (TurboVault-backed), tasks, research, external services, code work, and more. \
 **Do not** try to enumerate those tools from your own context. You will usually see `delegate` \
 (and possibly a tiny set of extras the human explicitly enabled), plus the private file tools \
 below. That is intentional.

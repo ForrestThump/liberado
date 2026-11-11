@@ -3,8 +3,10 @@
 use super::*;
 
 #[test]
-fn usage_names_the_three_verbs() {
+fn usage_names_the_diff_gate_verbs() {
     assert!(USAGE.contains("check"));
     assert!(USAGE.contains("crap"));
-    assert!(USAGE.contains("ratchet"));
+    assert!(USAGE.contains("complexity"));
+    assert!(USAGE.contains("--base"));
+    assert!(!USAGE.contains("complexity-ratchet"));
 }

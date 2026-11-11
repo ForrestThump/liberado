@@ -1,17 +1,22 @@
 //! The typed config model (Decision 14), split by section for maintainability.
 //!
+//! - [`api`]: `[api]` — bind address, API credentials, allowed browser origins
 //! - [`config`]: top-level [`Config`]
 //! - [`topology`]: vault, providers, pools, profiles, schedules, hooks, MCPs
 //! - [`policy`]: zones and grants
 //! - [`tuning`]: dispatch/context/concurrency and surface tunables
 //! - [`builder`]: [`ConfigBuilder`] for tests
 
+mod api;
 mod builder;
 mod config;
 mod config_builtin_editor;
 mod config_profile_provider;
+mod config_readonly_delegation;
+mod config_tuning_bounds;
 mod config_turn_budgets;
 mod policy;
+mod reminders;
 mod schedule_form;
 mod schedule_rules;
 mod shepherd;
@@ -21,10 +26,12 @@ mod tuning;
 mod vault_reminders;
 mod weekly_spending;
 
+pub use api::{ApiClientConfig, ApiConfig, CredentialRef, DEFAULT_BIND, WebAuthnConfig};
 pub use builder::ConfigBuilder;
 pub use config::{CodingAuthError, CodingWorkspaceAuth, Config, GrantParts, ResolvedProfile};
 pub use config_builtin_editor::BUILTIN_AUTOMATION_EDITOR_PROFILE;
 pub use policy::{Grant, Policy, ZonePolicy};
+pub use reminders::{CatchUpPolicy, ReminderChannelsConfig, RemindersConfig};
 pub use schedule_form::ScheduleTiming;
 pub use shepherd::{
     ShepherdAuthConfig, ShepherdConfig, ShepherdProjectConfig, ShepherdReviewConfig,

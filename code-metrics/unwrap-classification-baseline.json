@@ -1,10 +1,10 @@
 {
   "summary": {
-    "total_unwraps": 111,
+    "total_unwraps": 110,
     "proven_invariant": 65,
     "local_failure": 0,
-    "process_fatal": 46,
-    "files_scanned": 676,
+    "process_fatal": 45,
+    "files_scanned": 779,
     "files_with_unwraps": 49
   },
   "files": {
@@ -150,12 +150,12 @@
     "crates/cli/src/shepherd_cmd.rs": {
       "proven_invariant": 2,
       "local_failure": 0,
-      "process_fatal": 2,
-      "total": 4,
+      "process_fatal": 1,
+      "total": 3,
       "occurrences": [
         {
           "file": "crates/cli/src/shepherd_cmd.rs",
-          "line": 401,
+          "line": 406,
           "column": 16,
           "method": "unwrap",
           "snippet": "Regex::new(r\"\\btest\\s+(\\S+)\\s+\\.\\.\\.\\s+FAILED\\b\").unwrap()",
@@ -166,7 +166,7 @@
         },
         {
           "file": "crates/cli/src/shepherd_cmd.rs",
-          "line": 402,
+          "line": 407,
           "column": 17,
           "method": "unwrap",
           "snippet": "Regex::new(r\"\\b(error(\\[[A-Z]\\d+\\])?:|error: could not compile)\").unwrap()",
@@ -177,23 +177,12 @@
         },
         {
           "file": "crates/cli/src/shepherd_cmd.rs",
-          "line": 418,
+          "line": 423,
           "column": 27,
           "method": "unwrap",
           "snippet": "key.split_once('|').unwrap()",
           "receiver": "key.split_once('|')",
           "context": "parse_failure_setBTreeSet<String>",
-          "classification": "process_fatal",
-          "reason": "production path unwrap requiring conversion to Result or waiver"
-        },
-        {
-          "file": "crates/cli/src/shepherd_cmd.rs",
-          "line": 650,
-          "column": 5,
-          "method": "expect",
-          "snippet": "reqwest::blocking::Client::builder()\n        .timeout(Duration::from_secs(30))\n        .build()\n        .expect(\"HTTP client\")",
-          "receiver": "reqwest::blocking::Client::builder()\n        .timeout(Duration::from_secs(30))\n        .build()",
-          "context": "clientreqwest::blocking::Client",
           "classification": "process_fatal",
           "reason": "production path unwrap requiring conversion to Result or waiver"
         }
@@ -501,7 +490,7 @@
       "occurrences": [
         {
           "file": "crates/common/src/proposal.rs",
-          "line": 363,
+          "line": 377,
           "column": 23,
           "method": "expect",
           "snippet": "<Hmac<Sha256> as Mac>::new_from_slice(&self.key)\n            .expect(\"HMAC accepts a key of any length\")",
@@ -512,7 +501,7 @@
         },
         {
           "file": "crates/common/src/proposal.rs",
-          "line": 371,
+          "line": 385,
           "column": 27,
           "method": "expect",
           "snippet": "serde_json::to_vec(&proposal.proposed_action)\n            .expect(\"ProposedAction serializes to JSON\")",
@@ -523,7 +512,7 @@
         },
         {
           "file": "crates/common/src/proposal.rs",
-          "line": 379,
+          "line": 396,
           "column": 28,
           "method": "expect",
           "snippet": "serde_json::to_vec(cap).expect(\"Capability serializes to JSON\")",
@@ -534,7 +523,7 @@
         },
         {
           "file": "crates/common/src/proposal.rs",
-          "line": 423,
+          "line": 440,
           "column": 9,
           "method": "expect",
           "snippet": "write!(s, \"{b:02x}\").expect(\"writing to a String cannot fail\")",
@@ -1238,20 +1227,20 @@
         }
       ]
     },
-    "crates/server/src/api/goals.rs": {
+    "crates/server/src/api/goals_coding.rs": {
       "proven_invariant": 1,
       "local_failure": 0,
       "process_fatal": 0,
       "total": 1,
       "occurrences": [
         {
-          "file": "crates/server/src/api/goals.rs",
-          "line": 197,
-          "column": 31,
+          "file": "crates/server/src/api/goals_coding.rs",
+          "line": 69,
+          "column": 27,
           "method": "expect",
-          "snippet": "goal\n                    .payload\n                    .as_object_mut()\n                    .expect(\"CodingGoalPayload always serializes to an object\")",
-          "receiver": "goal\n                    .payload\n                    .as_object_mut()",
-          "context": "goals_startimpl IntoResponse",
+          "snippet": "goal\n                .payload\n                .as_object_mut()\n                .expect(\"CodingGoalPayload always serializes to an object\")",
+          "receiver": "goal\n                .payload\n                .as_object_mut()",
+          "context": "prepare_coding_goalOption<axum::response::Response>",
           "classification": "proven_invariant",
           "reason": "statically proven invariant or startup runtime boundary"
         }

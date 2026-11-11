@@ -16,6 +16,41 @@ fn grant_component_maps_default_pool_to_the_dispatcher_ceiling() {
     assert_eq!(grant_component_for_pool(Some("research")), "research");
 }
 
+/// **Done test (A0b).** A chat request names the component the asking agent runs as, and that
+/// is the component an "Everywhere" approval widens — not the shared `dispatcher` ceiling that
+/// every chat can already reach through `delegate`.
+#[test]
+fn an_everywhere_approval_widens_the_requesting_agent_not_dispatcher() {
+    let mut researcher = liberado_common::Proposal::pending(
+        "p1",
+        "c1",
+        "liberado-chat",
+        liberado_common::ProposedAction::VaultWrite {
+            path: "Tasks/Main.md".into(),
+            content_summary: "x".into(),
+        },
+        "needs a write",
+    );
+    // Chat proposals have always been tagged with the default pool. That still routes the
+    // approved call to the default orchestrator; it is no longer read as "whose grant".
+    researcher.pool = Some(DEFAULT_POOL.to_string());
+    researcher.grant_component = Some("research".into());
+
+    assert_eq!(grant_component_for_proposal(&researcher), "research");
+    assert_ne!(grant_component_for_proposal(&researcher), "dispatcher");
+
+    // A background pool request names no component and keeps the pool-keyed fallback, so
+    // nothing that was landing correctly moves.
+    let mut background = researcher.clone();
+    background.grant_component = None;
+    assert_eq!(grant_component_for_proposal(&background), "dispatcher");
+
+    // An empty string is not an attribution. Fall back rather than widen a nameless component.
+    let mut blank = researcher.clone();
+    blank.grant_component = Some(String::new());
+    assert_eq!(grant_component_for_proposal(&blank), "dispatcher");
+}
+
 #[test]
 fn cron_schedule_name_only_matches_cron_sources() {
     assert_eq!(

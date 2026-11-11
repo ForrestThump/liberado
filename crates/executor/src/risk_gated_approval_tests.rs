@@ -68,6 +68,7 @@ async fn a_web_chat_raises_a_permission_request_without_telegram() {
     .with_approval(crate::ApprovalStamp {
         session_id: "sess-web".into(),
         origin: liberado_common::ApprovalOrigin::Web,
+        grant_component: None,
     });
 
     let call = ToolInvocation::new("c1", "vault:write_review", serde_json::json!({"c": "..."}));
@@ -114,6 +115,7 @@ async fn a_telegram_chat_sends_scope_buttons_through_the_sink() {
     .with_approval(crate::ApprovalStamp {
         session_id: "sess-tg".into(),
         origin: liberado_common::ApprovalOrigin::Channel(liberado_common::ChannelKind::Telegram),
+        grant_component: None,
     })
     .with_permission_sink(sink.clone());
 

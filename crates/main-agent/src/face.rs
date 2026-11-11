@@ -8,7 +8,8 @@
 //!
 //! `delegate` starts a hosted background session on the [`GoalSessionHub`] (domain `"dispatch"`)
 //! and awaits its terminal result. It no longer owns a dispatcher/orchestrator pair — those live
-//! only inside `liberado-dispatch-pack`. Delegated sessions run **without** `AskHuman` (D-e).
+//! only inside `liberado-dispatch-pack`. The child grant is the caller's grant narrowed to the
+//! dispatcher ceiling, then `AskHuman` is removed (D-e). The child is never wider than the caller.
 //!
 //! # Privileged agent spawn
 //!
@@ -49,6 +50,21 @@ pub const DELEGATE_TOOL_NAME: &str = "delegate";
 /// The `domain` of a delegated subagent's session — the dispatch pack.
 const DELEGATE_DOMAIN: &str = "dispatch";
 
+/// Child authority: the caller's grant narrowed to the dispatcher ceiling, then without `AskHuman`.
+///
+/// `narrow` keeps the more specific side of each pair and never returns a capability the caller
+/// does not already hold.
+pub(crate) fn delegated_capabilities(
+    caller: &CapabilitySet,
+    ceiling: &CapabilitySet,
+) -> CapabilitySet {
+    let mut capabilities = caller.narrow(ceiling);
+    capabilities
+        .capabilities
+        .retain(|cap| !matches!(cap, liberado_common::Capability::AskHuman));
+    capabilities
+}
+
 /// The goal recorded for a delegation. Unlike a cron, a subagent *does* have a parent conversation:
 /// the chat whose face agent called `delegate`. Carrying it makes the session a real child edge in
 /// the store, so the tree from chat → subagent is walkable.
@@ -73,7 +89,8 @@ fn delegated_goal(goal: &str, correlation_id: &str, parent_conversation: Option<
 /// Shared bridge used by the face agent's `delegate` tool — starts a hub session and awaits it.
 pub struct DispatchBridge {
     pub hub: Arc<GoalSessionHub>,
-    /// Ceiling for the delegated session (policy component `"dispatcher"`). No `AskHuman` (D-e).
+    /// Ceiling for the delegated session (policy component `"dispatcher"`). The child receives
+    /// the caller narrowed to this set, then without `AskHuman` (D-e).
     pub dispatcher_capabilities: CapabilitySet,
 }
 
@@ -89,6 +106,7 @@ impl DispatchBridge {
         goal: &str,
         parent_conversation: Option<&str>,
         deferral: &AtomicBool,
+        caller: &CapabilitySet,
     ) -> Result<String, String> {
         let goal = goal.trim();
         if goal.is_empty() {
@@ -115,13 +133,10 @@ impl DispatchBridge {
         )
         .await;
 
-        // D-e: delegated sessions run without AskHuman. Strip it even if the dispatcher grant
-        // happens to include it (a misconfigured policy must not turn a chat-turn into a multi-hour
-        // wait on a human the face agent cannot relay mid-turn).
-        let mut capabilities = self.dispatcher_capabilities.clone();
-        capabilities
-            .capabilities
-            .retain(|c| !matches!(c, liberado_common::Capability::AskHuman));
+        // The child is the caller ∩ the dispatcher ceiling, then without AskHuman. A misconfigured
+        // policy that puts AskHuman on the ceiling must not turn a chat turn into a wait the face
+        // agent cannot relay. A read-only caller must not receive the ceiling's writes.
+        let capabilities = delegated_capabilities(caller, &self.dispatcher_capabilities);
 
         let session_id = self
             .hub
@@ -204,6 +219,8 @@ pub struct FaceRuntime {
     turn_deferral: Arc<AtomicBool>,
     /// When `Some`, the face may call `create_agent`. Absent for non-creator profiles (gate A).
     agent_spawner: Option<Arc<dyn AgentSpawner>>,
+    /// The calling session's grant. `delegate` narrows the child to this set.
+    caller_capabilities: CapabilitySet,
 }
 
 impl FaceRuntime {
@@ -213,6 +230,7 @@ impl FaceRuntime {
         parent_conversation: Option<String>,
         turn_deferral: Arc<AtomicBool>,
         agent_spawner: Option<Arc<dyn AgentSpawner>>,
+        caller_capabilities: CapabilitySet,
     ) -> Self {
         Self {
             bridge,
@@ -220,6 +238,7 @@ impl FaceRuntime {
             parent_conversation,
             turn_deferral,
             agent_spawner,
+            caller_capabilities,
         }
     }
 
@@ -270,6 +289,7 @@ impl FaceRuntime {
                 goal.as_str(),
                 self.parent_conversation.as_deref(),
                 &self.turn_deferral,
+                &self.caller_capabilities,
             )
             .await
     }
@@ -386,6 +406,7 @@ mod tests {
             None,
             Arc::new(AtomicBool::new(false)),
             None,
+            CapabilitySet::empty(),
         );
         assert!(
             !rt.catalog()
@@ -402,6 +423,7 @@ mod tests {
             None,
             Arc::new(AtomicBool::new(false)),
             Some(Arc::new(StubSpawner)),
+            CapabilitySet::empty(),
         );
         assert!(
             rt.catalog()

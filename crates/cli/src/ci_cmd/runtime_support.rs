@@ -30,15 +30,3 @@ pub(super) fn move_running_image(
     );
     Ok(())
 }
-
-pub(super) fn announce_staged_baseline(outcome: StageOutcome) {
-    match outcome {
-        StageOutcome::Unchanged => eprintln!("[liberado ci] {BASELINE_FILE} unchanged"),
-        StageOutcome::Staged => eprintln!(
-            "[liberado ci] staged {BASELINE_FILE}; other dirty files present — not amending"
-        ),
-        StageOutcome::Amended => {
-            eprintln!("[liberado ci] amended {BASELINE_FILE} onto HEAD");
-        }
-    }
-}

@@ -16,7 +16,7 @@ use crate::components::profile_browser::ProfileRow;
 
 async fn fetch_profiles(api_base: String) -> Result<Vec<ProfileRow>, String> {
     let url = format!("{api_base}/api/profiles");
-    let body: serde_json::Value = reqwest::get(&url)
+    let body: serde_json::Value = crate::http::get(&url)
         .await
         .map_err(|e| format!("Failed to reach daemon: {e}"))?
         .json()

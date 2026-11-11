@@ -11,8 +11,9 @@ own work. This document is the cold-start map. Each crate has its own zoomed-in
 
 ## Three pillars
 
-For how these pillars position Liberado against the free alternatives, see
-[Positioning](positioning.md).
+For how these pillars were compared with the free alternatives in July 2026, see
+[Positioning](positioning.md). That page is historical. Current direction is
+[`../../direction.md`](../../direction.md).
 
 1. **Modular MCP/hook substrate.** Loose-coupled components (perceive / decide / execute / store) that
    talk through events; capability is composed from optional crates. TurboVault is the default,
@@ -37,12 +38,9 @@ The **general agentic orchestration kernel** (goal sessions, verifiers, subagent
 [`sessions.md`](sessions.md)). As of 2026-07-19 the **homelab daemon is live** (Telegram sticky chat,
 OpenClaw briefings cut over, TurboVault peer with **vector search + tasks**). As of 2026-07-23
 engineering hardened **module boundaries**, **MCP connection pooling** (default on), and a **partial
-Tier-1 live conformance suite** (see [`../../roadmap.md`](../../roadmap.md)). Effort still
-follows a deliberate **replacement priority**: **autonomous Liberado daemon → chat → coding** — the
-remaining P1 gap is the **phone-grade interfacing loop** (session WebUI later; not Telegram multiplexing),
-not storage
-or basic MCP reach. The order and its rationale are in [`positioning.md`](positioning.md); the
-concrete work items, in priority order, are in [`../../roadmap.md`](../../roadmap.md).
+Tier-1 live conformance suite**. Product direction is [`../../direction.md`](../../direction.md).
+The work queue is the [backlog](../../future-work/backlog.md). [`positioning.md`](positioning.md)
+is a historical competitive note. [`../../roadmap.md`](../../roadmap.md) points at those two.
 Coding is a **domain pack** on a domain-neutral kernel, not the product identity, and explicitly
 *good-enough-and-integrated* rather than a Claude Code / Kilo rival. The coding pack is home-spun
 Liberado (`Provider` + `Executor` + `ToolRuntime` + `coder-*`) — not a VTCode wrap. Surfaces (TUI,
@@ -121,7 +119,7 @@ Bottom-up (each depends roughly on those above it):
 | Act | [`executor`](../../../crates/executor/ARCHITECTURE.md) | The agent loop: drive a `Provider` over a `ToolRuntime` to a `Report`. MCP-agnostic. |
 | Act | [`scratchpad`](../../../crates/scratchpad/Cargo.toml) | Per-execution todo-list tool for the executor's report-mode loop — "external working memory" (a doom-loop mitigation), implemented as engine state rather than a standalone MCP. |
 | Act | [`agent-workspace`](../../../crates/agent-workspace/Cargo.toml) | Private per-agent file directory. One hashed directory per agent, a configurable 1 GiB cap on writes and downloads, and sandboxed list, read, write, delete, and download tools. Not a shared scratch directory. Agents share through a channel or a local git repository. |
-| Act | [`mcp`](../../../crates/mcp/ARCHITECTURE.md) | MCP runtime: `TurbomcpRuntime` (the `ToolRuntime` over real MCP tools; injects provenance into `_meta`), connection pooling (M1), degraded-catalog routing, and hot-reload (`POST /api/mcp/reload` — no process restart). |
+| Act | [`mcp`](../../../crates/mcp/ARCHITECTURE.md) | MCP runtime: `TurbomcpRuntime` (the `ToolRuntime` over real MCP tools; injects provenance into `_meta`), connection pooling (M1), degraded-catalog routing, hot-reload (`POST /api/mcp/reload` — no process restart), and chat reconnect with capped exponential backoff when a peer is down or its session dies. Boot waits up to 15 seconds for the first connect wave, and `chat: tool surface ready` counts the full face surface. |
 | Act | [`orchestrator`](../../../crates/orchestrator/ARCHITECTURE.md) | Bridges a `DispatchDecision` to an execution; chooses the provenance correlation. |
 | Notify | [`notify`](../../../crates/notify/Cargo.toml) | `Notifier` trait for events a human should know about even unattended (the cron/Phase-3 case); `TelegramNotifier` is the first implementation. `notify_proposal` sends Approve/Revise/Reject buttons on channels that support them. |
 | Notify | [`telegram-approvals`](../../../crates/telegram-approvals/Cargo.toml) | `ApprovalBot`: answers those buttons. Approve/Reject are pure code (no LLM) — flip `status` in `proposals/{stem}.md`, tagged `WriteProvenance::human()` so the daemon's own attribution reacts to it like an Obsidian edit. Revise is the one LLM-touching path, and it can only redraft content, never grant approval — see `roadmap.md`'s "Before Phase 3" section. |
@@ -168,7 +166,9 @@ domain pack** (first pack — not the product center; see [`agentic-loops.md`](a
 - **Capability/zone containment (Decision 4)** — `CapabilitySet` is narrow-only; authority only
   shrinks down a chain. **Subagents** get a risk-gate set of `dispatcher_ceiling ∩ allowed_mcps`
   (classifier-scoped MCP names; empty decision `capabilities` derives from `allowed_mcps`, never
-  full inherit of every dispatcher tool). **Main chat** is thin by default (face agent +
+  full inherit of every dispatcher tool). Face `delegate` narrows further: the child grant is the
+  calling session's grant intersected with the dispatcher ceiling, then without `AskHuman`.
+  **Main chat** is thin by default (face agent +
   `delegate`); specialist MCPs (e.g. `turbovault`) are granted on the **`dispatcher`** component in
   `policy.toml`. See [`delegate_dogfood_issues.md`](../../future-work/archive/delegate_dogfood_issues.md).
 - **Provider-agnostic inference (Decision 13)** — one `Provider` trait, swappable from config, with
@@ -206,11 +206,11 @@ Phase 4 v1 (Docker MCP transport, item 19 below) is built and unit-tested, pendi
 Docker-daemon smoke test. Rust-native agentic orchestration is now **built**, not next: home-spun
 Liberado goal-session crates replaced `vtcode`, and the unified Session model (D7) plus the one
 converged execution engine expose the same session/event backend to every surface (see
-[`sessions.md`](sessions.md)). The current strategic direction is a **replacement priority** —
-**autonomous Liberado daemon → chat → coding** — sequencing effort to get one thing over the
-daily-driver line rather than three half-built. The order and rationale are in
-[`positioning.md`](positioning.md); the work items, in that order, in
-[`../../roadmap.md`](../../roadmap.md).
+[`sessions.md`](sessions.md)). Product direction is
+[`../../direction.md`](../../direction.md): personal infrastructure first, coding pack frozen,
+security and reliability basics next. Open work is the
+[backlog](../../future-work/backlog.md). [`positioning.md`](positioning.md) is historical.
+[`../../roadmap.md`](../../roadmap.md) points at the direction and the backlog.
 
 **Done:**
 1. ✅ **Reactive pipeline** — daemon watches → attributes → dispatches → orchestrates → executes, end-to-end wired and tested.
@@ -264,11 +264,12 @@ pipeline picks up the write and archives it — closed the gap where an expired-
     theme preference in platform `settings.toml`. Delegation journals under
     `<LIBERADO_DATA_DIR>/dispatches/`. Writeup: [`delegate_dogfood_issues.md`](../../future-work/archive/delegate_dogfood_issues.md).
 
-**Not the next slice.** The coding pack is on main. What is still unbuilt, and in what order, is the
-[roadmap](../../roadmap.md) and the [backlog](../../future-work/backlog.md). This log's leftovers:
+**Not the next slice.** The coding pack is on main, and it is frozen. Open work, in order, is the
+[backlog](../../future-work/backlog.md). [direction](../../direction.md) is the product order.
+[roadmap](../../roadmap.md) points at those two. This log's leftovers:
 
 - A product `/loop` (series memory across scheduled passes). Cron already fires one-shot goals.
-  Design: [`loops-plan.md`](../../future-work/loops-plan.md). Not selectable during dogfood.
+  Design: [`loops-plan.md`](../../future-work/loops-plan.md). It is not a backlog row.
 - Tier 2 live conformance (model-in-the-loop) — optional; see the
   [conformance runbook](../../impl/live-conformance.md).
 - Splitting `liberado-common`'s grab-bag along its natural boundaries — partially underway (`config`

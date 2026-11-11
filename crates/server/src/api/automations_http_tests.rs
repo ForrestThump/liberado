@@ -52,7 +52,8 @@ fn app_with_topology(schedules: Vec<CronSchedule>, hooks: Vec<HookConfig>) -> Ro
         live_mcp: liberado_bootstrap::LiveMcpController::empty(),
         drain: crate::shutdown::DrainGate::default(),
         approval_hub: None,
-        push: crate::state::inert_push(),
+        outbox: None,
+        outbox_delivery: None,
         spending: None,
         surfaces: crate::surfaces::LiveSurfaces::inert(),
     });

@@ -142,7 +142,7 @@ async fn harness() -> Harness {
     let state = Arc::new(state);
     // The production router, so a second method on this path fails here rather than
     // only on a router the test built with GET alone.
-    let app = crate::build_app_router(&state);
+    let app = crate::build_app_router(&state, &crate::auth::ApiGuard::open_for_test());
     Harness {
         app,
         chat,
@@ -249,7 +249,7 @@ async fn unknown_disabled_and_private_conversations() {
         .await
         .id;
     let state = Arc::new(AppState::for_test(sessions, None, dir.path().to_path_buf()));
-    let app = crate::build_app_router(&state);
+    let app = crate::build_app_router(&state, &crate::auth::ApiGuard::open_for_test());
     let (status, body) = call(&app, "GET", &format!("/api/conversations/{id}/grants")).await;
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{body}");
     assert!(body.contains("chat is disabled"), "{body}");

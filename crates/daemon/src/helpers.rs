@@ -25,6 +25,20 @@ pub(crate) fn cron_schedule_name(source: &str) -> Option<&str> {
     }
 }
 
+/// Parse the fire instant from a cron event's correlation id (`cron:{name}:{rfc3339}`).
+pub(crate) fn cron_fire_at(event: &Event) -> chrono::DateTime<chrono::Utc> {
+    let tail = event.correlation_id.rsplit(':').next().unwrap_or("");
+    chrono::DateTime::parse_from_rfc3339(tail)
+        .map(|value| value.with_timezone(&chrono::Utc))
+        .unwrap_or_else(|_| chrono::Utc::now())
+}
+
+pub(crate) fn cron_catch_up(data: &serde_json::Value) -> bool {
+    data.get("catch_up")
+        .and_then(|value| value.as_bool())
+        .unwrap_or(false)
+}
+
 /// Render a cron result for delivery. On success it is just the brief under the schedule name; any
 /// non-success terminal is tagged so a failed/exhausted run can never be mistaken for a real report
 /// (the honest-status rule from `Disposition::terminal_summary`).
@@ -49,6 +63,19 @@ pub(crate) fn grant_component_for_pool(pool: Option<&str>) -> &str {
     match pool {
         None | Some(DEFAULT_POOL) => "dispatcher",
         Some(name) => name,
+    }
+}
+
+/// Which component a proposal's approved grant widens.
+///
+/// A request that names its own component wins: a chat stamps the requesting session's component,
+/// so approving the researcher's request widens `research`, not the shared `dispatcher` ceiling
+/// every chat can reach through `delegate`. Without one — a background pool request, or a note
+/// written before the field existed — the pool's component is still the answer.
+pub(crate) fn grant_component_for_proposal(proposal: &liberado_common::Proposal) -> &str {
+    match proposal.grant_component.as_deref() {
+        Some(component) if !component.is_empty() => component,
+        _ => grant_component_for_pool(proposal.pool.as_deref()),
     }
 }
 

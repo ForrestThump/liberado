@@ -48,16 +48,16 @@ fn granted_stems_surface_through_every_workspace_kind() {
         .with_command_grants(grants);
     assert!(host.command_grants().contains("python"), "host");
 
-    let docker = DockerWorkspace {
-        host: host.clone(),
-        spec: DockerSandboxSpec {
+    let docker = DockerWorkspace::from_host(
+        host.clone(),
+        DockerSandboxSpec {
             image: "test-image".into(),
             network: None,
             env_allowlist: Vec::new(),
             volumes: Vec::new(),
             user: None,
         },
-    };
+    );
     assert!(
         docker.command_grants().contains("python"),
         "docker must delegate to its host grants"

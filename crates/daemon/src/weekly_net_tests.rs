@@ -2,10 +2,10 @@
 
 use std::sync::Arc;
 
+use crate::inert_week_sender;
 use async_trait::async_trait;
 use chrono::NaiveDate;
 use liberado_config::WeeklySpendingConfig;
-use liberado_notify::PushHub;
 
 use super::{
     BudgetHttp, CategorySpend, PositiveRow, apply_refunds, collect_income, fold_refunds,
@@ -140,7 +140,7 @@ async fn week_from(server: &wiremock::MockServer) -> RunOutcome {
         7,
         0,
         Arc::new(client),
-        Arc::new(PushHub::inert()),
+        inert_week_sender(),
         RunMode::DryRun,
     )
     .await
@@ -277,7 +277,7 @@ async fn a_refund_only_category_shows_zero_and_logs_the_credit() {
         7,
         0,
         Arc::new(Rows(rows)),
-        Arc::new(PushHub::inert()),
+        inert_week_sender(),
         RunMode::DryRun,
     )
     .await

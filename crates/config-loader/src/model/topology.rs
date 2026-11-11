@@ -23,6 +23,10 @@ use serde::{Deserialize, Serialize};
 pub struct Topology {
     /// Path to the Obsidian vault (the source of truth). Required.
     pub vault_path: PathBuf,
+    /// Name Obsidian expects in `obsidian://open?vault=…` URIs. Defaults to the final component of
+    /// [`Self::vault_path`] when unset.
+    #[serde(default)]
+    pub obsidian_vault_name: Option<String>,
     /// Operator's IANA timezone — **single source of truth** for local wall-clock across Liberado
     /// (e.g. `America/Chicago` for US Central / Texas CDT). Used when stamping "Local time: …"
     /// onto cron/webhook goals and available via [`Topology::user_timezone`] / [`UserTimezone`]
@@ -45,6 +49,11 @@ pub struct Topology {
     /// `[acp]` — the ACP bridge Paseo spawns. Absent = built-in defaults.
     #[serde(default)]
     pub acp: AcpConfig,
+    /// `[api]` — where the HTTP control plane listens, which credentials reach it, and which
+    /// browser origins may call it. Absent = loopback with no credential, which is the only
+    /// shape that needs none.
+    #[serde(default)]
+    pub api: crate::model::ApiConfig,
     /// Declared model profiles available to the system.
     pub models: Vec<ModelProfile>,
     /// Which model (by name) fills each role. Validated against the capability floors.
@@ -750,9 +759,11 @@ pub struct SessionProfile {
     /// The tools this profile may call — a whole server, or named tools within one.
     #[serde(default)]
     pub mcps: Vec<McpGrant>,
-    /// Whether the face agent may `delegate` in this session. `None` = the daemon's default
-    /// (`topology.main_agent.delegation_mode`). `Some(false)` is what makes a "basic chat" profile a
-    /// mode rather than merely a shorter tool list.
+    /// Whether the face agent may `delegate` in this session. `None` inherits
+    /// `topology.main_agent.delegation_mode`, except when the resolved grant is only
+    /// `Read` and `ReadSummary` (and not empty). That grant resolves to `false`.
+    /// `AskHuman` is not a read, so a coding chat still inherits. An explicit
+    /// `true` or `false` is kept. An empty grant still inherits.
     #[serde(default)]
     pub delegation: Option<bool>,
     /// Model to pin for sessions under this profile. `None` = the daemon's current face model.

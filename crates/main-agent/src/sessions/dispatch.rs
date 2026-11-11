@@ -509,8 +509,9 @@ async fn streamed_face_turn_keeps_the_face_prompt() {
     while rx.try_recv().is_ok() {}
 }
 
-/// The pre-turn dispatch hands the hosted session its capability ceiling with AskHuman
-/// stripped (D-e) — not an empty grant, and not AskHuman-only.
+/// The pre-turn dispatch hands the hosted session the caller intersected with the
+/// dispatcher ceiling, then strips AskHuman (D-e). A write on the ceiling that the
+/// caller lacks does not reach the child.
 #[tokio::test]
 async fn pre_turn_dispatch_grant_strips_askhuman_keeps_the_rest() {
     use liberado_orchestrator::Orchestrator;
@@ -580,11 +581,26 @@ async fn pre_turn_dispatch_grant_strips_askhuman_keeps_the_rest() {
         .with_goal_hub(hub.clone())
         .with_dispatcher_capabilities(CapabilitySet::from_iter([
             Capability::ExecuteMcp("tasks-mcp".into()),
+            Capability::Write(liberado_common::Zone::vault("tasks")),
             Capability::AskHuman,
         ]))
         .with_dispatch(dispatcher, Arc::new(CapabilityCatalog::new()));
 
-    let id = create_delegating_session(&sessions).await;
+    let id = sessions
+        .create_with_grant(
+            None,
+            SessionGrant {
+                profile: Some("dispatch-routing-test".into()),
+                delegation: Some(true),
+                capabilities: CapabilitySet::from_iter([
+                    Capability::ExecuteMcp("tasks-mcp".into()),
+                    Capability::Read(liberado_common::Zone::vault("tasks")),
+                ]),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
     sessions.turn(id, "add something").await.unwrap();
 
     let rows = hub.list().await;
@@ -602,5 +618,14 @@ async fn pre_turn_dispatch_grant_strips_askhuman_keeps_the_rest() {
     assert!(
         !grant.grants_ask_human(),
         "AskHuman must be stripped from pre-turn dispatch too"
+    );
+    assert!(
+        !grant
+            .capabilities
+            .capabilities
+            .iter()
+            .any(|c| matches!(c, Capability::Write(_))),
+        "a write the caller lacks must not reach the child: {:?}",
+        grant.capabilities
     );
 }
