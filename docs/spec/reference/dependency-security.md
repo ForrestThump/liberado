@@ -74,16 +74,18 @@ stays in the graph for other crates, so 0.12.2 is an added exemption with
 the same `safe-to-deploy` criteria. `hashbrown` 0.17.1, which 0.12.2 uses,
 was already exempt. This exemption is debt, not an audit.
 
-`turbovault-vector` at tag `liberado-2026-10-15` requires `rusqlite` ^0.39.
-That requirement cannot select 0.41. `[patch]` replaces that package with
-`patches/turbovault-vector`, whose source is the same tag via the
-`third_party/turbovault` submodule (`69a217a5`). The patch manifest is the
-only delta. CI checkouts set `submodules: true` so the source is present.
-Remove the patch when the tag itself depends on `rusqlite` >= 0.41.
+`turbovault*` is pinned to tag `liberado-2026-11-10`
+(`a86f4e6f489d3a2e53dde0378d28325f69b41b3a`). That tag's
+`turbovault-vector` requires `rusqlite` 0.41.1 with the `bundled` feature,
+so the graph has one `libsqlite3-sys`, 0.39.1. The previous tag,
+`liberado-2026-10-15`, required `rusqlite` ^0.39 and kept `libsqlite3-sys`
+0.37.0 in the graph. The git-SHA vet exemptions for the TurboVault crates
+moved from `69a217a5` to `a86f4e6f`. The criteria stay `safe-to-deploy`.
+The exemptions are still debt, not audits.
 
 GitHub Actions use full commit SHAs. Dependabot proposes Action SHA changes.
 `turbovault*` and `turbomcp*` are git+tag pins on the public ForrestThump forks.
-`turbovault*` is pinned to `tag = "liberado-2026-10-15"` and `turbomcp*` stays
+`turbovault*` is pinned to `tag = "liberado-2026-11-10"` and `turbomcp*` stays
 on `tag = "liberado-2026-08-27"`. `Cargo.lock` records the resolved commit SHA.
 Update tags, lockfile entries, and matching cargo-vet exemptions together after
 reviewing the fork diff. Checkout credentials are never persisted into a
