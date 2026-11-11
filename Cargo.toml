@@ -56,9 +56,10 @@ base64 = "0.22"
 # default-features stays off so ring-io does not pull untrusted 0.7.
 # prebuilt-nasm is the crate's fallback when the Windows assembler is absent.
 aws-lc-rs = { version = "=1.18.1", default-features = false, features = ["alloc", "aws-lc-sys", "prebuilt-nasm"] }
-# Same crate and feature set turbovault-vector already resolves. `bundled` keeps
-# the homelab image off a system libsqlite.
-rusqlite = { version = "=0.39.0", features = ["bundled"] }
+# Exact pin. 0.41.1 pulls libsqlite3-sys 0.39.1, whose bundled SQLite is 3.54.1.
+# That is the patched range for RUSTSEC-2026-0459 (libsqlite3-sys >= 0.39.0).
+# `bundled` keeps the homelab image off a system libsqlite.
+rusqlite = { version = "=0.41.1", features = ["bundled"] }
 ulid = { version = "1", features = ["serde"] }
 ratatui = "0.29"
 crossterm = "0.28"
@@ -126,19 +127,19 @@ liberado-sysmap-gui = { path = "crates/sysmap-gui" }
 sysmap-core = { path = "crates/sysmap-core" }
 
 # --- co-developed git+tag pins (Decision 7) ---
-# ForrestThump forks. `turbovault*` is tag `liberado-2026-10-15` (Obsidian Tasks
-# parsing and the global filter). `turbomcp*` stays `liberado-2026-08-27`.
-# Cargo fetches them; path siblings are not required. Swap to crates.io versions
-# for release builds once the forks publish.
-turbovault-core = { git = "https://github.com/ForrestThump/turbovault", tag = "liberado-2026-10-15" }
-turbovault-vault = { git = "https://github.com/ForrestThump/turbovault", tag = "liberado-2026-10-15" }
-turbovault-audit = { git = "https://github.com/ForrestThump/turbovault", tag = "liberado-2026-10-15" }
-turbovault = { git = "https://github.com/ForrestThump/turbovault", tag = "liberado-2026-10-15" } # umbrella (ObsidianMcpServer) — test-only
+# ForrestThump forks. `turbovault*` is tag `liberado-2026-11-10` (Obsidian Tasks
+# parsing, the global filter, and rusqlite 0.41.1). `turbomcp*` stays
+# `liberado-2026-08-27`. Cargo fetches them; path siblings are not required.
+# Swap to crates.io versions for release builds once the forks publish.
+turbovault-core = { git = "https://github.com/ForrestThump/turbovault", tag = "liberado-2026-11-10" }
+turbovault-vault = { git = "https://github.com/ForrestThump/turbovault", tag = "liberado-2026-11-10" }
+turbovault-audit = { git = "https://github.com/ForrestThump/turbovault", tag = "liberado-2026-11-10" }
+turbovault = { git = "https://github.com/ForrestThump/turbovault", tag = "liberado-2026-11-10" } # umbrella (ObsidianMcpServer) — test-only
 # liberado-memory-store's semantic recall.
-turbovault-vector = { git = "https://github.com/ForrestThump/turbovault", tag = "liberado-2026-10-15" }
+turbovault-vector = { git = "https://github.com/ForrestThump/turbovault", tag = "liberado-2026-11-10" }
 # Obsidian Tasks lines and the Tasks plugin global filter. Used by task-ping.
-turbovault-parser = { git = "https://github.com/ForrestThump/turbovault", tag = "liberado-2026-10-15" }
-turbovault-plugin-tasks = { git = "https://github.com/ForrestThump/turbovault", tag = "liberado-2026-10-15" }
+turbovault-parser = { git = "https://github.com/ForrestThump/turbovault", tag = "liberado-2026-11-10" }
+turbovault-plugin-tasks = { git = "https://github.com/ForrestThump/turbovault", tag = "liberado-2026-11-10" }
 turbomcp = { git = "https://github.com/ForrestThump/turbomcp", tag = "liberado-2026-08-27" }
 turbomcp-client = { git = "https://github.com/ForrestThump/turbomcp", tag = "liberado-2026-08-27" }
 turbomcp-transport = { git = "https://github.com/ForrestThump/turbomcp", tag = "liberado-2026-08-27" } # ChildProcessTransport (stdio connector)
