@@ -56,6 +56,7 @@ fn fallback_to_a_declared_provider_validates_cleanly() {
     let mut cfg = Config::default();
     cfg.topology.vault_path = PathBuf::from("/home/shiloh/vault");
     cfg.topology.providers = vec![provider_profile("deepseek"), provider_profile("openrouter")];
+    cfg.topology.providers[1].default_model = "openai/gpt-4o-mini".into();
     cfg.topology.providers[0].fallback = Some(ProviderFallback {
         provider: "openrouter".into(),
         model: Some("deepseek/deepseek-v4-flash-0731".into()),

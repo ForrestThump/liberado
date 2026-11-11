@@ -23,7 +23,8 @@
 //!   [`ChatSessions::persist_user_message`].
 //!
 //!   **A failed turn also writes one short error note.** The note is not an assistant tool tail.
-//!   Its text is a fixed sentence, so a reload can show the failure without the raw provider error.
+//!   A model rejection names the profile and the model. Every other class is a fixed sentence,
+//!   so a reload can show the failure without the raw provider error.
 //!
 //! We depend on the [`ConversationStore`] *trait*, never a concrete store: the composition root
 //! injects the engine (JSONL today, SQLite/Postgres later) so it stays swappable.
@@ -102,7 +103,7 @@ mod surface_mode;
 mod turn_clock;
 #[path = "sessions/turn_failure.rs"]
 mod turn_failure;
-pub use turn_failure::{TURN_ERROR_AUTHOR, public_turn_failure};
+pub use turn_failure::{TURN_ERROR_AUTHOR, public_failure_text, public_turn_failure};
 #[path = "sessions_waivers.rs"]
 mod waivers;
 #[path = "sessions/workspace.rs"]
@@ -1257,7 +1258,7 @@ impl ChatSessions {
 
             let terminal = match result {
                 Ok(()) => AgentEvent::Done,
-                Err(e) => turn_failure::failure_event(session, &e),
+                Err(e) => turn_failure::failure_event(&self, session, &e).await,
             };
             entry.publish(terminal);
             // Retired last: while this key is present, `start_or_attach` will attach rather than

@@ -89,6 +89,9 @@ before anything starts. Examples of what it rejects:
 - Out-of-range tunables (e.g. `MAX_CONCURRENT_SUBAGENTS = 0`).
 - An enabled `[[session_profiles]]` `provider` that is blank, names no `[[providers]]` row, or
   names a row whose `base_url` or `api_key_env` is empty. See §4.4.
+- An enabled `[[session_profiles]]` `model`, a `[roles.<role>].model`, or a
+  `[[providers]].fallback.model` whose id contains `/` when the provider that would receive it
+  has a `default_model` with no `/`. See §4.4.
 
 ### 4.1 Shepherd review validation
 
@@ -173,6 +176,24 @@ edit applies to sessions that already pinned `model`. Restart the daemon after c
 `topology.toml`.
 
 Load fails for the cases in §4. Disabled profiles are drafts and skip the check.
+
+`list_models` is a live call, and load does not read API keys, so a provider's catalog is not
+available here. The check uses the shape of the id instead. An id that contains `/`
+(`deepseek/deepseek-v4-flash`) is a vendor/model id. It is accepted only when the provider
+that will receive it has a `default_model` that also contains `/`. OpenRouter's shipped
+default is `openai/gpt-4o-mini`. MiniMax (`MiniMax-M3`) and DeepSeek (`deepseek-chat`) do not.
+A bare id is not checked. The turn error names the profile and the model if the backend
+rejects it.
+
+The provider is `provider` on the profile when set, otherwise `topology.provider`. The same
+rule applies to `[roles.<role>].model` (that role's `provider`, or the global provider) and to
+`[[providers]].fallback.model` (the named fallback provider). The error names the profile or
+role, the model, the provider that would receive it, and every configured provider.
+
+The first segment of the id is not a route. `deepseek/deepseek-v4-flash` is an OpenRouter slug.
+The default provider table also contains a provider named `deepseek`, and that API does not
+accept the OpenRouter slug. Routing on the prefix would send a valid OpenRouter id to the
+direct API whenever both are configured. Set `provider` on the profile.
 
 `Config::resolve_session_profile` returns `ResolvedProfile`, re-exported from `liberado-config`.
 The WebUI rename ledger does not rewrite this file. A reader that only loads `topology.toml`

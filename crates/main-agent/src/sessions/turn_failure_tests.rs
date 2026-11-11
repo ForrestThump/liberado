@@ -119,8 +119,10 @@ async fn a_provider_failure_is_persisted_and_emitted_without_the_secret() {
 
 #[tokio::test]
 async fn an_unknown_model_persists_the_rejection_sentence() {
-    let failing =
-        sessions_that_fail(ProviderError::InvalidRequest("unknown model 'nope'".into())).await;
+    let failing = sessions_that_fail(ProviderError::InvalidRequest(format!(
+        "unknown model '{TOKEN}'"
+    )))
+    .await;
     let sessions = &failing.sessions;
     let id = sessions.create(None).await.unwrap();
     let result = sessions.turn(id, "hello").await.unwrap_err();
@@ -129,8 +131,63 @@ async fn an_unknown_model_persists_the_rejection_sentence() {
         "The model rejected this request. Check the model name and try again."
     );
     let nodes = sessions.history_nodes(id).await.unwrap();
-    assert!(nodes.iter().any(|node| {
-        matches!(&node.author, Author::Named(name) if name == TURN_ERROR_AUTHOR)
-            && node.message.content == public_turn_failure(&result)
-    }));
+    let note = nodes
+        .iter()
+        .find(|node| matches!(&node.author, Author::Named(name) if name == TURN_ERROR_AUTHOR))
+        .expect("the failure note is on the transcript");
+    assert_eq!(
+        note.message.content,
+        "The model rejected this request. Model 'mock'. Check the model name and try again."
+    );
+    assert!(
+        !note.message.content.contains(TOKEN),
+        "the note must not copy the provider body: {}",
+        note.message.content
+    );
+}
+
+#[tokio::test]
+async fn a_rejected_model_names_the_profile_and_the_model() {
+    let failing = sessions_that_fail(ProviderError::InvalidRequest(format!(
+        "unknown model 'deepseek/deepseek-v4-flash' {TOKEN}"
+    )))
+    .await;
+    let sessions = &failing.sessions;
+    let id = sessions
+        .create_with_grant(
+            None,
+            liberado_session::SessionGrant {
+                profile: Some("budget-bot".into()),
+                model: Some("deepseek/deepseek-v4-flash".into()),
+                ..liberado_session::SessionGrant::default()
+            },
+        )
+        .await
+        .unwrap();
+    let (_replay, mut rx) = sessions.start_or_attach(id, "hello");
+    let emitted = wait_for_error(&mut rx).await;
+    assert_eq!(
+        emitted,
+        "The model rejected this request. Profile 'budget-bot', model \
+         'deepseek/deepseek-v4-flash'. Check the model name and try again."
+    );
+    assert!(!emitted.contains(TOKEN), "{emitted}");
+
+    let retired = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        while sessions.turn_running(id) {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    })
+    .await;
+    assert!(
+        retired.is_ok(),
+        "the running entry is retired after the failure"
+    );
+
+    let nodes = sessions.history_nodes(id).await.unwrap();
+    let note = nodes
+        .iter()
+        .find(|node| matches!(&node.author, Author::Named(name) if name == TURN_ERROR_AUTHOR))
+        .expect("the failure note is on the transcript");
+    assert_eq!(note.message.content, emitted);
 }

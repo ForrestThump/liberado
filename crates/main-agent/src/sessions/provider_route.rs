@@ -5,6 +5,13 @@
 //! restarted daemon with an edited profile, or [`ChatSessions::set_profile_route`])
 //! fixes a session that already pinned a model. The model slug itself still follows
 //! the existing precedence in `sessions.rs`.
+//!
+//! A `vendor/model` id is not routed by its first segment. OpenRouter slugs such as
+//! `deepseek/deepseek-v4-flash` name the upstream vendor, and the default provider table
+//! also contains a provider named `deepseek` whose API does not accept that slug. Sending
+//! the prefix to the matching provider would repeat the bug on a different host. The
+//! explicit `provider` field stays the route. Load time refuses a `vendor/model` id on a
+//! provider whose own `default_model` is not a `vendor/model` id.
 
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
