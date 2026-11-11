@@ -242,6 +242,67 @@ async fn create_chat_session(
     }
 }
 
+/// Why a chat request could not be opened before the turn starts.
+enum OpenChatError {
+    /// The named profile is unknown, disabled, or its overrides will not serialize.
+    Profile(String),
+    /// The store refused to create the conversation.
+    Create(liberado_main_agent::SessionError),
+}
+
+/// Open the conversation for one chat request.
+///
+/// `POST /api/chat` and both stream verbs call this. `profile` is resolved before any create, and
+/// a bad name fails the request even when `session` is already set: the client asked for that
+/// profile, and dropping the name would run the turn on a wider grant. `incognito`, `background`,
+/// and a resolved grant apply only when `session` is absent. Incognito wins over background, because
+/// a RAM-only chat is already absent from the sidebar.
+async fn open_chat_session(
+    sessions: &liberado_main_agent::ChatSessions,
+    profiles: &crate::surfaces::ProfileCatalog,
+    session: Option<Ulid>,
+    incognito: bool,
+    background: bool,
+    profile: Option<&str>,
+) -> Result<Ulid, OpenChatError> {
+    let grant = resolve_chat_grant(profiles, profile).map_err(OpenChatError::Profile)?;
+    match session {
+        Some(id) => Ok(id),
+        None => create_chat_session(sessions, incognito, background, grant)
+            .await
+            .map_err(OpenChatError::Create),
+    }
+}
+
+/// Non-streaming refusal. A bad profile is `400`, the same status `POST /api/conversations` uses
+/// for this error. A store failure stays the shared `500`.
+fn chat_open_error(err: OpenChatError) -> axum::response::Response {
+    match err {
+        OpenChatError::Profile(error) => {
+            (StatusCode::BAD_REQUEST, Json(ApiError { error })).into_response()
+        }
+        OpenChatError::Create(e) => chat_error(e),
+    }
+}
+
+/// Streaming refusal. Both causes are one `failed` event, which is how this stream reports that
+/// it cannot start. Only a store failure is logged: a bad profile is the client's name, not a
+/// daemon fault.
+fn stream_open_error(
+    tx: mpsc::Sender<AgentEvent>,
+    rx: mpsc::Receiver<AgentEvent>,
+    err: OpenChatError,
+) -> axum::response::Response {
+    let msg = match err {
+        OpenChatError::Profile(msg) => msg,
+        OpenChatError::Create(e) => {
+            tracing::warn!(error = %e, "chat stream could not create a conversation");
+            e.to_string()
+        }
+    };
+    fail_stream_response(tx, rx, msg)
+}
+
 async fn chat_stream_core(
     state: Arc<AppState>,
     message: String,
@@ -259,28 +320,20 @@ async fn chat_stream_core(
     };
 
     // Resolve the session up front (creating one on the first message), so we can announce it to the
-    // client *before* the agent events. A creation failure becomes a single `failed` event.
-    // Resolve the requested profile before creating anything: an unknown name must fail the request
-    // rather than quietly open a chat on the default grant, which is wider than whatever was asked
-    // for. Same fail-closed rule the switch endpoint follows.
-    let grant = match resolve_chat_grant(&state.surfaces.profiles, profile.as_deref()) {
-        Ok(grant) => grant,
-        Err(msg) => return fail_stream_response(tx, rx, msg),
-    };
-
-    let session = match session {
-        Some(id) => id,
-        None => {
-            // Incognito wins over background when both are set: RAM-only already never lists.
-            // Background + grant is the conformance path (durable, out of sidebar, scoped).
-            match create_chat_session(&sessions, incognito, background, grant).await {
-                Ok(id) => id,
-                Err(e) => {
-                    tracing::warn!(error = %e, "chat stream could not create a conversation");
-                    return fail_stream_response(tx, rx, e.to_string());
-                }
-            }
-        }
+    // client *before* the agent events. A bad profile or a creation failure becomes a single
+    // `failed` event. The opener is shared with `POST /api/chat`.
+    let session = match open_chat_session(
+        &sessions,
+        &state.surfaces.profiles,
+        session,
+        incognito,
+        background,
+        profile.as_deref(),
+    )
+    .await
+    {
+        Ok(id) => id,
+        Err(err) => return stream_open_error(tx, rx, err),
     };
 
     // Now that the conversation has an id, a model asked for on the request becomes a pick scoped to
@@ -496,12 +549,21 @@ pub async fn chat(
             .into_response();
     };
 
-    let session = match req.session {
-        Some(id) => id,
-        None => match sessions.create(None).await {
-            Ok(id) => id,
-            Err(e) => return chat_error(e),
-        },
+    // Same opener as the stream: profile, incognito, and background describe how to create a
+    // conversation. `sessions.create(None)` here used to drop all three and run the turn on the
+    // default grant.
+    let session = match open_chat_session(
+        sessions,
+        &state.surfaces.profiles,
+        req.session,
+        req.incognito,
+        req.background,
+        req.profile.as_deref(),
+    )
+    .await
+    {
+        Ok(id) => id,
+        Err(err) => return chat_open_error(err),
     };
 
     // Same rule as the streaming path: the model rides the message, scoped to the conversation the
@@ -924,3 +986,7 @@ mod endpoint_tests;
 #[cfg(test)]
 #[path = "chat_history_http_tests.rs"]
 mod history_http_tests;
+
+#[cfg(test)]
+#[path = "chat_open_http_tests.rs"]
+mod open_http_tests;
