@@ -12,7 +12,7 @@ use liberado_config::{
     UnmappedPolicy, WeeklySpendingConfig, has_enabled_weekly_schedule, weekly_open_clock,
 };
 
-use crate::weekly_push::{WeekReport, WeekSender};
+use crate::weekly_push::{WeekPush, WeekReport, WeekSender};
 
 const TITLE: &str = "Weekly spending";
 
@@ -476,6 +476,41 @@ impl SpendingSource for HttpBudget {
         crate::weekly_net::BudgetHttp::new(&self.client, &self.base, &self.key)
             .fetch(start, end, exclude)
             .await
+    }
+}
+
+impl crate::Daemon {
+    pub(crate) fn catch_up_weekly_spending(&self) {
+        if !self.weekly_catchup {
+            return;
+        }
+        self.spawn_weekly(RunMode::Send);
+    }
+
+    pub(crate) fn spawn_weekly(&self, mode: RunMode) {
+        if !self.weekly_spending.enabled {
+            tracing::info!("weekly spending is off");
+            return;
+        }
+        let Some(sender) = self.week_sender() else {
+            tracing::info!("weekly spending has no outbox");
+            return;
+        };
+        let now = local_now(self.fixed_now, &self.weekly_spending.timezone);
+        let cfg = self.weekly_spending.clone();
+        let hour = self.weekly_open_hour;
+        let minute = self.weekly_open_minute;
+        let source = self.spending_source.clone();
+        tokio::spawn(run_weekly_job(cfg, now, hour, minute, source, sender, mode));
+    }
+
+    fn week_sender(&self) -> Option<Arc<dyn WeekSender>> {
+        let outbox = self.outbox.clone()?;
+        let keys = self
+            .outbox_delivery
+            .as_ref()
+            .and_then(|delivery| delivery.vapid_keys());
+        Some(Arc::new(WeekPush::new(outbox, keys)))
     }
 }
 

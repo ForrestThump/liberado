@@ -46,15 +46,7 @@ impl VapidMaterial {
 }
 
 /// Build keys from caller-supplied material. Tests use this so they do not read the environment.
-pub fn keys_from_parts(
-    public_b64: &str,
-    private_b64: &str,
-    subject: &str,
-) -> Result<VapidMaterial, String> {
-    from_parts(public_b64, private_b64, subject)
-}
-
-pub(crate) fn from_parts(
+pub fn from_parts(
     public_b64: &str,
     private_b64: &str,
     subject: &str,

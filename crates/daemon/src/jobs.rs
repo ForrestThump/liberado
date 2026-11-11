@@ -226,43 +226,6 @@ impl Daemon {
         }
     }
 
-    fn catch_up_weekly_spending(&self) {
-        if !self.weekly_catchup {
-            return;
-        }
-        self.spawn_weekly(crate::weekly_spending::RunMode::Send);
-    }
-
-    fn spawn_weekly(&self, mode: crate::weekly_spending::RunMode) {
-        if !self.weekly_spending.enabled {
-            tracing::info!("weekly spending is off");
-            return;
-        }
-        let Some(sender) = self.week_sender() else {
-            tracing::info!("weekly spending has no outbox");
-            return;
-        };
-        let now = crate::weekly_spending::local_now(self.fixed_now, &self.weekly_spending.timezone);
-        let cfg = self.weekly_spending.clone();
-        let hour = self.weekly_open_hour;
-        let minute = self.weekly_open_minute;
-        let source = self.spending_source.clone();
-        tokio::spawn(crate::weekly_spending::run_weekly_job(
-            cfg, now, hour, minute, source, sender, mode,
-        ));
-    }
-
-    fn week_sender(&self) -> Option<std::sync::Arc<dyn crate::weekly_push::WeekSender>> {
-        let outbox = self.outbox.clone()?;
-        let keys = self
-            .outbox_delivery
-            .as_ref()
-            .and_then(|delivery| delivery.vapid_keys());
-        Some(std::sync::Arc::new(crate::weekly_push::WeekPush::new(
-            outbox, keys,
-        )))
-    }
-
     pub(crate) fn send_reminder(
         &self,
         text: &str,

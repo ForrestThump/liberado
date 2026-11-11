@@ -14,7 +14,7 @@ pub use send::{
     DEFAULT_SNOOZE_MINUTES, PushAttemptIds, PushDelivery, PushRequest, REMINDER_TTL,
     ReminderPushInput, notification_url, post_push, reminder_payload,
 };
-pub use vapid::{keys_from_parts, vapid_env_lines};
+pub use vapid::{from_parts as keys_from_parts, vapid_env_lines};
 
 use vapid::VapidMaterial;
 

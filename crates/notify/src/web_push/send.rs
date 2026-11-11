@@ -212,20 +212,23 @@ async fn post(
 ) -> Result<reqwest::StatusCode, String> {
     let prepared = prepare(keys, request)?;
     let client = http_client()?;
-    let response = with_topic(
-        client
-            .post(request.endpoint)
-            .header("Content-Type", "application/octet-stream")
-            .header("Content-Encoding", "aes128gcm")
-            .header("TTL", prepared.ttl.to_string())
-            .header("Urgency", prepared.urgency)
-            .header("Authorization", prepared.authorization),
-        prepared.topic.as_deref(),
-    )
-    .body(prepared.body)
-    .send()
-    .await
-    .map_err(transport_error)?;
+    let mut builder = client
+        .post(request.endpoint)
+        .header("Content-Type", "application/octet-stream")
+        .header("Content-Encoding", "aes128gcm")
+        .header("TTL", prepared.ttl.to_string())
+        .header("Urgency", prepared.urgency)
+        .header("Authorization", prepared.authorization);
+    if let Some(topic) = prepared.topic.as_deref()
+        && !topic.is_empty()
+    {
+        builder = builder.header("Topic", topic);
+    }
+    let response = builder
+        .body(prepared.body)
+        .send()
+        .await
+        .map_err(transport_error)?;
     Ok(response.status())
 }
 
@@ -258,13 +261,6 @@ fn fresh_salt() -> Result<[u8; 16], String> {
         .fill(&mut salt)
         .map_err(|_| "salt failed".to_string())?;
     Ok(salt)
-}
-
-fn with_topic(builder: reqwest::RequestBuilder, topic: Option<&str>) -> reqwest::RequestBuilder {
-    match topic {
-        Some(topic) if !topic.is_empty() => builder.header("Topic", topic),
-        _ => builder,
-    }
 }
 
 fn http_client() -> Result<reqwest::Client, String> {
