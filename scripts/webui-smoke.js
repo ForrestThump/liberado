@@ -519,24 +519,40 @@ class CdpSession {
   }
 }
 
-async function waitForDebugTargets(debugPort) {
-  for (let attempt = 0; attempt < 40; attempt++) {
-    try {
+async function waitForDebugTargets(debugPort, opts = {}) {
+  const attempts = opts.attempts ?? 120;
+  const pause = opts.pause ?? sleep;
+  const intervalMs = opts.intervalMs ?? 250;
+  const probe =
+    opts.probe ??
+    (async () => {
       const resp = await fetch(`http://127.0.0.1:${debugPort}/json/list`);
-      const text = await resp.text();
-      if (text.trim().startsWith('[')) {
+      return resp.text();
+    });
+  const alive = opts.alive ?? (() => true);
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    if (!alive()) {
+      const detail =
+        typeof opts.deadMessage === 'function' ? opts.deadMessage() : opts.deadMessage;
+      throw new Error(
+        detail || `Chrome debug port ${debugPort} exited before it was ready`,
+      );
+    }
+    try {
+      const text = await probe();
+      if (typeof text === 'string' && text.trim().startsWith('[')) {
         return JSON.parse(text);
       }
     } catch {
       // Chrome not listening yet.
     }
-    await sleep(250);
+    await pause(intervalMs);
   }
   throw new Error(`Chrome debug port ${debugPort} did not become ready`);
 }
 
-async function connectCdp(debugPort, pageUrl) {
-  let targets = await waitForDebugTargets(debugPort);
+async function connectCdp(debugPort, pageUrl, waitOpts) {
+  let targets = await waitForDebugTargets(debugPort, waitOpts);
   let target = targets.find(
     (t) => t.type === 'page' && t.url && t.url.startsWith(pageUrl),
   );
@@ -1365,8 +1381,8 @@ async function ensureNotificationsGranted(cdp, origin) {
   }
 }
 
-async function runScenario(origin, debugPort, stubState) {
-  const cdp = await connectCdp(debugPort, origin);
+async function runScenario(origin, debugPort, stubState, waitOpts) {
+  const cdp = await connectCdp(debugPort, origin, waitOpts);
   let phase = 'normal';
 
   cdp.onEvent((msg) => {
@@ -1471,6 +1487,7 @@ async function main() {
   const { server, port, origin } = await startStaticServer(stubState);
   const debugPort = 9333 + (port % 1000);
 
+  let chromeLog = '';
   const chrome = spawn(
     CHROME,
     [
@@ -1482,8 +1499,13 @@ async function main() {
       `--remote-debugging-port=${debugPort}`,
       `${origin}/`,
     ],
-    { stdio: 'ignore' },
+    { stdio: ['ignore', 'pipe', 'pipe'] },
   );
+  const keepLog = (chunk) => {
+    chromeLog = (chromeLog + chunk.toString()).slice(-2000);
+  };
+  chrome.stdout.on('data', keepLog);
+  chrome.stderr.on('data', keepLog);
 
   const cleanup = () => {
     server.close();
@@ -1495,7 +1517,11 @@ async function main() {
   await sleep(1500);
 
   try {
-    await runScenario(origin, debugPort, stubState);
+    await runScenario(origin, debugPort, stubState, {
+      alive: () => chrome.exitCode === null,
+      deadMessage: () =>
+        `Chrome exited (${chrome.exitCode}) before debug port ${debugPort} was ready.\n${chromeLog}`,
+    });
   } finally {
     cleanup();
   }
@@ -1516,7 +1542,11 @@ async function main() {
   console.log('webui-smoke: ok');
 }
 
-main().catch((err) => {
-  console.error(err);
-  process.exit(1);
-});
+if (require.main === module) {
+  main().catch((err) => {
+    console.error(err);
+    process.exit(1);
+  });
+}
+
+module.exports = { waitForDebugTargets };
