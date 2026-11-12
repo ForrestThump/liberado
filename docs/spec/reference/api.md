@@ -157,7 +157,12 @@ either by the `session` field on the chat request body (`POST`) or the `?session
 omitting it starts a new conversation, whose id the `session` event then reports back so the client
 can continue it. Conversation history is rehydrated from the store each turn and persisted on success
 (see *Persistence* below). The non-streaming `POST /api/chat` mirrors this: its response is
-`{"reply","session"}`, so a client learns the id there too.
+`{"reply","session"}`, so a client learns the id there too. It opens the conversation with the
+same rules as the stream. `incognito`, `background`, and `profile` apply only when `session` is
+absent. `incognito` wins over `background`. A resolved `profile` is the session grant. An unknown
+or disabled `profile` creates nothing: this endpoint returns HTTP 400 and `{"error"}`, and the
+stream puts that same text on a `failed` event. A `profile` sent with an existing `session` does
+not retarget that conversation; an unknown name still fails the request.
 
 Two read endpoints back the conversation sidebar: **`GET /api/conversations`** lists every
 conversation header (`[{id,title,created_at,project?,pending_model?}]`, newest first), and
@@ -308,8 +313,9 @@ Properties that make this client-agnostic:
 - **Stateless client** — the server owns the conversation; a client reconnecting just sends the next
   message.
 
-A non-streaming `POST /api/chat` (`{message} → {reply}`) is kept as a simple fallback for clients
-that don't want to stream.
+A non-streaming `POST /api/chat` (`{message} → {reply, session}`) is kept as a simple fallback for
+clients that don't want to stream. It uses the same session-opening rules as the stream, including
+`profile`, `incognito`, and `background`.
 
 ## Interface roadmap
 

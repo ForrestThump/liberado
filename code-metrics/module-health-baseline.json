@@ -4901,6 +4901,12 @@
     "functions": 16,
     "cyclomatic": 18
   },
+  "crates/server/src/api/chat_open_http_tests.rs": {
+    "ploc": 242,
+    "lloc": 106,
+    "functions": 15,
+    "cyclomatic": 27
+  },
   "crates/server/src/api/chat_patch.rs": {
     "ploc": 121,
     "lloc": 27,
