@@ -463,8 +463,10 @@ the same resolved row `GET /api/outbox/{id}` returns.
 
 Additional fields include `kind`, `outbox_id`, `due_at` (RFC 3339 UTC), `late`, `source`, and
 digest `items`. Outbox rows store nullable `kind`, `source_json`, `resolution`, and `resolved_at`.
-Schema v4 adds `task_completions`, `task_snapshot`, and `task_file_state` (a content hash so an
-unchanged note is skipped) in the same `liberado.db`. Completion
+Schema v4 adds `push_subscriptions.last_sent_week`. Schema v5 adds `task_completions`,
+`task_snapshot`, and `task_file_state` (a content hash so an unchanged note is skipped)
+in the same `liberado.db`. A database already stamped v4 keeps `last_sent_week` and gains
+the completion tables. Completion
 rows are not pruned. `precision` is `tap` (Done time, to the second), `tick` (the minute the
 file change was seen, plus sync delay), or `date` (local noon of a ✅ date that is earlier
 than the detection date). `GET /api/completions` is the read API. A line containing 🔁 is not
