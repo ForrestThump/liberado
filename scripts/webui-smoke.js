@@ -10,6 +10,7 @@
 
 const http = require('node:http');
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
 
@@ -548,7 +549,47 @@ async function waitForDebugTargets(debugPort, opts = {}) {
     }
     await pause(intervalMs);
   }
-  throw new Error(`Chrome debug port ${debugPort} did not become ready`);
+  const detail = typeof opts.detail === 'function' ? opts.detail() : opts.detail;
+  const extra = detail ? `\n${detail}` : '';
+  throw new Error(`Chrome debug port ${debugPort} did not become ready${extra}`);
+}
+
+function chromeLaunchArgs(debugPort, origin, userDataDir) {
+  return [
+    '--headless=new',
+    '--disable-gpu',
+    '--no-sandbox',
+    '--disable-dev-shm-usage',
+    '--disable-software-rasterizer',
+    '--disable-extensions',
+    '--no-first-run',
+    '--no-default-browser-check',
+    '--window-size=412,915',
+    `--user-data-dir=${userDataDir}`,
+    '--remote-debugging-address=127.0.0.1',
+    `--remote-debugging-port=${debugPort}`,
+    `${origin}/`,
+  ];
+}
+
+function isChromeStartupFailure(err) {
+  const message = err && err.message ? err.message : String(err);
+  return message.includes('did not become ready') || message.includes('before debug port');
+}
+
+async function retryChromeStartup(run, attempts = 2) {
+  let last;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      return await run(i);
+    } catch (err) {
+      last = err;
+      if (i === attempts - 1 || !isChromeStartupFailure(err)) {
+        throw err;
+      }
+    }
+  }
+  throw last;
 }
 
 async function connectCdp(debugPort, pageUrl, waitOpts) {
@@ -1486,41 +1527,43 @@ async function main() {
   const stubState = createStubState();
   const { server, port, origin } = await startStaticServer(stubState);
   const debugPort = 9333 + (port % 1000);
-
-  let chromeLog = '';
-  const chrome = spawn(
-    CHROME,
-    [
-      '--headless=new',
-      '--disable-gpu',
-      '--no-sandbox',
-      '--disable-dev-shm-usage',
-      '--window-size=412,915',
-      `--remote-debugging-port=${debugPort}`,
-      `${origin}/`,
-    ],
-    { stdio: ['ignore', 'pipe', 'pipe'] },
-  );
-  const keepLog = (chunk) => {
-    chromeLog = (chromeLog + chunk.toString()).slice(-2000);
+  let active = null;
+  const stopChrome = () => {
+    if (!active) {
+      return;
+    }
+    active.chrome.kill('SIGKILL');
+    fs.rmSync(active.userDataDir, { recursive: true, force: true });
+    active = null;
   };
-  chrome.stdout.on('data', keepLog);
-  chrome.stderr.on('data', keepLog);
-
   const cleanup = () => {
     server.close();
-    chrome.kill('SIGKILL');
+    stopChrome();
   };
   process.on('exit', cleanup);
   process.on('SIGINT', () => process.exit(1));
 
-  await sleep(1500);
-
   try {
-    await runScenario(origin, debugPort, stubState, {
-      alive: () => chrome.exitCode === null,
-      deadMessage: () =>
-        `Chrome exited (${chrome.exitCode}) before debug port ${debugPort} was ready.\n${chromeLog}`,
+    await retryChromeStartup(async () => {
+      stopChrome();
+      const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'liberado-webui-smoke-'));
+      let chromeLog = '';
+      const chrome = spawn(CHROME, chromeLaunchArgs(debugPort, origin, userDataDir), {
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+      active = { chrome, userDataDir };
+      const keepLog = (chunk) => {
+        chromeLog = (chromeLog + chunk.toString()).slice(-2000);
+      };
+      chrome.stdout.on('data', keepLog);
+      chrome.stderr.on('data', keepLog);
+      await sleep(1500);
+      await runScenario(origin, debugPort, stubState, {
+        alive: () => chrome.exitCode === null,
+        deadMessage: () =>
+          `Chrome exited (${chrome.exitCode}) before debug port ${debugPort} was ready.\n${chromeLog}`,
+        detail: () => chromeLog,
+      });
     });
   } finally {
     cleanup();
@@ -1549,4 +1592,9 @@ if (require.main === module) {
   });
 }
 
-module.exports = { waitForDebugTargets };
+module.exports = {
+  waitForDebugTargets,
+  chromeLaunchArgs,
+  isChromeStartupFailure,
+  retryChromeStartup,
+};
