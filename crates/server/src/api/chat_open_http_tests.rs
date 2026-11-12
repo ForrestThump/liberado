@@ -24,7 +24,9 @@ vault_path = "/tmp/vault"
 
 [[topology.session_profiles]]
 name = "budget-bot"
-model = "budget/small"
+# A bare slug. The daemon default provider's default_model has no '/'.
+# A vendor/model id here fails load unless the profile names a provider that accepts one.
+model = "budget-small"
 prompt_append = "Stay inside the budget."
 read = ["finance"]
 
@@ -156,7 +158,7 @@ async fn post_chat_with_a_profile_stores_that_grant() {
     let id = session_id(&body);
     let header = h.state.sessions.session(id).await.unwrap();
     assert_eq!(header.grant.profile.as_deref(), Some("budget-bot"));
-    assert_eq!(header.grant.model.as_deref(), Some("budget/small"));
+    assert_eq!(header.grant.model.as_deref(), Some("budget-small"));
     assert_eq!(
         header.grant.prompt_append.as_deref(),
         Some("Stay inside the budget.")
