@@ -11,14 +11,19 @@ use liberado_provider::Role;
 /// JSON `error` for `POST /api/chat`.
 ///
 /// A missing conversation is a store `NotFound` before any model call. The
-/// client needs that text. A turn that ran and failed stays on the fixed
-/// public sentence, so a provider URL cannot reach the response.
-pub(super) fn client_turn_error(err: &liberado_main_agent::SessionError) -> String {
+/// client needs that text. A turn that ran and failed uses the same sentence as
+/// the transcript note. A model rejection names the profile and the model. The
+/// provider body stays out of the response.
+pub(super) async fn client_turn_error(
+    sessions: &liberado_main_agent::ChatSessions,
+    session: liberado_conversation_store::Ulid,
+    err: &liberado_main_agent::SessionError,
+) -> String {
     match err {
         liberado_main_agent::SessionError::Store(
             liberado_conversation_store::StoreError::NotFound(_),
         ) => liberado_common::redact_secrets(&err.to_string()),
-        _ => liberado_main_agent::public_turn_failure(err).to_string(),
+        _ => liberado_main_agent::public_failure_text(sessions, session, err).await,
     }
 }
 

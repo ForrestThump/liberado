@@ -11,6 +11,7 @@ mod api;
 mod builder;
 mod config;
 mod config_builtin_editor;
+mod config_model_route;
 mod config_profile_provider;
 mod config_readonly_delegation;
 mod config_tuning_bounds;

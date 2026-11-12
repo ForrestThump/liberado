@@ -585,7 +585,7 @@ pub async fn chat(
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(ApiError {
-                    error: chat_wire::client_turn_error(&e),
+                    error: chat_wire::client_turn_error(sessions, session, &e).await,
                 }),
             )
                 .into_response()

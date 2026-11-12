@@ -181,6 +181,9 @@ pub struct RoleOverride {
     /// Model slug to send for this role (e.g. `"deepseek/deepseek-v3-flash"`). `None` → the
     /// provider profile's env/default model. Free-form (any slug the backend accepts), like the
     /// `*_MODEL` env vars — not required to be a declared `[[topology.models]]` entry.
+    ///
+    /// An id that contains `/` fails load unless this role's provider (or `topology.provider`)
+    /// has a `default_model` that also contains `/`. Startup does not call `list_models`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
     /// Sampling temperature for this role. When set, it **overrides** the per-call temperature
@@ -546,6 +549,9 @@ pub struct ProviderFallback {
     pub provider: String,
     /// Model slug to use on the fallback provider, overriding that provider's `default_model`
     /// (or its `model_env`, if set). `None` keeps the fallback provider's own default.
+    ///
+    /// A slug that contains `/` fails load unless this fallback provider's `default_model`
+    /// also contains `/`. Catalogs are not fetched at startup (`validate_model_routes`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
     /// HTTP status codes that trigger fallback. Defaults to the transient/usage set documented
@@ -767,6 +773,10 @@ pub struct SessionProfile {
     #[serde(default)]
     pub delegation: Option<bool>,
     /// Model to pin for sessions under this profile. `None` = the daemon's current face model.
+    ///
+    /// An id that contains `/` fails load when the provider that would receive it (this
+    /// profile's `provider`, or `topology.provider`) has a `default_model` with no `/`.
+    /// Startup does not call `list_models` (`validate_model_routes`).
     #[serde(default)]
     pub model: Option<String>,
     /// `[[providers]]` entry this profile's model is sent to. `None` keeps

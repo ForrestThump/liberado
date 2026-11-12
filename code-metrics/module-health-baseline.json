@@ -2171,6 +2171,18 @@
     "functions": 3,
     "cyclomatic": 5
   },
+  "crates/config-loader/src/model/config_model_route.rs": {
+    "ploc": 152,
+    "lloc": 29,
+    "functions": 13,
+    "cyclomatic": 35
+  },
+  "crates/config-loader/src/model/config_model_route_tests.rs": {
+    "ploc": 206,
+    "lloc": 77,
+    "functions": 14,
+    "cyclomatic": 15
+  },
   "crates/config-loader/src/model/config_profile_provider.rs": {
     "ploc": 51,
     "lloc": 12,
