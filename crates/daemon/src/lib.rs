@@ -37,6 +37,7 @@ pub use weekly_spending::{
 };
 
 pub use types::{Daemon, DaemonError, Reaction, ReactionOutcome, VAULT_NOTE_CHANGED};
+pub use vault_pings::record_vault_task_completions;
 
 use std::collections::HashMap;
 use std::path::PathBuf;

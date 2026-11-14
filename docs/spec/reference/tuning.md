@@ -290,11 +290,14 @@ dot directories, `.trash`, `00 - Meta`, `Legal`, and `proposals` are not read.
 
 The clock on a logged row is one of three precisions:
 
-- `tap` — you pressed Done in Liberado. The time is that press, to the second. For a normal
-  line, Done checks the box and the next tick writes the row, copying the Done time when that
-  outbox row was resolved in the last 15 minutes. For a line that contains 🔁, Done does not
-  check the box. It writes the row immediately and leaves the vault line open, so the series
-  does not end. The next tick does not write a second row for that press.
+- `tap` — you pressed Done in Liberado. The time is that press, to the second. For a one-off
+  line, Done checks the box and appends ` ✅ YYYY-MM-DD` for that press's local date, after
+  the other task fields and before a trailing `^block-id`. A line that already has ✅ is not
+  stamped again. The next tick writes the row, copying the Done time when that outbox row
+  was resolved in the last 15 minutes, and stores the written ✅ date on that same row. For
+  a line that contains 🔁, Done does not check the box and does not add ✅. It writes the
+  row immediately and leaves the vault line open, so the series does not end. The next tick
+  does not write a second row for that press.
 - `tick` — the box was checked in Obsidian (or another editor) and the minute tick saw the
   file change. The time is the detection time. That is about a minute after the file lands,
   plus Syncthing lag: seconds when both devices are online, hours when the phone was offline.
