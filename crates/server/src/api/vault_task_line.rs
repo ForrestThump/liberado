@@ -1,4 +1,9 @@
 //! Match vault task lines to stored `OutboxSource::VaultNote` text.
+//!
+//! A one-off Done checks the box and inserts the Obsidian Tasks done date.
+//! The plugin's `TaskLayoutComponent` order writes `DoneDate` immediately
+//! before `BlockLink`, after every other field. A line that already contains
+//! ✅ is not stamped again. A 🔁 line is not edited.
 
 use liberado_outbox::{line_is_recurring, strip_task_metadata, task_identity_key};
 
@@ -27,13 +32,17 @@ pub enum TaskLineOutcome {
     Recurring { identity: String },
 }
 
-pub fn plan_task_edit(content: &str, task_text: &str) -> Result<TaskLineOutcome, String> {
+pub fn plan_task_edit(
+    content: &str,
+    task_text: &str,
+    done_date: &str,
+) -> Result<TaskLineOutcome, String> {
     let needle = task_text.trim();
     if needle.is_empty() {
         return Err("task text is empty".into());
     }
     match choose_line(content, needle)? {
-        LineChoice::Open(index) => plan_open(content, index),
+        LineChoice::Open(index) => plan_open(content, index, done_date),
         LineChoice::Closed(index) => plan_closed(content, index),
     }
 }
@@ -77,12 +86,14 @@ fn closed_indexes(matches: &[LineMatch]) -> Vec<usize> {
         .collect()
 }
 
-fn plan_open(content: &str, index: usize) -> Result<TaskLineOutcome, String> {
+fn plan_open(content: &str, index: usize, done_date: &str) -> Result<TaskLineOutcome, String> {
     let line = line_at(content, index)?;
     if line_is_recurring(line) {
         return Ok(recurring(line));
     }
-    Ok(TaskLineOutcome::Write(toggle_line_at(content, index)?))
+    Ok(TaskLineOutcome::Write(toggle_line_at(
+        content, index, done_date,
+    )?))
 }
 
 fn plan_closed(content: &str, index: usize) -> Result<TaskLineOutcome, String> {
@@ -184,18 +195,80 @@ fn checkbox_tail(line: &str) -> Option<(CheckboxState, usize)> {
     line.find("[X]").map(|idx| (CheckboxState::Closed, idx + 3))
 }
 
-fn toggle_line_at(content: &str, index: usize) -> Result<String, String> {
+fn toggle_line_at(content: &str, index: usize, done_date: &str) -> Result<String, String> {
     let mut lines: Vec<String> = content.lines().map(str::to_string).collect();
     let line = lines
         .get(index)
         .ok_or_else(|| "line out of range".to_string())?;
-    let updated = replace_open_checkbox(line)?;
-    lines[index] = updated;
+    let checked = replace_open_checkbox(line)?;
+    lines[index] = append_done_date(&checked, done_date);
     let mut out = lines.join("\n");
     if content.ends_with('\n') {
         out.push('\n');
     }
     Ok(out)
+}
+
+/// Insert ` ✅ YYYY-MM-DD` where Obsidian Tasks writes the done date.
+///
+/// The plugin layout puts that field immediately before a trailing `^block-id`.
+/// The rest of the line stays as written, including a due time the plugin
+/// serializer would drop. A second ✅ is not added.
+fn append_done_date(line: &str, done_date: &str) -> String {
+    if line.contains('✅') {
+        return line.to_string();
+    }
+    let (body, trailing) = split_trailing_whitespace(line);
+    let (head, block) = peel_trailing_block(body);
+    let mut out = String::with_capacity(line.len() + done_date.len() + 4);
+    push_done_stamp(&mut out, head, done_date, block);
+    out.push_str(trailing);
+    out
+}
+
+fn push_done_stamp(out: &mut String, head: &str, done_date: &str, block: Option<&str>) {
+    out.push_str(head.trim_end());
+    out.push_str(" ✅ ");
+    out.push_str(done_date);
+    if let Some(block) = block {
+        out.push(' ');
+        out.push_str(block);
+    }
+}
+
+fn split_trailing_whitespace(line: &str) -> (&str, &str) {
+    let end = line.trim_end().len();
+    (&line[..end], &line[end..])
+}
+
+fn peel_trailing_block(line: &str) -> (&str, Option<&str>) {
+    let Some((head, token)) = split_last_token(line) else {
+        return (line, None);
+    };
+    if is_block_token(token) {
+        (head, Some(token))
+    } else {
+        (line, None)
+    }
+}
+
+fn split_last_token(line: &str) -> Option<(&str, &str)> {
+    let idx = line.rfind(char::is_whitespace)?;
+    let token_start = idx + line[idx..].chars().next()?.len_utf8();
+    if token_start >= line.len() {
+        return None;
+    }
+    Some((&line[..token_start], &line[token_start..]))
+}
+
+fn is_block_token(token: &str) -> bool {
+    let Some(rest) = token.strip_prefix('^') else {
+        return false;
+    };
+    !rest.is_empty()
+        && rest
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_')
 }
 
 fn replace_open_checkbox(line: &str) -> Result<String, String> {
@@ -215,82 +288,5 @@ fn replace_open_checkbox(line: &str) -> Result<String, String> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn toggle_open_task_line(content: &str, task_text: &str) -> Result<String, String> {
-        match plan_task_edit(content, task_text)? {
-            TaskLineOutcome::Write(text) => Ok(text),
-            TaskLineOutcome::Recurring { .. } => Ok(content.to_string()),
-        }
-    }
-
-    #[test]
-    fn empty_checkbox_does_not_match_nonempty_task() {
-        let note = "- [ ]\n";
-        assert!(toggle_open_task_line(note, "Call dentist").is_err());
-    }
-
-    #[test]
-    fn prefix_only_line_does_not_match_longer_task() {
-        let note = "- [ ] Call\n";
-        assert!(toggle_open_task_line(note, "Call dentist").is_err());
-    }
-
-    #[test]
-    fn indented_task_matches_stored_text() {
-        let note = "  - [ ] Call dentist\n";
-        let out = toggle_open_task_line(note, "Call dentist").unwrap();
-        assert!(out.contains("- [x] Call dentist"));
-    }
-
-    #[test]
-    fn already_checked_is_idempotent() {
-        let note = "- [x] Call dentist\n";
-        let out = toggle_open_task_line(note, "Call dentist").unwrap();
-        assert_eq!(out, note);
-    }
-
-    #[test]
-    fn ambiguous_open_lines_error() {
-        let note = "- [ ] Call dentist\n- [ ] Call dentist\n";
-        assert!(toggle_open_task_line(note, "Call dentist").is_err());
-    }
-
-    #[test]
-    fn text_changed_line_does_not_match() {
-        let note = "- [ ] Call doctor\n";
-        assert!(toggle_open_task_line(note, "Call dentist").is_err());
-    }
-
-    #[test]
-    fn metadata_after_description_still_matches() {
-        let note = "- [ ] Call dentist 📅 2026-11-01\n";
-        let out = toggle_open_task_line(note, "Call dentist").unwrap();
-        assert!(out.contains("- [x] Call dentist"));
-    }
-
-    #[test]
-    fn ordered_list_open_task_matches() {
-        let note = "1. [ ] Call dentist\n";
-        let out = toggle_open_task_line(note, "Call dentist").unwrap();
-        assert!(out.contains("1. [x] Call dentist"));
-    }
-
-    #[test]
-    fn star_bullet_task_matches() {
-        let note = "* [ ] Call dentist\n";
-        let out = toggle_open_task_line(note, "Call dentist").unwrap();
-        assert!(out.contains("* [x] Call dentist"));
-    }
-
-    #[test]
-    fn a_recurring_line_is_left_unchanged_and_keeps_its_identity() {
-        let note = "- [ ] Call dentist 🔁 every day\n";
-        match plan_task_edit(note, "Call dentist").unwrap() {
-            TaskLineOutcome::Recurring { identity } => assert_eq!(identity, "Call dentist"),
-            TaskLineOutcome::Write(text) => panic!("rewrote the line: {text}"),
-        }
-        assert_eq!(toggle_open_task_line(note, "Call dentist").unwrap(), note);
-    }
-}
+#[path = "vault_task_line_tests.rs"]
+mod tests;

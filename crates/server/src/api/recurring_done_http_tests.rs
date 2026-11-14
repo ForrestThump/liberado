@@ -8,9 +8,11 @@ use axum::{
     http::{Request, StatusCode},
 };
 use chrono::Utc;
+use liberado_common::UserTimezone;
+use liberado_config::VaultRemindersConfig;
 use liberado_outbox::{
     EnqueueOutcome, NewReminder, Outbox, OutboxSource, PRECISION_TAP, RES_COMPLETED,
-    SOURCE_LIBERADO, TASK_DUE,
+    SOURCE_LIBERADO, TASK_DUE, local_date_of,
 };
 use tower::ServiceExt;
 
@@ -179,12 +181,111 @@ async fn a_normal_done_checks_the_line_and_does_not_insert_the_log_row() {
     let vault = tempfile::tempdir().unwrap();
     note(vault.path(), "- [ ] Call dentist\n");
     let app = app(outbox.clone(), vault.path().to_path_buf()).await;
+    let before = local_date_of(Utc::now(), "America/Chicago");
+    let response = app
+        .oneshot(owner_post(&format!("/api/outbox/{id}/complete")))
+        .await
+        .unwrap();
+    let after = local_date_of(Utc::now(), "America/Chicago");
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    let text = std::fs::read_to_string(vault.path().join("Tasks/Inbox.md")).unwrap();
+    let stamped = text == format!("- [x] Call dentist ✅ {before}\n")
+        || text == format!("- [x] Call dentist ✅ {after}\n");
+    assert!(stamped, "{text}");
+    assert!(outbox.list_completions(None, 10).unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn a_one_off_done_stamps_the_line_and_the_next_tick_logs_one_tap_row() {
+    let dir = tempfile::tempdir().unwrap();
+    let outbox = Arc::new(Outbox::open(&dir.path().join("liberado.db")).unwrap());
+    let (id, _) = deliver(&outbox, task("plain", "Call dentist"));
+    let vault = tempfile::tempdir().unwrap();
+    let original = "- [ ] Call dentist 📅 2026-11-14 00:20 #task #remind\n";
+    note(vault.path(), original);
+    run_completions(vault.path(), &outbox);
+    assert!(outbox.list_completions(None, 10).unwrap().is_empty());
+
+    let before = local_date_of(Utc::now(), "America/Chicago");
+    let app = app(outbox.clone(), vault.path().to_path_buf()).await;
+    let response = app
+        .oneshot(owner_post(&format!("/api/outbox/{id}/complete")))
+        .await
+        .unwrap();
+    let after = local_date_of(Utc::now(), "America/Chicago");
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    let text = std::fs::read_to_string(vault.path().join("Tasks/Inbox.md")).unwrap();
+    let date = if text.contains(&format!(" ✅ {before}")) {
+        before
+    } else {
+        after
+    };
+    assert_eq!(
+        text,
+        format!("- [x] Call dentist 📅 2026-11-14 00:20 #task #remind ✅ {date}\n")
+    );
+
+    run_completions(vault.path(), &outbox);
+    let rows = outbox.list_completions(None, 10).unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].source, SOURCE_LIBERADO);
+    assert_eq!(rows[0].precision, PRECISION_TAP);
+    assert_eq!(rows[0].outbox_id, Some(id));
+    assert_eq!(rows[0].task_text, "Call dentist");
+    assert_eq!(rows[0].done_date.as_deref(), Some(date.as_str()));
+    assert_eq!(rows[0].local_date, date);
+    assert_eq!(rows[0].path, "Tasks/Inbox.md");
+}
+
+#[tokio::test]
+async fn a_recurring_done_stays_unchecked_and_the_next_tick_does_not_add_a_row() {
+    let dir = tempfile::tempdir().unwrap();
+    let outbox = Arc::new(Outbox::open(&dir.path().join("liberado.db")).unwrap());
+    let (id, _) = deliver(&outbox, task("recur-tick", "Stretch"));
+    let vault = tempfile::tempdir().unwrap();
+    let original = "- [ ] Stretch 🔁 every weekday\n";
+    note(vault.path(), original);
+    run_completions(vault.path(), &outbox);
+
+    let app = app(outbox.clone(), vault.path().to_path_buf()).await;
     let response = app
         .oneshot(owner_post(&format!("/api/outbox/{id}/complete")))
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::NO_CONTENT);
-    let text = std::fs::read_to_string(vault.path().join("Tasks/Inbox.md")).unwrap();
-    assert!(text.contains("- [x] Call dentist"), "{text}");
-    assert!(outbox.list_completions(None, 10).unwrap().is_empty());
+    assert_eq!(
+        std::fs::read_to_string(vault.path().join("Tasks/Inbox.md")).unwrap(),
+        original
+    );
+    assert_eq!(outbox.list_completions(None, 10).unwrap().len(), 1);
+
+    run_completions(vault.path(), &outbox);
+    let rows = outbox.list_completions(None, 10).unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].source, SOURCE_LIBERADO);
+    assert_eq!(rows[0].precision, PRECISION_TAP);
+    assert_eq!(rows[0].outbox_id, Some(id));
+    assert_eq!(rows[0].done_date, None);
+    assert!(
+        !std::fs::read_to_string(vault.path().join("Tasks/Inbox.md"))
+            .unwrap()
+            .contains('✅')
+    );
+}
+
+fn run_completions(vault: &std::path::Path, outbox: &Outbox) {
+    let settings = VaultRemindersConfig {
+        enabled: true,
+        completions: true,
+        ..VaultRemindersConfig::default()
+    };
+    let now = UserTimezone::default_zone().now().naive_local();
+    liberado_daemon::record_vault_task_completions(
+        vault,
+        now,
+        UserTimezone::default_zone().iana_name(),
+        &settings,
+        outbox,
+    )
+    .unwrap();
 }

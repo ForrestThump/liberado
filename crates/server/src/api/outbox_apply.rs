@@ -2,8 +2,9 @@
 //!
 //! The owner detail routes and the tray action route both apply these
 //! transitions. Vault tasks are checked off before the row is claimed, so a
-//! failed note write leaves the row open. The result log carries ids and
-//! timestamps only.
+//! failed note write leaves the row open. A one-off line also gains the
+//! Obsidian Tasks done date for the operator's local day. A 🔁 line is not
+//! edited. The result log carries ids and timestamps only.
 
 use axum::{
     Json,
@@ -257,7 +258,7 @@ async fn write_vault_task(
 ) -> Result<VaultWrite, ActionFail> {
     match &record.source {
         Some(OutboxSource::VaultNote { path, text, .. }) => {
-            complete_vault_task(&state.vault_path, path, text).await
+            complete_vault_task(state, path, text).await
         }
         _ => Err(ActionFail::internal("vault task missing source")),
     }
@@ -298,19 +299,25 @@ fn snooze_notice(state: &AppState, outbox: &liberado_outbox::Outbox, id: i64) ->
     }
 }
 
+fn done_local_date(state: &AppState) -> String {
+    let zone = super::outbox_detail::operator_zone(state);
+    liberado_outbox::local_date_of(Utc::now(), &zone)
+}
+
 async fn complete_vault_task(
-    vault_path: &str,
+    state: &AppState,
     rel_path: &str,
     task_text: &str,
 ) -> Result<VaultWrite, ActionFail> {
-    let vault = Vault::open("outbox-complete", vault_path)
+    let done_date = done_local_date(state);
+    let vault = Vault::open("outbox-complete", &state.vault_path)
         .await
         .map_err(|err| ActionFail::conflict(err.to_string()))?;
     let content = vault
         .read(rel_path)
         .await
         .map_err(|err| ActionFail::conflict(err.to_string()))?;
-    match plan_task_edit(&content, task_text).map_err(ActionFail::conflict)? {
+    match plan_task_edit(&content, task_text, &done_date).map_err(ActionFail::conflict)? {
         TaskLineOutcome::Recurring { identity } => Ok(VaultWrite::Recurring(identity)),
         TaskLineOutcome::Write(updated) => {
             let hash = Vault::content_hash(&content);

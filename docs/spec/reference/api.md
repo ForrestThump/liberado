@@ -428,7 +428,7 @@ on loopback if it can reach the bind address — scope MCP grants accordingly.
 | `GET /api/completions` | owner | Task-completion log. Query: `since` (RFC3339, optional) and `limit` (optional, default 100, maximum 500). Rows with `completed_at` at or after `since`, oldest first. Each row has `id`, `completed_at`, `local_date`, `precision` (`tap`, `tick`, or `date`), `source` (`liberado` or `obsidian`), `path`, `task_text`, `done_date`, `outbox_id`, `voided_at`, `detected_at`. Voided rows stay in the list with `voided_at` set. No credential: 401. A client token: 403. |
 | `GET /api/outbox/{id}` | owner | One outbox row for the notification detail page (`title`, `body`, `kind`, `due_at`, `late`, `source`, delivery/ack state, `resolution`, `resolved_at`, optional `snooze_until_local`, optional `obsidian_url`) |
 | `POST /api/outbox/{id}/retry` | owner | Retry a failed row |
-| `POST /api/outbox/{id}/complete` | owner | Mark a vault task done (`task_due` + `vault_note` source) or dismiss other kinds; sets `resolution` (`completed` or `dismissed`) when not already resolved (409 if resolved) |
+| `POST /api/outbox/{id}/complete` | owner | Mark a vault task done (`task_due` + `vault_note` source) or dismiss other kinds; sets `resolution` (`completed` or `dismissed`) when not already resolved (409 if resolved). A one-off line is checked and stamped ` ✅ YYYY-MM-DD` (operator local date, after other task fields, before a trailing `^block-id`). A 🔁 line is not checked and is not stamped. |
 | `POST /api/outbox/{id}/snooze` | owner | `{minutes}` — atomically resolve the row as `snoozed`, enqueue one follow-up due at now+minutes (not delivered until that due time), idempotency key `snooze/{id}` |
 | `POST /api/outbox/ack` | none | `{id, token}` from the push payload; sets `acked_at` only |
 | `POST /api/outbox/action` | none | `{id, token, action, minutes?}` — `action` is `done` or `snooze`. The per-row push token must match that row. `done` completes the source vault task. `snooze` uses `minutes`, or 15 when `minutes` is omitted. Same row transitions as the owner complete and snooze routes. Wrong or unknown token: 403, no change. Already resolved: 409. Unknown action, bad minutes, or a row that is not a completable vault task: 400, no change. Success JSON is `{notice}` |
@@ -469,8 +469,12 @@ in the same `liberado.db`. A database already stamped v4 keeps `last_sent_week` 
 the completion tables. Completion
 rows are not pruned. `precision` is `tap` (Done time, to the second), `tick` (the minute the
 file change was seen, plus sync delay), or `date` (local noon of a ✅ date that is earlier
-than the detection date). `GET /api/completions` is the read API. A line containing 🔁 is not
-checked by Done; the tap row is written at the press and the vault line stays open.
+than the detection date). `GET /api/completions` is the read API. Done on a one-off line
+checks the box and appends ` ✅ YYYY-MM-DD` for the operator's local date, after the other
+task fields and before a trailing `^block-id`. A line that already has ✅ is not stamped
+again. The next tick attributes that checkoff to the tap and can store the written date on
+that row. A line containing 🔁 is not checked and gains no ✅; the tap row is written at
+the press and the vault line stays open.
 
 `topology.obsidian_vault_name` (optional) overrides the vault name embedded in server-built
 `obsidian://open` links; when unset, the basename of `topology.vault_path` is used.
