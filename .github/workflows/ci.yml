@@ -198,6 +198,9 @@ jobs:
           test -f "${bundle}/sw.js"
           python3 -c 'import json, sys; json.load(open(sys.argv[1], encoding="utf-8"))' "${bundle}/manifest.json"
 
+      - name: WebUI smoke waiter tests
+        run: node --test scripts/webui-smoke-wait.test.js
+
       - name: Headless WebUI smoke (Notifications)
         run: node scripts/webui-smoke.js
 

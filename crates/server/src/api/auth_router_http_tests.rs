@@ -116,6 +116,7 @@ async fn outbox_action_is_open_and_owner_outbox_routes_stay_closed() {
 
     for (method, uri) in [
         ("GET", "/api/outbox/1"),
+        ("GET", "/api/completions"),
         ("POST", "/api/outbox/1/complete"),
         ("POST", "/api/outbox/1/snooze"),
     ] {
@@ -152,6 +153,7 @@ async fn a_client_token_is_refused_by_every_owner_only_route() {
         ("PUT", "/api/plugins/some-plugin"),
         ("PATCH", "/api/profiles/some-profile"),
         ("DELETE", "/api/profiles/some-profile"),
+        ("GET", "/api/completions"),
     ];
     for (method, uri) in owner_only {
         let (status, body) = call(&h.app, with_token(method, uri, AGENT)).await;
@@ -184,6 +186,7 @@ async fn the_human_token_passes_the_owner_gate() {
     for (method, uri) in [
         ("POST", "/api/approvals/some-id/resolve"),
         ("POST", "/api/models/select"),
+        ("GET", "/api/completions"),
     ] {
         let (status, body) = call(&h.app, with_token(method, uri, HUMAN)).await;
         assert_ne!(status, StatusCode::UNAUTHORIZED, "{method} {uri}: {body}");

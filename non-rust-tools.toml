@@ -44,6 +44,12 @@ purpose = "Drive the release WebUI bundle in headless Chrome with stub API route
 justification = "Browser CDP and service-worker timing belong at the JavaScript shell boundary; Rust cannot replace Chrome's push and glue runtime."
 
 [[tool]]
+path = "scripts/webui-smoke-wait.test.js"
+owner = "web UI"
+purpose = "Check that the smoke test waits for a live Chrome and fails when Chrome has exited."
+justification = "The waiter is JavaScript because it talks to Chrome's debug port. The test stays beside the script so a silent startup failure cannot return."
+
+[[tool]]
 path = "deploy/homelab/setup.sh"
 owner = "homelab deploy"
 purpose = "Pull the GHCR image for the current checkout and recreate the host Compose service."

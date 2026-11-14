@@ -44,6 +44,7 @@ fn reminders_default_off_and_a_missing_table_stays_off() {
     assert!(!defaults.enabled);
     assert!(defaults.tasks);
     assert!(defaults.events);
+    assert!(!defaults.completions);
     assert!(!Topology::default().vault_reminders.enabled);
 
     let topology: Topology = toml::from_str("vault_path = \"/v\"\n").expect("toml");
@@ -56,6 +57,12 @@ fn reminders_default_off_and_a_missing_table_stays_off() {
     assert!(partial.vault_reminders.enabled);
     assert!(partial.vault_reminders.tasks);
     assert!(partial.vault_reminders.events);
+    assert!(!partial.vault_reminders.completions);
+
+    let logging: Topology =
+        toml::from_str("[vault_reminders]\ncompletions = true\n").expect("logging flag");
+    assert!(logging.vault_reminders.completions);
+    assert!(!logging.vault_reminders.enabled);
 }
 
 #[test]

@@ -1,5 +1,7 @@
 //! Match vault task lines to stored `OutboxSource::VaultNote` text.
 
+use liberado_outbox::{line_is_recurring, strip_task_metadata, task_identity_key};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CheckboxState {
     Open,
@@ -12,39 +14,97 @@ enum LineMatch {
     Closed(usize),
 }
 
-pub fn toggle_open_task_line(content: &str, task_text: &str) -> Result<String, String> {
+enum LineChoice {
+    Open(usize),
+    Closed(usize),
+}
+
+/// What Done should do to the note.
+pub enum TaskLineOutcome {
+    /// Write this content. A non-recurring line was checked, or it was already checked.
+    Write(String),
+    /// The matched line contains 🔁. Leave the file bytes alone.
+    Recurring { identity: String },
+}
+
+pub fn plan_task_edit(content: &str, task_text: &str) -> Result<TaskLineOutcome, String> {
     let needle = task_text.trim();
     if needle.is_empty() {
         return Err("task text is empty".into());
     }
-    let matches = matching_lines(content, needle)?;
-    let open: Vec<_> = matches
+    match choose_line(content, needle)? {
+        LineChoice::Open(index) => plan_open(content, index),
+        LineChoice::Closed(index) => plan_closed(content, index),
+    }
+}
+
+fn choose_line(content: &str, stored: &str) -> Result<LineChoice, String> {
+    let matches = matching_lines(content, stored)?;
+    let open = open_indexes(&matches);
+    if open.len() > 1 {
+        return Err("task line is ambiguous".into());
+    }
+    if let Some(index) = open.first() {
+        return Ok(LineChoice::Open(*index));
+    }
+    let closed = closed_indexes(&matches);
+    if closed.len() > 1 {
+        return Err("task line is ambiguous".into());
+    }
+    if let Some(index) = closed.first() {
+        return Ok(LineChoice::Closed(*index));
+    }
+    Err("no matching open task line".into())
+}
+
+fn open_indexes(matches: &[LineMatch]) -> Vec<usize> {
+    matches
         .iter()
         .filter_map(|hit| match hit {
             LineMatch::Open(index) => Some(*index),
             LineMatch::Closed(_) => None,
         })
-        .collect();
-    if open.len() > 1 {
-        return Err("task line is ambiguous".into());
-    }
-    if open.len() == 1 {
-        return toggle_line_at(content, open[0]);
-    }
-    let closed: Vec<_> = matches
+        .collect()
+}
+
+fn closed_indexes(matches: &[LineMatch]) -> Vec<usize> {
+    matches
         .iter()
         .filter_map(|hit| match hit {
             LineMatch::Closed(index) => Some(*index),
             LineMatch::Open(_) => None,
         })
-        .collect();
-    if closed.len() == 1 {
-        return Ok(content.to_string());
+        .collect()
+}
+
+fn plan_open(content: &str, index: usize) -> Result<TaskLineOutcome, String> {
+    let line = line_at(content, index)?;
+    if line_is_recurring(line) {
+        return Ok(recurring(line));
     }
-    if closed.len() > 1 {
-        return Err("task line is ambiguous".into());
+    Ok(TaskLineOutcome::Write(toggle_line_at(content, index)?))
+}
+
+fn plan_closed(content: &str, index: usize) -> Result<TaskLineOutcome, String> {
+    let line = line_at(content, index)?;
+    if line_is_recurring(line) {
+        return Ok(recurring(line));
     }
-    Err("no matching open task line".into())
+    Ok(TaskLineOutcome::Write(content.to_string()))
+}
+
+fn recurring(line: &str) -> TaskLineOutcome {
+    TaskLineOutcome::Recurring {
+        identity: task_identity_key(line)
+            .unwrap_or_else(|| liberado_outbox::collapse_whitespace(line.trim())),
+    }
+}
+
+fn line_at(content: &str, index: usize) -> Result<&str, String> {
+    content
+        .lines()
+        .nth(index)
+        .ok_or_else(|| "line out of range".to_string())
 }
 
 fn matching_lines(content: &str, stored: &str) -> Result<Vec<LineMatch>, String> {
@@ -124,19 +184,6 @@ fn checkbox_tail(line: &str) -> Option<(CheckboxState, usize)> {
     line.find("[X]").map(|idx| (CheckboxState::Closed, idx + 3))
 }
 
-fn strip_task_metadata(body: &str) -> &str {
-    let markers = [
-        " 📅", " ⏳", " 🛫", " ✅", " ❌", " 🔁", " ⏫", " 🔽", " 🔺", " #", " ^",
-    ];
-    let mut end = body.len();
-    for marker in markers {
-        if let Some(idx) = body.find(marker) {
-            end = end.min(idx);
-        }
-    }
-    body[..end].trim_end()
-}
-
 fn toggle_line_at(content: &str, index: usize) -> Result<String, String> {
     let mut lines: Vec<String> = content.lines().map(str::to_string).collect();
     let line = lines
@@ -170,6 +217,13 @@ fn replace_open_checkbox(line: &str) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn toggle_open_task_line(content: &str, task_text: &str) -> Result<String, String> {
+        match plan_task_edit(content, task_text)? {
+            TaskLineOutcome::Write(text) => Ok(text),
+            TaskLineOutcome::Recurring { .. } => Ok(content.to_string()),
+        }
+    }
 
     #[test]
     fn empty_checkbox_does_not_match_nonempty_task() {
@@ -228,5 +282,15 @@ mod tests {
         let note = "* [ ] Call dentist\n";
         let out = toggle_open_task_line(note, "Call dentist").unwrap();
         assert!(out.contains("* [x] Call dentist"));
+    }
+
+    #[test]
+    fn a_recurring_line_is_left_unchanged_and_keeps_its_identity() {
+        let note = "- [ ] Call dentist 🔁 every day\n";
+        match plan_task_edit(note, "Call dentist").unwrap() {
+            TaskLineOutcome::Recurring { identity } => assert_eq!(identity, "Call dentist"),
+            TaskLineOutcome::Write(text) => panic!("rewrote the line: {text}"),
+        }
+        assert_eq!(toggle_open_task_line(note, "Call dentist").unwrap(), note);
     }
 }

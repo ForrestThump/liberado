@@ -21,7 +21,7 @@ use crate::state::AppState;
 
 use super::outbox_detail::snooze_until_local;
 use super::outbox_log::{self, SnoozeApplied};
-use super::vault_task_line::toggle_open_task_line;
+use super::vault_task_line::{TaskLineOutcome, plan_task_edit};
 
 const MAX_SNOOZE_MINUTES: i64 = 60 * 24 * 7;
 
@@ -96,9 +96,20 @@ async fn finish_complete(
 ) -> Result<(), ActionFail> {
     let vault_task = is_vault_task(&record);
     let action = if vault_task { "complete" } else { "dismiss" };
-    if vault_task && let Err(err) = write_vault_task(state, &record).await {
-        outbox_log::log_outbox_action(action, via, record.id, received_at, "error");
-        return Err(err);
+    if vault_task {
+        match write_vault_task(state, &record).await {
+            Ok(VaultWrite::Checked) => {}
+            Ok(VaultWrite::Recurring(identity)) => {
+                if let Err(err) = record_recurring_tap(state, outbox, &record, &identity) {
+                    outbox_log::log_outbox_action(action, via, record.id, received_at, "error");
+                    return Err(err);
+                }
+            }
+            Err(err) => {
+                outbox_log::log_outbox_action(action, via, record.id, received_at, "error");
+                return Err(err);
+            }
+        }
     }
     let resolution = if vault_task {
         RES_COMPLETED
@@ -240,15 +251,39 @@ fn resolve_claimed(
     }
 }
 
-async fn write_vault_task(state: &AppState, record: &OutboxRecord) -> Result<(), ActionFail> {
+async fn write_vault_task(
+    state: &AppState,
+    record: &OutboxRecord,
+) -> Result<VaultWrite, ActionFail> {
     match &record.source {
         Some(OutboxSource::VaultNote { path, text, .. }) => {
-            complete_vault_task(&state.vault_path, path, text)
-                .await
-                .map_err(ActionFail::conflict)
+            complete_vault_task(&state.vault_path, path, text).await
         }
         _ => Err(ActionFail::internal("vault task missing source")),
     }
+}
+
+enum VaultWrite {
+    Checked,
+    Recurring(String),
+}
+
+fn record_recurring_tap(
+    state: &AppState,
+    outbox: &liberado_outbox::Outbox,
+    record: &OutboxRecord,
+    identity: &str,
+) -> Result<(), ActionFail> {
+    let Some(OutboxSource::VaultNote { path, .. }) = &record.source else {
+        return Err(ActionFail::internal("vault task missing source"));
+    };
+    let now = Utc::now();
+    let zone = super::outbox_detail::operator_zone(state);
+    let row = liberado_outbox::liberado_tap_completion(path, identity, record.id, now, &zone);
+    outbox
+        .insert_completion(&row)
+        .map_err(|err| ActionFail::internal(err.to_string()))?;
+    Ok(())
 }
 
 fn snooze_notice(state: &AppState, outbox: &liberado_outbox::Outbox, id: i64) -> String {
@@ -267,21 +302,28 @@ async fn complete_vault_task(
     vault_path: &str,
     rel_path: &str,
     task_text: &str,
-) -> Result<(), String> {
+) -> Result<VaultWrite, ActionFail> {
     let vault = Vault::open("outbox-complete", vault_path)
         .await
-        .map_err(|err| err.to_string())?;
-    let content = vault.read(rel_path).await.map_err(|err| err.to_string())?;
-    let updated = toggle_open_task_line(&content, task_text)?;
-    let hash = Vault::content_hash(&content);
-    vault
-        .write(
-            rel_path,
-            &updated,
-            Some(&hash),
-            &liberado_common::WriteProvenance::human(),
-        )
+        .map_err(|err| ActionFail::conflict(err.to_string()))?;
+    let content = vault
+        .read(rel_path)
         .await
-        .map_err(|err| err.to_string())?;
-    Ok(())
+        .map_err(|err| ActionFail::conflict(err.to_string()))?;
+    match plan_task_edit(&content, task_text).map_err(ActionFail::conflict)? {
+        TaskLineOutcome::Recurring { identity } => Ok(VaultWrite::Recurring(identity)),
+        TaskLineOutcome::Write(updated) => {
+            let hash = Vault::content_hash(&content);
+            vault
+                .write(
+                    rel_path,
+                    &updated,
+                    Some(&hash),
+                    &liberado_common::WriteProvenance::human(),
+                )
+                .await
+                .map_err(|err| ActionFail::conflict(err.to_string()))?;
+            Ok(VaultWrite::Checked)
+        }
+    }
 }

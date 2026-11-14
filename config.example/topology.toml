@@ -477,6 +477,8 @@ writes_vault = false             # writes code workspaces, not the Obsidian vaul
 enabled = false
 tasks = true
 events = true
+# Task-completion log. Off until you set this true. See docs/spec/reference/tuning.md.
+completions = false
 #
 # Weekly spending push is off until both switches are on: this table, and an
 # enabled schedule named below. Budgets are whole dollars. Category names match

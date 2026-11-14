@@ -63,6 +63,10 @@ pub(crate) fn owner_only_routes(state: &Arc<AppState>) -> Router {
         )
         .route("/api/outbox", axum::routing::get(api::list_outbox))
         .route(
+            "/api/completions",
+            axum::routing::get(api::list_completions),
+        )
+        .route(
             "/api/outbox/{id}/retry",
             axum::routing::post(api::retry_outbox),
         )

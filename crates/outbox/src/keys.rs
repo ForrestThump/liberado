@@ -22,7 +22,7 @@ pub fn key_hash_suffix(key: &str) -> String {
     hex16(&Sha256::digest(key.as_bytes()))
 }
 
-fn block_id(line: &str) -> Option<String> {
+pub(crate) fn block_id(line: &str) -> Option<String> {
     let token = line.split_whitespace().last()?;
     let rest = token.strip_prefix('^')?;
     if rest.is_empty() {

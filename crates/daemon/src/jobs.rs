@@ -185,6 +185,7 @@ impl Daemon {
         let (today, zone) = self.mechanical_clock();
         let tick = self.reminder_tick();
         let outbox = self.outbox.is_some() && self.outbox_delivery.is_some();
+        self.record_tick_completions(&request, &tick);
         let effect = execute_on(self.vault.root(), &request, today, &zone, &tick, outbox);
         self.finish_mechanical(&request, event, effect)
     }
@@ -195,8 +196,23 @@ impl Daemon {
         let tick = self.reminder_tick();
         let outbox = self.outbox.is_some() && self.outbox_delivery.is_some();
         for job in &self.startup_jobs {
+            self.record_tick_completions(job, &tick);
             let effect = execute_on(self.vault.root(), job, today, &zone, &tick, outbox);
             self.apply_startup_effect(job, effect);
+        }
+    }
+
+    fn record_tick_completions(&self, job: &JobRequest, tick: &crate::vault_pings::ReminderTick) {
+        if job.kind != "vault-reminder-tick" {
+            return;
+        }
+        let Some(outbox) = self.outbox.as_ref() else {
+            return;
+        };
+        if let Err(err) =
+            crate::vault_pings::record_task_completions(self.vault.root(), tick, outbox)
+        {
+            tracing::warn!(error = %err, "task completion log failed");
         }
     }
 

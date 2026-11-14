@@ -212,6 +212,7 @@ fn task_and_event_switches_are_independent() {
         enabled: true,
         tasks: false,
         events: true,
+        completions: false,
     };
     let message = run(
         root.path(),
@@ -237,6 +238,7 @@ fn legacy_event_reminder_line_has_title_time_and_path_without_label() {
         enabled: true,
         tasks: false,
         events: true,
+        completions: false,
     };
     let message = run(
         root.path(),

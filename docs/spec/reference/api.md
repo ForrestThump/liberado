@@ -425,6 +425,7 @@ on loopback if it can reach the bind address — scope MCP grants accordingly.
 | `POST /api/push/weekly` | owner | Body `{ "dry_run": false, "force": false }`. Returns `{ "message", "week_id", "start", "end", "unmapped", "sent", "failed", "skipped", "removed" }`. `dry_run` wins over `force` and works while the reminder is off. A real send while the reminder is off is 409. A missing budget URL or key is 503 `budget API is not configured`. A successful send stores that Monday on the subscription. A failed send does not. |
 | `POST /api/client-errors` | owner | Truncated WebUI panic/client error text at WARN (no secrets) |
 | `GET /api/outbox` | owner | Visible pending/failed reminder rows |
+| `GET /api/completions` | owner | Task-completion log. Query: `since` (RFC3339, optional) and `limit` (optional, default 100, maximum 500). Rows with `completed_at` at or after `since`, oldest first. Each row has `id`, `completed_at`, `local_date`, `precision` (`tap`, `tick`, or `date`), `source` (`liberado` or `obsidian`), `path`, `task_text`, `done_date`, `outbox_id`, `voided_at`, `detected_at`. Voided rows stay in the list with `voided_at` set. No credential: 401. A client token: 403. |
 | `GET /api/outbox/{id}` | owner | One outbox row for the notification detail page (`title`, `body`, `kind`, `due_at`, `late`, `source`, delivery/ack state, `resolution`, `resolved_at`, optional `snooze_until_local`, optional `obsidian_url`) |
 | `POST /api/outbox/{id}/retry` | owner | Retry a failed row |
 | `POST /api/outbox/{id}/complete` | owner | Mark a vault task done (`task_due` + `vault_note` source) or dismiss other kinds; sets `resolution` (`completed` or `dismissed`) when not already resolved (409 if resolved) |
@@ -461,7 +462,15 @@ in the operator zone. Any failure (network, or a status that is not 2xx) acks th
 the same resolved row `GET /api/outbox/{id}` returns.
 
 Additional fields include `kind`, `outbox_id`, `due_at` (RFC 3339 UTC), `late`, `source`, and
-digest `items`. Outbox rows store nullable `kind`, `source_json`, `resolution`, and `resolved_at` (schema v3 in `liberado.db`).
+digest `items`. Outbox rows store nullable `kind`, `source_json`, `resolution`, and `resolved_at`.
+Schema v4 adds `push_subscriptions.last_sent_week`. Schema v5 adds `task_completions`,
+`task_snapshot`, and `task_file_state` (a content hash so an unchanged note is skipped)
+in the same `liberado.db`. A database already stamped v4 keeps `last_sent_week` and gains
+the completion tables. Completion
+rows are not pruned. `precision` is `tap` (Done time, to the second), `tick` (the minute the
+file change was seen, plus sync delay), or `date` (local noon of a ✅ date that is earlier
+than the detection date). `GET /api/completions` is the read API. A line containing 🔁 is not
+checked by Done; the tap row is written at the press and the vault line stays open.
 
 `topology.obsidian_vault_name` (optional) overrides the vault name embedded in server-built
 `obsidian://open` links; when unset, the basename of `topology.vault_path` is used.
