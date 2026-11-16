@@ -297,8 +297,11 @@ fn schedule_clear_copied(mut copied: Signal<bool>, nonce: Signal<u32>, expected:
         return;
     };
     let callback = Closure::once(move || {
-        if nonce() == expected {
-            copied.set(false);
+        let Ok(current) = nonce.try_peek() else {
+            return;
+        };
+        if *current == expected {
+            let _ = crate::signal_alive::set_if_alive(&mut copied, false);
         }
     });
     if window

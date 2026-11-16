@@ -13,6 +13,9 @@
 
 use dioxus::prelude::*;
 
+#[cfg(target_arch = "wasm32")]
+use crate::signal_alive::{ApplyOutcome, set_if_alive};
+
 use chat_client_contract::ModelsResponse;
 
 use crate::components::picker::Picker;
@@ -107,13 +110,15 @@ pub fn ModelBrowser(
             wasm_bindgen_futures::spawn_local(async move {
                 match select_model(base, model.clone(), scope).await {
                     Ok(()) => {
-                        busy.set(false);
+                        if set_if_alive(&mut busy, false) == ApplyOutcome::Skipped {
+                            return;
+                        }
                         on_switched.call(model);
-                        open.set(false);
+                        let _ = set_if_alive(&mut open, false);
                     }
                     Err(e) => {
-                        busy.set(false);
-                        error.set(Some(e));
+                        let _ = set_if_alive(&mut busy, false);
+                        let _ = set_if_alive(&mut error, Some(e));
                     }
                 }
             });

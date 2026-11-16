@@ -3,6 +3,9 @@
 //! The list is read-only. Edit and New each open a fresh chat.
 
 use dioxus::prelude::*;
+
+#[cfg(target_arch = "wasm32")]
+use crate::signal_alive::{set_if_alive, with_mut_if_alive};
 use serde::Deserialize;
 
 use chat_client_contract::SurfaceMode;
@@ -226,8 +229,8 @@ fn start_automation_chat(mut open: OpenChat, body: serde_json::Value) {
             match post_automation_chat(&open.api_base, &body).await {
                 Ok(id) => land_in_chat(open, id),
                 Err(message) => {
-                    open.error.set(Some(message));
-                    open.opening.set(false);
+                    let _ = set_if_alive(&mut open.error, Some(message));
+                    let _ = set_if_alive(&mut open.opening, false);
                 }
             }
         });
@@ -241,15 +244,15 @@ fn start_automation_chat(mut open: OpenChat, body: serde_json::Value) {
 
 #[cfg(target_arch = "wasm32")]
 fn land_in_chat(mut open: OpenChat, id: String) {
-    open.active_conv_id.set(Some(id));
-    open.active_surface.set(Some(SurfaceMode::Chat));
-    open.list_epoch.set((open.list_epoch)() + 1);
-    open.route.set(Route::ChatSession);
+    let _ = set_if_alive(&mut open.active_conv_id, Some(id));
+    let _ = set_if_alive(&mut open.active_surface, Some(SurfaceMode::Chat));
+    let _ = with_mut_if_alive(&mut open.list_epoch, |epoch| *epoch += 1);
+    let _ = set_if_alive(&mut open.route, Route::ChatSession);
     if crate::is_narrow_viewport() {
-        open.collapsed.set(true);
+        let _ = set_if_alive(&mut open.collapsed, true);
     }
-    open.error.set(None);
-    open.opening.set(false);
+    let _ = set_if_alive(&mut open.error, None);
+    let _ = set_if_alive(&mut open.opening, false);
 }
 
 #[component]

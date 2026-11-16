@@ -262,13 +262,15 @@ pub(super) fn adopt_when_finished(
     session: dioxus::prelude::Signal<Option<String>>,
     mut messages: dioxus::prelude::Signal<Vec<ChatMsg>>,
 ) {
-    use dioxus::prelude::{ReadableExt, WritableExt};
+    use dioxus::prelude::ReadableExt;
     let Some(id) = session.read().clone() else {
         return;
     };
     wasm_bindgen_futures::spawn_local(async move {
         if let Ok(loaded) = super::fetch_conversation(&api_base, &id).await {
-            messages.with_mut(|live| merge_history(live, &loaded.messages));
+            let _ = crate::signal_alive::with_mut_if_alive(&mut messages, |live| {
+                merge_history(live, &loaded.messages);
+            });
         }
     });
 }

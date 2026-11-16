@@ -99,9 +99,13 @@ fn deleting_the_open_conversation_starts_a_fresh_chat() {
     assert!(!deleted_the_open_conversation(Some("open"), "other"));
     assert!(!deleted_the_open_conversation(None, "open"));
     let sidebar = include_str!("mod.rs");
-    let success = window_around(sidebar, "if deleted_the_open_conversation", 450);
+    let success = window_around(
+        sidebar,
+        "deleted_the_open_conversation(current.as_deref(), &id)",
+        700,
+    );
     assert!(success.contains("Route::Chat"));
-    assert!(success.contains("new_chat_nonce += 1"));
+    assert!(success.contains("*nonce += 1"));
     assert!(success.contains("close_phone_drawer"));
 }
 

@@ -74,10 +74,13 @@ pub(crate) fn collapsed_after_pick(narrow: bool, collapsed: bool) -> bool {
 
 /// Close the phone drawer after a nav item opens a view. A desk rail is unchanged.
 pub(crate) fn close_phone_drawer(mut collapsed: Signal<bool>) {
-    collapsed.set(collapsed_after_pick(
-        crate::is_narrow_viewport(),
-        collapsed(),
-    ));
+    let Ok(now) = collapsed.try_peek().map(|value| *value) else {
+        return;
+    };
+    let _ = crate::signal_alive::set_if_alive(
+        &mut collapsed,
+        collapsed_after_pick(crate::is_narrow_viewport(), now),
+    );
 }
 
 pub(crate) fn project_chip_line(name: &str, saved_on_chat: bool) -> String {
@@ -151,9 +154,13 @@ pub(crate) fn queue_project_patch(
         let mut active_project = active_project;
         wasm_bindgen_futures::spawn_local(async move {
             match patch_project(&api_base, &id, project.as_deref()).await {
-                Ok(()) => list_epoch.set(list_epoch() + 1),
+                Ok(()) => {
+                    let _ = crate::signal_alive::with_mut_if_alive(&mut list_epoch, |epoch| {
+                        *epoch += 1;
+                    });
+                }
                 Err(error) => {
-                    active_project.set(previous);
+                    let _ = crate::signal_alive::set_if_alive(&mut active_project, previous);
                     web_sys::console::log_1(&error.into());
                 }
             }

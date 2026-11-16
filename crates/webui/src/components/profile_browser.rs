@@ -17,6 +17,9 @@
 //! handler.
 
 use dioxus::prelude::*;
+
+#[cfg(target_arch = "wasm32")]
+use crate::signal_alive::{ApplyOutcome, set_if_alive};
 use serde::Deserialize;
 
 use crate::components::picker::Picker;
@@ -174,13 +177,15 @@ pub fn ProfileBrowser(
             wasm_bindgen_futures::spawn_local(async move {
                 match select_profile(base, session, chosen.clone()).await {
                     Ok(()) => {
-                        busy.set(false);
+                        if set_if_alive(&mut busy, false) == ApplyOutcome::Skipped {
+                            return;
+                        }
                         on_switched.call(chosen);
-                        open.set(false);
+                        let _ = set_if_alive(&mut open, false);
                     }
                     Err(e) => {
-                        busy.set(false);
-                        error.set(Some(e));
+                        let _ = set_if_alive(&mut busy, false);
+                        let _ = set_if_alive(&mut error, Some(e));
                     }
                 }
             });

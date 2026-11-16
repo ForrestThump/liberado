@@ -15,6 +15,7 @@ mod push;
 #[cfg(test)]
 mod pwa;
 mod shell;
+mod signal_alive;
 mod theme;
 mod webauthn;
 
@@ -115,12 +116,15 @@ fn App() -> Element {
             wasm_bindgen_futures::spawn_local(async move {
                 match components::login_gate::probe_session(&base).await {
                     Ok(session) => {
-                        need_login.set(session.login_required && !session.authenticated);
-                        auth_ready.set(true);
+                        let _ = crate::signal_alive::set_if_alive(
+                            &mut need_login,
+                            session.login_required && !session.authenticated,
+                        );
+                        let _ = crate::signal_alive::set_if_alive(&mut auth_ready, true);
                     }
                     Err(_) => {
-                        need_login.set(false);
-                        auth_ready.set(true);
+                        let _ = crate::signal_alive::set_if_alive(&mut need_login, false);
+                        let _ = crate::signal_alive::set_if_alive(&mut auth_ready, true);
                     }
                 }
             });
