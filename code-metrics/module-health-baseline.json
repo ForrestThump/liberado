@@ -6743,6 +6743,12 @@
     "functions": 20,
     "cyclomatic": 38
   },
+  "crates/webui/src/signal_alive.rs": {
+    "ploc": 127,
+    "lloc": 49,
+    "functions": 24,
+    "cyclomatic": 29
+  },
   "crates/webui/src/theme.rs": {
     "ploc": 293,
     "lloc": 84,
