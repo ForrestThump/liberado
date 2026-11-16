@@ -20,6 +20,25 @@ pub(crate) use events::event_ping_message;
 pub(crate) use tasks::task_ping_message;
 pub(crate) use tick::{DueReminderRow, ReminderTick, due_reminder_rows, reminder_message};
 
+/// One completion pass, the same pass `vault-reminder-tick` runs.
+///
+/// `now` is local civil time in `zone`. The fire-key file is not used.
+pub fn record_vault_task_completions(
+    root: &std::path::Path,
+    now: chrono::NaiveDateTime,
+    zone: &str,
+    settings: &liberado_config::VaultRemindersConfig,
+    outbox: &liberado_outbox::Outbox,
+) -> Result<(), liberado_outbox::Error> {
+    let tick = ReminderTick {
+        now,
+        settings: settings.clone(),
+        state_path: root.join("vault-reminder-fires.json"),
+        zone: zone.to_string(),
+    };
+    record_task_completions(root, &tick, outbox)
+}
+
 #[cfg(test)]
 pub(crate) use events::{EVENT_HORIZON_DAYS, VaultEvent, event_in_window};
 

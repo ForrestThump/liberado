@@ -387,11 +387,15 @@ the filter rejects is ignored. The same folders are skipped as `task-ping`.
 
 The time on a row has three precisions:
 
-- `tap` — Done was pressed in Liberado. The time is that press, to the second. A normal
-  line is checked, and the next tick copies the Done time when the outbox row was resolved
-  in the last 15 minutes. A line that contains 🔁 is not checked. Done writes the row at
-  the press and leaves the line open, so the series does not end and the tick does not
-  write a second row.
+- `tap` — Done was pressed in Liberado. The time is that press, to the second. A one-off
+  line is checked and gains ` ✅ YYYY-MM-DD` for that press's local date. The date is
+  written where Obsidian Tasks writes it: after the other task fields and before a
+  trailing `^block-id`. A line that already has ✅ is not stamped again. The next tick
+  copies the Done time when the outbox row was resolved in the last 15 minutes, and
+  stores that ✅ date on the same row. It does not add a second row. A line that
+  contains 🔁 is not checked and gains no ✅. Done writes the row at the press and
+  leaves the line open, so the series does not end and the tick does not write a
+  second row.
 - `tick` — the box changed in the vault and the minute tick noticed. The time is detection
   time: about a minute, plus sync delay. Sync is seconds when both devices are online and
   hours when the phone was offline.

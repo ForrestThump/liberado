@@ -5249,6 +5249,12 @@
     "functions": 22,
     "cyclomatic": 62
   },
+  "crates/server/src/api/vault_task_line_tests.rs": {
+    "ploc": 104,
+    "lloc": 36,
+    "functions": 16,
+    "cyclomatic": 24
+  },
   "crates/server/src/app_router.rs": {
     "ploc": 187,
     "lloc": 9,
