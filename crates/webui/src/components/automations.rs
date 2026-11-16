@@ -5,7 +5,7 @@
 use dioxus::prelude::*;
 
 #[cfg(target_arch = "wasm32")]
-use crate::signal_alive::{set_if_alive, with_mut_if_alive};
+use crate::signal_alive::{bump_if_alive, set_if_alive};
 use serde::Deserialize;
 
 use chat_client_contract::SurfaceMode;
@@ -246,7 +246,7 @@ fn start_automation_chat(mut open: OpenChat, body: serde_json::Value) {
 fn land_in_chat(mut open: OpenChat, id: String) {
     let _ = set_if_alive(&mut open.active_conv_id, Some(id));
     let _ = set_if_alive(&mut open.active_surface, Some(SurfaceMode::Chat));
-    let _ = with_mut_if_alive(&mut open.list_epoch, |epoch| *epoch += 1);
+    let _ = bump_if_alive(&mut open.list_epoch);
     let _ = set_if_alive(&mut open.route, Route::ChatSession);
     if crate::is_narrow_viewport() {
         let _ = set_if_alive(&mut open.collapsed, true);

@@ -21,7 +21,7 @@ use crate::icons::{IconGlasses, IconStop};
 // Slash commands only run in the browser — `submit` gates the whole block on wasm32, so gate the
 // imports identically or a native build trips the workspace's zero-warnings bar on unused imports.
 #[cfg(target_arch = "wasm32")]
-use crate::signal_alive::{set_if_alive, with_mut_if_alive};
+use crate::signal_alive::{push_if_alive, set_if_alive};
 #[cfg(target_arch = "wasm32")]
 use liberado_commands::CommandResult;
 
@@ -299,7 +299,7 @@ pub fn Chat(
                         }
                         // History arrived. Pin before the rows paint so the pane lands on the
                         // latest message, including when the reader had scrolled up before.
-                        let _ = with_mut_if_alive(&mut opened, |stick| stick.opened_conversation());
+                        chat_scroll::TranscriptStick::pin_if_alive(&mut opened);
                         let _ = set_if_alive(&mut messages, loaded_messages);
                         let _ = set_if_alive(&mut approvals, loaded.approvals);
                         set_surface(active_surface, Some(loaded.surface_mode));
@@ -496,7 +496,7 @@ pub fn Chat(
                 )
                 .await;
                 for msg in cmd_msgs {
-                    let _ = with_mut_if_alive(&mut messages, |list| list.push(msg));
+                    let _ = push_if_alive(&mut messages, msg);
                 }
                 if let Some(id) = new_session {
                     let _ = set_if_alive(&mut session, Some(id));
