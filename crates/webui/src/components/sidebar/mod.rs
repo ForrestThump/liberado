@@ -5,7 +5,7 @@
 //! On a desk the rail's brand mark brings the panel back. On a phone the header menu does.
 //!
 //! Sections rendered when expanded: Chat / Library / Automations primary nav, Agents (Pinned +
-//! labelled categories + Show more), Chats (recent), Projects (the list from `GET /api/projects`), and
+//! labelled categories + Show more), Chats (recent), a Projects nav entry, and
 //! Plugins. Imagine is intentionally absent — the file `components/imagine.rs` and `Route::Imagine`
 //! survive so the surface can be re-introduced later without re-shaping the rail.
 
@@ -20,7 +20,7 @@ use chat_client_contract::{
     ConvHeader, ConversationSearchResponse, ConversationSearchResult, SurfaceMode,
 };
 
-use crate::components::project_data::close_phone_drawer;
+use crate::components::project_data::{close_phone_drawer, fetch_projects, label_map};
 use crate::components::sidebar_agent_creator::CreatorError;
 #[cfg(target_arch = "wasm32")]
 use crate::components::sidebar_agent_creator::open_agent_creator_session;
@@ -38,7 +38,7 @@ use self::profile_api::{profile_from_page, use_profile_actions};
 use self::agents::{
     AgentTailList, CategoryList, ChatList, PinnedList, SearchResultList, ShowMoreRow, group_agents,
 };
-use self::projects::{PluginList, ProjectList, project_for_open};
+use self::projects::{PluginList, project_for_open};
 use self::rail::{
     AgentGlyph, BellGlyph, BrandLogo, ChatBubble, ClockGlyph, CollapseGlyph, ExpandGlyph,
     LibraryGlyph, PluginGlyph, PrimaryNavRow, ThemeSwatch,
@@ -69,10 +69,7 @@ pub enum Route {
 
 impl Route {
     pub(crate) fn is_chat_view(self) -> bool {
-        matches!(
-            self,
-            Route::Chat | Route::ChatSession | Route::AgentSession | Route::ProjectDetail
-        )
+        matches!(self, Route::Chat | Route::ChatSession | Route::AgentSession)
     }
 }
 
@@ -348,9 +345,23 @@ pub fn Sidebar(
         move |id: String| profile_from_page(&loaded_page(conversations.read().as_ref()), &id),
     );
 
+    let project_labels = use_resource({
+        let base = api_base.clone();
+        move || {
+            let _epoch = list_epoch();
+            let base = base.clone();
+            async move { fetch_projects(&base).await.map(|rows| label_map(&rows)) }
+        }
+    });
+    let labels = project_labels
+        .read()
+        .as_ref()
+        .and_then(|result| result.as_ref().ok())
+        .cloned()
+        .unwrap_or_default();
+
     let page = loaded_page(conversations.read().as_ref());
     let headers = page.headers;
-    let project_chats = headers.clone();
     let creator_ids = page.creator_ids;
     let chat_rows: Vec<&ConvHeader> = headers
         .iter()
@@ -361,9 +372,6 @@ pub fn Sidebar(
         .filter(|c| c.surface_mode == SurfaceMode::Agent)
         .collect();
     let grouped = group_agents(&agent_rows);
-
-    // Cloned before the move closures below, which take `api_base` for their own requests.
-    let projects_api = api_base.clone();
 
     if collapsed() {
         // Icon rail — vertical column of buttons that bring the rail back / navigate without
@@ -746,6 +754,7 @@ pub fn Sidebar(
                         }
                         ChatList {
                             items: chat_rows.iter().map(|c| (*c).clone()).collect(),
+                            labels: labels.clone(),
                             active: active_conv_id,
                             menu_for,
                             on_pick: move |id: String| {
@@ -772,23 +781,19 @@ pub fn Sidebar(
                         header {
                             class: "sidebar-section-header",
                             button {
-                                class: "sidebar-section-toggle",
+                                class: if matches!(route(), Route::Projects | Route::ProjectDetail) {
+                                    "sidebar-section-toggle active"
+                                } else {
+                                    "sidebar-section-toggle"
+                                },
                                 r#type: "button",
+                                "aria-label": "Projects",
                                 onclick: move |_| {
                                     route.set(Route::Projects);
                                     close_phone_drawer(collapsed);
                                 },
                                 span { class: "sidebar-section-label", "Projects" }
                             }
-                        }
-                        ProjectList {
-                            api_base: projects_api,
-                            chats: project_chats,
-                            route,
-                            active_project,
-                            active_conv_id,
-                            list_epoch,
-                            collapsed,
                         }
                     }
 

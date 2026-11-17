@@ -222,8 +222,21 @@ pub(crate) fn build_app_router(state: &Arc<AppState>, guard: &Arc<auth::ApiGuard
             axum::routing::post(api::session_fork),
         )
         .route("/api/goals/domains", axum::routing::get(api::goals_domains))
-        // Coding project picker (S3/G4) — read-only; start still drain-gated.
+        // Coding project picker (S3/G4). Read-only; start still drain-gated.
+        // Chat projects a person creates live on `/api/chat-projects` and have no root.
         .route("/api/projects", axum::routing::get(api::list_projects))
+        .route(
+            "/api/chat-projects",
+            axum::routing::get(api::list_chat_projects).post(api::create_chat_project),
+        )
+        .route(
+            "/api/chat-projects/{id}/chats",
+            axum::routing::get(api::list_project_chats),
+        )
+        .route(
+            "/api/chat-projects/{id}",
+            axum::routing::patch(api::patch_chat_project).delete(api::delete_chat_project),
+        )
         // List only — start is on `work_start_routes` (drain-gated).
         .route("/api/goals", axum::routing::get(api::goals_list))
         .route("/api/goals/{id}", axum::routing::get(api::goals_get))

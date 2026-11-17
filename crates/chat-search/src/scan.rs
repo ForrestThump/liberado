@@ -86,6 +86,18 @@ pub async fn search(
     query: &ParsedQuery,
     limit: usize,
 ) -> Result<SearchResults, SearchError> {
+    search_in(root, query, limit, None).await
+}
+
+/// [`search`], limited to chats whose stored project key equals `project`.
+///
+/// `None` searches every chat. The key is a topology project name or a user project id.
+pub async fn search_in(
+    root: &Path,
+    query: &ParsedQuery,
+    limit: usize,
+    project: Option<&str>,
+) -> Result<SearchResults, SearchError> {
     let mut paths: Vec<PathBuf> = Vec::new();
     let read_dir = match std::fs::read_dir(root) {
         Ok(d) => d,
@@ -107,7 +119,7 @@ pub async fn search(
 
     let mut matches = Vec::new();
     for path in &paths {
-        if let Some(conv_match) = scan_file(path, query)? {
+        if let Some(conv_match) = scan_file(path, query, project)? {
             matches.push(conv_match);
         }
     }
@@ -121,7 +133,11 @@ pub async fn search(
     })
 }
 
-fn scan_file(path: &Path, query: &ParsedQuery) -> Result<Option<ConversationMatch>, SearchError> {
+fn scan_file(
+    path: &Path,
+    query: &ParsedQuery,
+    project: Option<&str>,
+) -> Result<Option<ConversationMatch>, SearchError> {
     let contents = std::fs::read_to_string(path)?;
     let mut header: Option<SessionHeader> = None;
     let mut message_matches: Vec<MessageMatch> = Vec::new();
@@ -171,6 +187,12 @@ fn scan_file(path: &Path, query: &ParsedQuery) -> Result<Option<ConversationMatc
     };
     // A goal session has no title of its own; its goal reads as one. Search spans every session
     // now, not just chats, so the label has to work for both.
+    if let Some(want) = project.map(str::trim).filter(|name| !name.is_empty()) {
+        let got = header.project.as_deref().unwrap_or("");
+        if got != want {
+            return Ok(None);
+        }
+    }
     let title = header
         .title
         .clone()

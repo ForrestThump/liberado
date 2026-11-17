@@ -299,7 +299,30 @@ async function handleApi(req, res, url, stubState) {
   }
   if (url.pathname === '/api/projects' && req.method === 'GET') {
     if (requireSession()) return true;
-    stubJson(res, 200, [], setCsrf);
+    stubJson(res, 200, { projects: [] }, setCsrf);
+    return true;
+  }
+  if (url.pathname === '/api/chat-projects' && req.method === 'GET') {
+    if (requireSession()) return true;
+    stubJson(res, 200, {
+      projects: [{
+        id: 'proj-trip',
+        name: 'Trip notes',
+        source: 'user',
+        instructions: 'Pack light',
+      }],
+    }, setCsrf);
+    return true;
+  }
+  if (url.pathname === '/api/chat-projects/proj-trip/chats' && req.method === 'GET') {
+    if (requireSession()) return true;
+    stubJson(res, 200, {
+      chats: [{
+        id: 'chat-1',
+        title: 'Packing list',
+        updated_at: '2026-11-01T12:00:00Z',
+      }],
+    }, setCsrf);
     return true;
   }
   if (url.pathname === '/api/profiles' && req.method === 'GET') {
@@ -1322,6 +1345,54 @@ async function runNormalFlow(cdp, stubState, origin) {
   if (!drawerRow) {
     fail('Notifications row not visible in opened menu after push flow');
   }
+
+  await runProjectsPhase(cdp);
+}
+
+async function runProjectsPhase(cdp) {
+  await clickAssert(
+    cdp,
+    `(function(){
+      const row = document.querySelector('button[aria-label="Projects"]');
+      if (!row) return false;
+      row.click();
+      return true;
+    })()`,
+    'Projects nav',
+  );
+  await waitFor(
+    cdp,
+    `(function(){
+      const title = document.querySelector('.projects-page .grok-page-title');
+      const create = document.querySelector('button[aria-label="New project"]');
+      const card = [...document.querySelectorAll('.project-card-name')].some((el) => el.textContent.includes('Trip notes'));
+      return title && title.textContent.includes('Projects') && !!create && card;
+    })()`,
+    'projects page with Trip notes and New project',
+    15_000,
+  );
+  await clickAssert(
+    cdp,
+    `(function(){
+      const card = [...document.querySelectorAll('.project-card-open')].find((el) => el.textContent.includes('Trip notes'));
+      if (!card) return false;
+      card.click();
+      return true;
+    })()`,
+    'Trip notes project card',
+  );
+  await waitFor(
+    cdp,
+    `(function(){
+      const title = document.querySelector('.project-page .grok-page-title');
+      const chat = [...document.querySelectorAll('.project-chat-open')].some((el) => el.textContent.includes('Packing list'));
+      const create = document.querySelector('button[aria-label="New chat"]');
+      const back = document.querySelector('button[aria-label="Back to projects"]');
+      return title && title.textContent.includes('Trip notes') && chat && !!create && !!back;
+    })()`,
+    'project page with Packing list and New chat',
+    15_000,
+  );
 }
 
 async function runReconcileOnLoadPhase(cdp, stubState) {

@@ -94,9 +94,74 @@ mod tests {
     fn host_api_base_is_the_loopback_fallback() {
         assert_eq!(api_base(), "http://127.0.0.1:4201");
     }
+
+    #[test]
+    fn boot_and_back_routes_open_a_project_and_leave_chat_alone() {
+        let list = boot_route("/projects").unwrap();
+        assert_eq!(list.route, Route::Projects);
+        assert!(list.project.is_none());
+        let detail = boot_route("/projects/proj-trip").unwrap();
+        assert_eq!(detail.route, Route::ProjectDetail);
+        assert_eq!(detail.project.as_deref(), Some("proj-trip"));
+        let note = boot_route("/notifications/7").unwrap();
+        assert_eq!(note.route, Route::NotificationDetail(7));
+        assert!(boot_route("/chat").is_none());
+        assert_eq!(
+            route_after_back(Route::ProjectDetail),
+            Some(Route::Projects)
+        );
+        assert_eq!(
+            route_after_back(Route::NotificationDetail(3)),
+            Some(Route::Notifications)
+        );
+        assert_eq!(route_after_back(Route::Library), Some(Route::Chat));
+        assert_eq!(route_after_back(Route::Chat), None);
+    }
 }
 
 // ── App ────────────────────────────────────────────────────────────────────
+
+struct BootRoute {
+    route: Route,
+    project: Option<String>,
+}
+
+fn boot_route(path: &str) -> Option<BootRoute> {
+    if let Some(route) = notification_route::route_from_path(path) {
+        return Some(BootRoute {
+            route,
+            project: None,
+        });
+    }
+    let project = crate::components::project_data::project_route_from_path(path)?;
+    let (route, id) = match project {
+        crate::components::project_data::ProjectPath::List => (Route::Projects, None),
+        crate::components::project_data::ProjectPath::Detail(id) => {
+            (Route::ProjectDetail, Some(id))
+        }
+    };
+    Some(BootRoute { route, project: id })
+}
+
+fn apply_boot_route(path: &str, mut route: Signal<Route>, mut focus: Signal<Option<String>>) {
+    let Some(boot) = boot_route(path) else {
+        return;
+    };
+    if let Some(id) = boot.project {
+        focus.set(Some(id));
+    }
+    route.set(boot.route);
+}
+
+/// Where Back goes when no picker or drawer is open.
+fn route_after_back(route: Route) -> Option<Route> {
+    match route {
+        Route::NotificationDetail(_) => Some(Route::Notifications),
+        Route::ProjectDetail => Some(Route::Projects),
+        Route::Chat => None,
+        _ => Some(Route::Chat),
+    }
+}
 
 #[component]
 fn App() -> Element {
@@ -137,13 +202,12 @@ fn App() -> Element {
     // Default to Chat — the screenshot says Chat is the open surface. Imagine / Library /
     // Automations / Projects / Plugins are reachable via the sidebar.
     let mut route = use_signal(|| Route::Chat);
+    let project_focus = use_signal(|| None::<String>);
     #[cfg(target_arch = "wasm32")]
     {
         if let Some(window) = web_sys::window() {
             if let Ok(path) = window.location().pathname() {
-                if let Some(parsed) = notification_route::route_from_path(&path) {
-                    route.set(parsed);
-                }
+                apply_boot_route(&path, route, project_focus);
             }
         }
     }
@@ -223,10 +287,8 @@ fn App() -> Element {
                 tools_open.set(false);
             } else if !sidebar_collapsed() && is_narrow() {
                 sidebar_collapsed.set(true);
-            } else if matches!(route(), Route::NotificationDetail(_)) {
-                route.set(Route::Notifications);
-            } else if route() != Route::Chat {
-                route.set(Route::Chat);
+            } else if let Some(next) = route_after_back(route()) {
+                route.set(next);
             }
         });
     });
@@ -324,7 +386,7 @@ fn App() -> Element {
                 main {
                     class: "main-content grok-main",
                     match route() {
-                        Route::Chat | Route::ChatSession | Route::AgentSession | Route::ProjectDetail => rsx! {
+                        Route::Chat | Route::ChatSession | Route::AgentSession => rsx! {
                             Chat {
                                 api_base: base.clone(),
                                 active_conv_id,
@@ -498,10 +560,38 @@ fn App() -> Element {
                                 }
                                 crate::components::projects::Projects {
                                     api_base: base.clone(),
+                                    route,
+                                    project_focus,
+                                    collapsed: sidebar_collapsed,
+                                }
+                            }
+                        },
+                        Route::ProjectDetail => rsx! {
+                            div { class: "grok-main-phone-scroll",
+                                if is_narrow() {
+                                    GrokAppHeader {
+                                        shell_class: PHONE_SCROLL_APP_HEADER_CLASS,
+                                        bar_title: shell_route_title(route()),
+                                        drawer_open: drawer_open(),
+                                        sidebar_collapsed,
+                                        active_project,
+                                        active_profile,
+                                        active_surface,
+                                        on_profile_open: open_profile_picker,
+                                        incognito,
+                                        api_base: base.clone(),
+                                        active_conv_id,
+                                        tools_open,
+                                    }
+                                }
+                                crate::components::project_page::ProjectPage {
+                                    api_base: base.clone(),
+                                    project_id: project_focus().unwrap_or_default(),
+                                    route,
                                     active_project,
                                     active_conv_id,
+                                    active_surface,
                                     list_epoch,
-                                    route,
                                     collapsed: sidebar_collapsed,
                                 }
                             }

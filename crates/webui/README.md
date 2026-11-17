@@ -86,7 +86,7 @@ The sidebar's **primary nav** renders only `Chat`, `Library`, `Automations` (`Pr
   - `GET /api/chat/stream?message=…` — one turn. `session=<id>`, `incognito=true`, and `profile=<name>` are mutually exclusive **optional** selectors (at most one ever appears on the URL — the builder's match arms short-circuit in that order): `session` names an existing conversation, `incognito=true` opens a RAM-only one, `profile=<name>` opens a new one under that named profile. With **none** of the three (the default first-turn flow), the URL is just `?message=…` and the server creates a fresh normal conversation (`chat_stream_core` → `ChatCreation::Default` → `sessions.create(None)`). `model=<name>` is orthogonal to all three — and to the no-selector case — and appends in every branch. URL builder in `components::chat_input::stream_url` (`chat_input.rs` lines 61-93).
   - `GET /api/conversations/{id}/attach` — join a turn already in flight.
   - `POST /api/conversations/{id}/cancel` — stop the turn.
-- Coding projects: `GET /api/projects` — both the sidebar's projects shelf and the projects page fetch through `project_data::fetch_projects`.
+- Chat projects: `GET /api/chat-projects` — the projects page fetches through `project_data::fetch_projects`. Topology coding roots stay on `GET /api/projects`.
 - Status / capabilities: `GET /api/status` — slash commands (`/theme`, `/model`, …) and the chat header.
 - SSE event types (`chat_client_contract::SessionEvent::from_sse_data`): bare — `session` (id), `token` (text); JSON — `session_started`, `role_started`, `role_finished`, `tool_started`, `tool_finished`, `progress`, `awaiting_input`, `human_input`, `validation_finished`, `critic_verdict`, `file_changed`, `checkpoint`, `loop_guard`, `session_finished`, `session_offered`, `failed`. **Unknown** types return a benign empty `Token`. `done` is **not** an SSE event type — it is the `status` value inside a `session_finished` payload.
 
@@ -94,7 +94,7 @@ Sidebar endpoints:
 
 - `/api/conversations`, `/api/conversations/search`, and `/api/conversations/{id}` rename + delete — `components/sidebar/mod.rs`.
 - `/api/profiles/{name}` — `components/sidebar/profile_api.rs`.
-- `/api/projects` — fetched from the projects shelf in `components/sidebar/projects.rs` (via `project_data::fetch_projects`).
+- `/api/chat-projects` — the Projects page and the chat badge (`project_data::fetch_projects`). The sidebar keeps a Projects nav entry and does not list recent project chats.
 
 The full surface is in [`docs/spec/reference/api.md`](../../docs/spec/reference/api.md).
 

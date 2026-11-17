@@ -3487,6 +3487,107 @@ body {
     overflow-y: auto;
 }
 
+.project-grid {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr));
+    gap: 0.75rem;
+}
+
+.project-card {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    padding: 0.9rem;
+    border: 1px solid var(--grok-rail-border);
+    border-radius: 0.9rem;
+    min-width: 0;
+}
+
+.project-card-open,
+.project-chat-open {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.3rem;
+    width: 100%;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: inherit;
+    text-align: left;
+    cursor: pointer;
+    font: inherit;
+}
+
+.project-card-name {
+    font-weight: 600;
+    overflow-wrap: anywhere;
+}
+
+.project-card-meta {
+    font-size: 0.85rem;
+    opacity: 0.75;
+    overflow-wrap: anywhere;
+}
+
+.project-toolbar,
+.project-form,
+.project-card-actions,
+.project-chat-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+}
+
+.project-form {
+    flex-direction: column;
+    width: 100%;
+}
+
+.project-form input,
+.project-form textarea {
+    width: 100%;
+    box-sizing: border-box;
+}
+
+.project-chat-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    flex-direction: column;
+}
+
+.project-badge {
+    display: inline-block;
+    max-width: 7rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 0.7rem;
+    line-height: 1.2;
+    padding: 0.1rem 0.4rem;
+    border-radius: 999px;
+    border: 1px solid var(--grok-rail-border);
+}
+
+@media (max-width: 480px) {
+    .project-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .project-toolbar .lib-btn,
+    .project-form .lib-btn,
+    .project-card-actions .lib-btn,
+    .project-page .lib-btn,
+    .project-card-open,
+    .project-chat-open {
+        min-height: 2.75rem;
+    }
+}
+
 .project-list,
 .plugin-list,
 .automation-list {

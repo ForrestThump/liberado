@@ -1,15 +1,16 @@
-//! Coding projects from `GET /api/projects`.
+//! Chat projects from `GET /api/chat-projects`.
 //!
-//! A pick attaches the project to the open chat with `PATCH /api/conversations/{id}`.
-//! A chat that does not exist yet keeps the name until the first message, which sends
-//! it on that same patch as the title.
+//! Topology rows keep a coding root. A project created here has none.
+//! Attaching a project still uses `PATCH /api/conversations/{id}`.
+
+use std::collections::HashMap;
 
 use dioxus::prelude::*;
 use serde::Deserialize;
 
-/// Shown on the projects page. Projects are config, not a create form.
-pub(crate) const PROJECT_SOURCE: &str =
-    "Projects are declared in topology.toml. This list reads them. It does not create one.";
+/// Shown on the projects page.
+pub(crate) const PROJECT_SOURCE: &str = "Topology projects stay in topology.toml and keep a \
+     coding root. New project creates a chat project with no coding root.";
 
 /// Shown on the projects page. A phone has no hover, so the sentence is not only a tooltip.
 pub(crate) const PROJECT_BIND_GAP: &str = "Choosing a project attaches it to the open chat. \
@@ -19,10 +20,25 @@ const DOTS: [&str; 3] = ["var(--dot-cyan)", "var(--dot-green)", "var(--dot-orang
 
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
 pub(crate) struct ProjectRow {
+    #[serde(default)]
+    pub id: String,
     pub name: String,
-    pub root: String,
+    #[serde(default)]
+    pub source: String,
+    #[serde(default)]
+    pub root: Option<String>,
     #[serde(default)]
     pub write_class: Option<String>,
+    #[serde(default)]
+    pub instructions: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+pub(crate) struct ProjectChatRow {
+    pub id: String,
+    #[serde(default)]
+    pub title: Option<String>,
+    pub updated_at: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -34,11 +50,25 @@ struct ProjectsResponse {
 pub(crate) fn parse_projects(body: &str) -> Result<Vec<ProjectRow>, String> {
     let parsed: ProjectsResponse =
         serde_json::from_str(body).map_err(|e| format!("Bad response: {e}"))?;
-    Ok(parsed.projects)
+    Ok(parsed.projects.into_iter().map(normalize_row).collect())
+}
+
+fn normalize_row(mut row: ProjectRow) -> ProjectRow {
+    if row.id.trim().is_empty() {
+        row.id = row.name.clone();
+    }
+    if row.source.trim().is_empty() {
+        row.source = if row.root.is_some() {
+            "topology".into()
+        } else {
+            "user".into()
+        };
+    }
+    row
 }
 
 pub(crate) async fn fetch_projects(api_base: &str) -> Result<Vec<ProjectRow>, String> {
-    let url = format!("{api_base}/api/projects");
+    let url = format!("{api_base}/api/chat-projects");
     let resp = crate::http::get(&url)
         .await
         .map_err(|e| format!("Failed to reach daemon: {e}"))?;
@@ -51,6 +81,137 @@ pub(crate) async fn fetch_projects(api_base: &str) -> Result<Vec<ProjectRow>, St
         .await
         .map_err(|e| format!("Bad response: {e}"))?;
     parse_projects(&text)
+}
+
+pub(crate) async fn create_user_project(
+    api_base: &str,
+    body: &serde_json::Value,
+) -> Result<ProjectRow, String> {
+    let url = format!("{api_base}/api/chat-projects");
+    let resp = crate::http::post_json(&url, body)
+        .await
+        .map_err(|e| format!("Failed to reach daemon: {e}"))?;
+    let status = resp.status();
+    let text = resp
+        .text()
+        .await
+        .map_err(|e| format!("Bad response: {e}"))?;
+    if !status.is_success() {
+        return Err(api_error(&text, status.as_u16()));
+    }
+    parse_one_project(&text)
+}
+
+pub(crate) async fn update_user_project(
+    api_base: &str,
+    id: &str,
+    body: &serde_json::Value,
+) -> Result<ProjectRow, String> {
+    let url = format!("{api_base}/api/chat-projects/{}", path_segment(id));
+    let resp = crate::http::patch_json(&url, body)
+        .await
+        .map_err(|e| format!("Failed to reach daemon: {e}"))?;
+    let status = resp.status();
+    let text = resp
+        .text()
+        .await
+        .map_err(|e| format!("Bad response: {e}"))?;
+    if !status.is_success() {
+        return Err(api_error(&text, status.as_u16()));
+    }
+    parse_one_project(&text)
+}
+
+pub(crate) async fn delete_user_project(api_base: &str, id: &str) -> Result<(), String> {
+    let url = format!("{api_base}/api/chat-projects/{}", path_segment(id));
+    let resp = crate::http::delete(&url)
+        .await
+        .map_err(|e| format!("Failed to reach daemon: {e}"))?;
+    if resp.status().is_success() {
+        Ok(())
+    } else {
+        let status = resp.status().as_u16();
+        let text = resp.text().await.unwrap_or_default();
+        Err(api_error(&text, status))
+    }
+}
+
+pub(crate) async fn fetch_project_chats(
+    api_base: &str,
+    id: &str,
+) -> Result<Vec<ProjectChatRow>, String> {
+    let url = format!("{api_base}/api/chat-projects/{}/chats", path_segment(id));
+    let resp = crate::http::get(&url)
+        .await
+        .map_err(|e| format!("Failed to reach daemon: {e}"))?;
+    let status = resp.status();
+    let text = resp
+        .text()
+        .await
+        .map_err(|e| format!("Bad response: {e}"))?;
+    if !status.is_success() {
+        return Err(api_error(&text, status.as_u16()));
+    }
+    parse_project_chats(&text)
+}
+
+pub(crate) async fn create_project_chat(api_base: &str, project: &str) -> Result<String, String> {
+    let url = format!("{api_base}/api/conversations");
+    let resp = crate::http::post_json(&url, &serde_json::json!({ "project": project }))
+        .await
+        .map_err(|e| format!("Failed to reach daemon: {e}"))?;
+    let status = resp.status();
+    let text = resp
+        .text()
+        .await
+        .map_err(|e| format!("Bad response: {e}"))?;
+    if !status.is_success() {
+        return Err(api_error(&text, status.as_u16()));
+    }
+    serde_json::from_str::<serde_json::Value>(&text)
+        .ok()
+        .and_then(|value| {
+            value
+                .get("id")
+                .and_then(|id| id.as_str())
+                .map(str::to_string)
+        })
+        .filter(|id| !id.is_empty())
+        .ok_or_else(|| "Chat was created without an id".into())
+}
+
+fn parse_one_project(body: &str) -> Result<ProjectRow, String> {
+    let row: ProjectRow = serde_json::from_str(body).map_err(|e| format!("Bad response: {e}"))?;
+    Ok(normalize_row(row))
+}
+
+pub(crate) fn parse_project_chats(body: &str) -> Result<Vec<ProjectChatRow>, String> {
+    #[derive(Deserialize)]
+    struct ChatsResponse {
+        #[serde(default)]
+        chats: Vec<ProjectChatRow>,
+    }
+    let parsed: ChatsResponse =
+        serde_json::from_str(body).map_err(|e| format!("Bad response: {e}"))?;
+    Ok(parsed.chats)
+}
+
+fn api_error(body: &str, status: u16) -> String {
+    let message = serde_json::from_str::<serde_json::Value>(body)
+        .ok()
+        .and_then(|value| {
+            value
+                .get("error")
+                .and_then(|err| err.as_str())
+                .map(str::to_string)
+        })
+        .filter(|message| !message.is_empty())
+        .unwrap_or_else(|| body.trim().to_string());
+    if message.is_empty() {
+        format!("Request failed ({status})")
+    } else {
+        format!("{message} ({status})")
+    }
 }
 
 pub(crate) fn project_dot(index: usize) -> &'static str {
@@ -73,6 +234,22 @@ pub(crate) fn collapsed_after_pick(narrow: bool, collapsed: bool) -> bool {
 }
 
 /// Close the phone drawer after a nav item opens a view. A desk rail is unchanged.
+pub(crate) fn replace_project_path(path: &str) {
+    #[cfg(target_arch = "wasm32")]
+    {
+        if let Some(window) = web_sys::window() {
+            if let Ok(history) = window.history() {
+                let _ =
+                    history.replace_state_with_url(&wasm_bindgen::JsValue::NULL, "", Some(path));
+            }
+        }
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let _ = path;
+    }
+}
+
 pub(crate) fn close_phone_drawer(mut collapsed: Signal<bool>) {
     let Ok(now) = collapsed.try_peek().map(|value| *value) else {
         return;
@@ -81,6 +258,116 @@ pub(crate) fn close_phone_drawer(mut collapsed: Signal<bool>) {
         &mut collapsed,
         collapsed_after_pick(crate::is_narrow_viewport(), now),
     );
+}
+
+/// A browser path under `/projects`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ProjectPath {
+    List,
+    Detail(String),
+}
+
+pub(crate) fn project_route_from_path(path: &str) -> Option<ProjectPath> {
+    let trimmed = path.trim().trim_end_matches('/');
+    if trimmed == "/projects" {
+        return Some(ProjectPath::List);
+    }
+    let rest = trimmed.strip_prefix("/projects/")?;
+    if rest.is_empty() || rest.contains('/') {
+        return None;
+    }
+    let id = percent_decode(rest);
+    if id.is_empty() {
+        None
+    } else {
+        Some(ProjectPath::Detail(id))
+    }
+}
+
+pub(crate) fn project_path(id: Option<&str>) -> String {
+    match id.map(str::trim).filter(|id| !id.is_empty()) {
+        Some(id) => format!("/projects/{}", path_segment(id)),
+        None => "/projects".into(),
+    }
+}
+
+pub(crate) fn path_segment(id: &str) -> String {
+    let mut out = String::new();
+    for byte in id.bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'~') {
+            out.push(byte as char);
+        } else {
+            out.push_str(&format!("%{byte:02X}"));
+        }
+    }
+    out
+}
+
+fn percent_decode(raw: &str) -> String {
+    let bytes = raw.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%' && index + 2 < bytes.len() {
+            if let Ok(value) = u8::from_str_radix(
+                std::str::from_utf8(&bytes[index + 1..index + 3]).unwrap_or(""),
+                16,
+            ) {
+                out.push(value);
+                index += 3;
+                continue;
+            }
+        }
+        out.push(bytes[index]);
+        index += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+pub(crate) fn project_editable(source: &str) -> bool {
+    source == "user"
+}
+
+pub(crate) fn delete_prompt(name: &str) -> String {
+    format!("Delete {name}? Chats stay in the chat list. They are detached from this project.")
+}
+
+pub(crate) fn new_project_body(name: &str, instructions: &str) -> Option<serde_json::Value> {
+    let name = name.trim();
+    if name.is_empty() {
+        return None;
+    }
+    let instructions = instructions.trim();
+    if instructions.is_empty() {
+        Some(serde_json::json!({ "name": name }))
+    } else {
+        Some(serde_json::json!({ "name": name, "instructions": instructions }))
+    }
+}
+
+pub(crate) fn chat_date(updated_at: &str) -> String {
+    let trimmed = updated_at.trim();
+    if trimmed.len() >= 10 && trimmed.as_bytes()[4] == b'-' && trimmed.as_bytes()[7] == b'-' {
+        trimmed[..10].to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+pub(crate) fn label_map(rows: &[ProjectRow]) -> HashMap<String, String> {
+    rows.iter()
+        .map(|row| (row.id.clone(), row.name.clone()))
+        .collect()
+}
+
+pub(crate) fn display_name(
+    key: &str,
+    loaded: Option<&Result<HashMap<String, String>, String>>,
+) -> String {
+    loaded
+        .and_then(|result| result.as_ref().ok())
+        .and_then(|map| map.get(key).cloned())
+        .unwrap_or_else(|| key.to_string())
 }
 
 pub(crate) fn project_chip_line(name: &str, saved_on_chat: bool) -> String {
@@ -180,11 +467,20 @@ pub(crate) fn ProjectContextChip(
     session: Signal<Option<String>>,
     list_epoch: Signal<u64>,
 ) -> Element {
+    let labels = use_resource({
+        let base = api_base.clone();
+        move || {
+            let base = base.clone();
+            async move { fetch_projects(&base).await.map(|rows| label_map(&rows)) }
+        }
+    });
     let Some(name) = active_project() else {
         return rsx! {};
     };
+    let loaded = labels.read();
+    let shown = display_name(&name, loaded.as_ref());
     let saved = session().is_some();
-    let line = project_chip_line(&name, saved);
+    let line = project_chip_line(&shown, saved);
     rsx! {
         p {
             class: "composer-project",
@@ -229,8 +525,23 @@ mod tests {
         let rows = parse_projects(body).unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].name, "liberado");
-        assert_eq!(rows[0].root, "/src");
+        assert_eq!(rows[0].id, "liberado");
+        assert_eq!(rows[0].source, "topology");
+        assert_eq!(rows[0].root.as_deref(), Some("/src"));
         assert_eq!(rows[0].write_class.as_deref(), Some("agent_writable"));
+    }
+
+    #[test]
+    fn a_user_project_has_no_coding_root() {
+        let body =
+            r#"{"projects":[{"id":"01P","name":"Trip","source":"user","instructions":"Pack"}]}"#;
+        let rows = parse_projects(body).unwrap();
+        assert_eq!(rows[0].id, "01P");
+        assert_eq!(rows[0].source, "user");
+        assert!(rows[0].root.is_none());
+        assert!(rows[0].write_class.is_none());
+        assert!(project_editable(&rows[0].source));
+        assert!(!project_editable("topology"));
     }
 
     #[test]
@@ -270,7 +581,37 @@ mod tests {
     #[test]
     fn the_projects_page_names_topology_and_not_a_create_form() {
         assert!(PROJECT_SOURCE.contains("topology.toml"));
-        assert!(PROJECT_SOURCE.contains("does not create"));
+        assert!(PROJECT_SOURCE.contains("New project"));
+        assert!(PROJECT_SOURCE.contains("no coding root"));
+    }
+
+    #[test]
+    fn paths_round_trip_and_a_blank_name_is_not_a_body() {
+        assert_eq!(
+            project_route_from_path("/projects"),
+            Some(ProjectPath::List)
+        );
+        assert_eq!(
+            project_route_from_path("/projects/01P"),
+            Some(ProjectPath::Detail("01P".into()))
+        );
+        assert_eq!(
+            project_route_from_path("/projects/a%20b"),
+            Some(ProjectPath::Detail("a b".into()))
+        );
+        assert_eq!(project_route_from_path("/other"), None);
+        assert_eq!(project_path(Some("a b")), "/projects/a%20b");
+        assert_eq!(project_path(None), "/projects");
+        assert!(new_project_body("  ", "notes").is_none());
+        assert_eq!(
+            new_project_body(" Trip ", " Pack "),
+            Some(serde_json::json!({ "name": "Trip", "instructions": "Pack" }))
+        );
+        assert_eq!(chat_date("2026-11-01T12:00:00Z"), "2026-11-01");
+        let prompt = delete_prompt("Trip");
+        assert!(prompt.contains("Trip"));
+        assert!(prompt.contains("detached"));
+        assert!(prompt.contains("chat list"));
     }
 
     #[test]
