@@ -6,6 +6,9 @@
 
 use dioxus::prelude::*;
 
+#[cfg(target_arch = "wasm32")]
+use crate::signal_alive::{ApplyOutcome, set_if_alive};
+
 use chat_client_contract::{CatalogResponse, McpInfo};
 
 /// Shown under the page title. The switch itself does not depend on a hover.
@@ -81,10 +84,13 @@ fn start_plugin_toggle(
     wasm_bindgen_futures::spawn_local(async move {
         match put_plugin_enabled(&api_base, &name, enabled).await {
             Ok(()) => {
-                error.set(None);
-                on_saved.call(());
+                if set_if_alive(&mut error, None) == ApplyOutcome::Applied {
+                    on_saved.call(());
+                }
             }
-            Err(message) => error.set(Some(message)),
+            Err(message) => {
+                let _ = set_if_alive(&mut error, Some(message));
+            }
         }
     });
     #[cfg(not(target_arch = "wasm32"))]

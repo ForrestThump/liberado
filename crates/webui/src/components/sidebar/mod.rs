@@ -13,6 +13,9 @@ use std::collections::HashMap;
 
 use dioxus::prelude::*;
 
+#[cfg(target_arch = "wasm32")]
+use crate::signal_alive::{restart_if_alive, set_if_alive, with_mut_if_alive};
+
 use chat_client_contract::{
     ConvHeader, ConversationSearchResponse, ConversationSearchResult, SurfaceMode,
 };
@@ -282,19 +285,24 @@ pub fn Sidebar(
             wasm_bindgen_futures::spawn_local(async move {
                 match delete_conversation(&base, &id).await {
                     Ok(()) => {
-                        menu_for.set(None);
-                        action_error.set(None);
-                        if deleted_the_open_conversation(active_conv_id.read().as_deref(), &id) {
-                            active_conv_id.set(None);
-                            active_surface.set(Some(SurfaceMode::Chat));
-                            route.set(Route::Chat);
-                            new_chat_nonce += 1;
+                        let _ = set_if_alive(&mut menu_for, None);
+                        let _ = set_if_alive(&mut action_error, None);
+                        let deleted_open = active_conv_id.try_peek().ok().is_some_and(|current| {
+                            deleted_the_open_conversation(current.as_deref(), &id)
+                        });
+                        if deleted_open {
+                            let _ = set_if_alive(&mut active_conv_id, None);
+                            let _ = set_if_alive(&mut active_surface, Some(SurfaceMode::Chat));
+                            let _ = set_if_alive(&mut route, Route::Chat);
+                            let _ = with_mut_if_alive(&mut new_chat_nonce, |nonce| *nonce += 1);
                             close_phone_drawer(collapsed);
                         }
-                        conversations.restart();
-                        search_results.restart();
+                        let _ = restart_if_alive(&mut conversations);
+                        let _ = restart_if_alive(&mut search_results);
                     }
-                    Err(e) => action_error.set(Some(e)),
+                    Err(e) => {
+                        let _ = set_if_alive(&mut action_error, Some(e));
+                    }
                 }
             });
             #[cfg(not(target_arch = "wasm32"))]
@@ -312,12 +320,14 @@ pub fn Sidebar(
             wasm_bindgen_futures::spawn_local(async move {
                 match rename_conversation(&base, &id, &title).await {
                     Ok(()) => {
-                        menu_for.set(None);
-                        action_error.set(None);
-                        conversations.restart();
-                        search_results.restart();
+                        let _ = set_if_alive(&mut menu_for, None);
+                        let _ = set_if_alive(&mut action_error, None);
+                        let _ = restart_if_alive(&mut conversations);
+                        let _ = restart_if_alive(&mut search_results);
                     }
-                    Err(e) => action_error.set(Some(e)),
+                    Err(e) => {
+                        let _ = set_if_alive(&mut action_error, Some(e));
+                    }
                 }
             });
             #[cfg(not(target_arch = "wasm32"))]
@@ -608,16 +618,19 @@ pub fn Sidebar(
                                     wasm_bindgen_futures::spawn_local(async move {
                                         match open_agent_creator_session(&base, &stamp).await {
                                             Ok(header) => {
-                                                active_conv_id.set(Some(header.id));
-                                                active_surface.set(Some(SurfaceMode::Agent));
-                                                route.set(Route::AgentSession);
-                                                create_error.set(None);
-                                                conversations.restart();
+                                                let _ = set_if_alive(&mut active_conv_id, Some(header.id));
+                                                let _ =
+                                                    set_if_alive(&mut active_surface, Some(SurfaceMode::Agent));
+                                                let _ = set_if_alive(&mut route, Route::AgentSession);
+                                                let _ = set_if_alive(&mut create_error, None);
+                                                let _ = restart_if_alive(&mut conversations);
                                                 if crate::is_narrow_viewport() {
-                                                    collapsed.set(true);
+                                                    let _ = set_if_alive(&mut collapsed, true);
                                                 }
                                             }
-                                            Err(e) => create_error.set(Some(e)),
+                                            Err(e) => {
+                                                let _ = set_if_alive(&mut create_error, Some(e));
+                                            }
                                         }
                                     });
                                     #[cfg(not(target_arch = "wasm32"))]

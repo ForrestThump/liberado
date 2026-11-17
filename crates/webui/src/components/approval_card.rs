@@ -107,6 +107,9 @@ pub(super) fn ApprovalCards(
         use_effect(move || {
             poll::restart_poll(base.clone(), session(), cards);
         });
+        // The interval closure outlives this component unless something clears it.
+        // A fetch that is already in flight still finishes; `set_if_alive` drops that write.
+        use_drop(poll::stop_poll);
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
@@ -166,7 +169,9 @@ fn tap(api_base: String, id: String, action: String, cards: Signal<Vec<ApprovalC
         let mut cards = cards;
         wasm_bindgen_futures::spawn_local(async move {
             if let Ok((decision, label)) = post_decision(&api_base, &id, &action).await {
-                cards.with_mut(|list| apply_local(list, &id, decision, label));
+                let _ = crate::signal_alive::with_mut_if_alive(&mut cards, |list| {
+                    apply_local(list, &id, decision, label);
+                });
             }
         });
     }
@@ -189,17 +194,21 @@ mod poll {
         static POLL_CB: RefCell<Option<Closure<dyn FnMut()>>> = const { RefCell::new(None) };
     }
 
-    pub(super) fn restart_poll(
-        api_base: String,
-        session_id: Option<String>,
-        cards: Signal<Vec<ApprovalCard>>,
-    ) {
+    pub(super) fn stop_poll() {
         if let Some(id) = POLL_ID.take()
             && let Some(window) = web_sys::window()
         {
             window.clear_interval_with_handle(id);
         }
         POLL_CB.with(|cell| *cell.borrow_mut() = None);
+    }
+
+    pub(super) fn restart_poll(
+        api_base: String,
+        session_id: Option<String>,
+        cards: Signal<Vec<ApprovalCard>>,
+    ) {
+        stop_poll();
         let Some(session_id) = session_id else {
             return;
         };
@@ -209,7 +218,7 @@ mod poll {
             let mut cards = cards;
             wasm_bindgen_futures::spawn_local(async move {
                 if let Ok(next) = fetch_approvals(&base, &session).await {
-                    cards.set(next);
+                    let _ = crate::signal_alive::set_if_alive(&mut cards, next);
                 }
             });
         }) as Box<dyn FnMut()>);
@@ -262,6 +271,37 @@ mod tests {
         assert_eq!(
             view.banner.as_deref(),
             Some("already decided: Approved once")
+        );
+    }
+
+    #[test]
+    fn the_poll_stops_when_the_cards_unmount() {
+        let src = include_str!("approval_card.rs");
+        let cards = src.split("fn ApprovalCards").nth(1).expect("ApprovalCards");
+        let cards = cards.split("fn ApprovalCardRow").next().unwrap_or(cards);
+        assert!(cards.contains("use_drop"));
+        assert!(
+            cards.contains("poll::stop_poll"),
+            "unmount must clear the interval"
+        );
+        assert!(src.contains("fn stop_poll"));
+        assert!(src.contains("clear_interval_with_handle"));
+        let tap = src.split("fn tap").nth(1).expect("tap");
+        let tap = tap.split("fn stop_poll").next().unwrap_or(tap);
+        assert!(tap.contains("with_mut_if_alive"));
+        assert!(
+            !tap.contains("cards.with_mut"),
+            "tap must not unwrap a dropped signal"
+        );
+        let poll = src
+            .split("fetch_approvals(&base, &session).await")
+            .nth(1)
+            .expect("poll future");
+        let poll = poll.split("let Some(window)").next().unwrap_or(poll);
+        assert!(poll.contains("set_if_alive"));
+        assert!(
+            !poll.contains("cards.set"),
+            "the poll must not unwrap a dropped signal"
         );
     }
 

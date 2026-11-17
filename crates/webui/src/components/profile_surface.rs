@@ -34,14 +34,21 @@ pub(crate) fn show_profile_browser(open: bool, surface: Option<SurfaceMode>) -> 
 }
 
 /// `/profile` on an Agent surface is a no-op open. Chat and empty chat still open the picker.
-pub(crate) fn maybe_open_profile_browser(surface: Option<SurfaceMode>, mut open: Signal<bool>) {
-    if profile_chip_visible(surface) {
-        open.set(true);
+pub(crate) fn maybe_open_profile_browser(
+    surface: Signal<Option<SurfaceMode>>,
+    mut open: Signal<bool>,
+) {
+    // Called after a slash command's await. A dropped surface means the chat is gone.
+    let Ok(mode) = surface.try_peek() else {
+        return;
+    };
+    if profile_chip_visible(*mode) {
+        let _ = crate::signal_alive::set_if_alive(&mut open, true);
     }
 }
 
 pub(crate) fn set_surface(mut slot: Signal<Option<SurfaceMode>>, mode: Option<SurfaceMode>) {
-    slot.set(mode);
+    let _ = crate::signal_alive::set_if_alive(&mut slot, mode);
 }
 
 /// First token, so `/profile set coding` is the same command as `/profile`.

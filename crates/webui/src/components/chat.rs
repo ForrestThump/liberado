@@ -21,6 +21,8 @@ use crate::icons::{IconGlasses, IconStop};
 // Slash commands only run in the browser — `submit` gates the whole block on wasm32, so gate the
 // imports identically or a native build trips the workspace's zero-warnings bar on unused imports.
 #[cfg(target_arch = "wasm32")]
+use crate::signal_alive::{push_if_alive, set_if_alive};
+#[cfg(target_arch = "wasm32")]
 use liberado_commands::CommandResult;
 
 #[cfg(target_arch = "wasm32")]
@@ -297,20 +299,20 @@ pub fn Chat(
                         }
                         // History arrived. Pin before the rows paint so the pane lands on the
                         // latest message, including when the reader had scrolled up before.
-                        opened.write().opened_conversation();
-                        messages.set(loaded_messages);
-                        approvals.set(loaded.approvals);
+                        chat_scroll::TranscriptStick::pin_if_alive(&mut opened);
+                        let _ = set_if_alive(&mut messages, loaded_messages);
+                        let _ = set_if_alive(&mut approvals, loaded.approvals);
                         set_surface(active_surface, Some(loaded.surface_mode));
                         // From the conversation, not remembered client-side: opening a chat in a
                         // second tab or after a restart must show the authority it actually runs
                         // under, not whatever this tab last set.
-                        active_profile.set(loaded.profile);
+                        let _ = set_if_alive(&mut active_profile, loaded.profile);
                         // A turn is still going: rejoin it. This is the reload case — the answer is
                         // being written right now and the transcript cannot show it yet. Attaching
                         // rather than re-sending matters, because re-sending would start a second
                         // turn and charge for the same answer twice.
                         if running {
-                            sending.set(true);
+                            let _ = set_if_alive(&mut sending, true);
                             attach_stream(
                                 &base,
                                 &conv_id,
@@ -494,51 +496,51 @@ pub fn Chat(
                 )
                 .await;
                 for msg in cmd_msgs {
-                    messages.write().push(msg);
+                    let _ = push_if_alive(&mut messages, msg);
                 }
                 if let Some(id) = new_session {
-                    session.set(Some(id));
+                    let _ = set_if_alive(&mut session, Some(id));
                 }
                 for result in &results {
                     match result {
                         CommandResult::NewConversation { .. } => {
-                            messages.set(Vec::new());
-                            approvals.set(Vec::new());
-                            session.set(None);
-                            active_conv_id.set(None);
-                            active_profile.set(profile_for_new_chat());
+                            let _ = set_if_alive(&mut messages, Vec::new());
+                            let _ = set_if_alive(&mut approvals, Vec::new());
+                            let _ = set_if_alive(&mut session, None);
+                            let _ = set_if_alive(&mut active_conv_id, None);
+                            let _ = set_if_alive(&mut active_profile, profile_for_new_chat());
                             set_surface(
                                 active_surface,
                                 Some(chat_client_contract::SurfaceMode::Chat),
                             );
                         }
                         CommandResult::ChatCleared => {
-                            messages.set(Vec::new());
-                            approvals.set(Vec::new());
+                            let _ = set_if_alive(&mut messages, Vec::new());
+                            let _ = set_if_alive(&mut approvals, Vec::new());
                         }
                         CommandResult::SessionSwitched { id } => {
-                            session.set(Some(id.clone()));
-                            active_conv_id.set(Some(id.clone()));
+                            let _ = set_if_alive(&mut session, Some(id.clone()));
+                            let _ = set_if_alive(&mut active_conv_id, Some(id.clone()));
                         }
                         CommandResult::SessionClosed { .. } => {
-                            session.set(None);
+                            let _ = set_if_alive(&mut session, None);
                         }
                         // The command announces the browser; opening it is the surface's job. This
                         // arm is what was missing: the result fell into `_` and `/model` printed
                         // "Opening model browser" while nothing opened.
                         CommandResult::OpenModelBrowser => {
-                            model_browser_open.set(true);
+                            let _ = set_if_alive(&mut model_browser_open, true);
                         }
                         CommandResult::OpenThemeBrowser => {
-                            theme_browser_open.set(true);
+                            let _ = set_if_alive(&mut theme_browser_open, true);
                         }
                         CommandResult::OpenProfileBrowser => {
-                            maybe_open_profile_browser(active_surface(), profile_browser_open);
+                            maybe_open_profile_browser(active_surface, profile_browser_open);
                         }
                         // The command layer validated the name against the shared registry; all that
                         // is left is to render it and remember it.
                         CommandResult::ThemeChanged { name } => {
-                            theme_name.set(name.clone());
+                            let _ = set_if_alive(&mut theme_name, name.clone());
                             crate::theme::save_theme_name(name);
                         }
                         _ => {}
@@ -1280,7 +1282,7 @@ fn connect_stream(
                 let mut messages = messages;
                 wasm_bindgen_futures::spawn_local(async move {
                     if let Ok(loaded) = fetch_conversation(&base, &conv_id).await {
-                        messages.set(loaded.messages);
+                        let _ = set_if_alive(&mut messages, loaded.messages);
                     }
                 });
             }

@@ -170,6 +170,10 @@ function createStubState() {
     subscriptionPosts: [],
     clientErrorReports: [],
     apiHits: [],
+    approvalChat: false,
+    holdApprovals: false,
+    approvalFetches: 0,
+    releaseApprovals: [],
     deleteSubscriptionHttpStatus: 200,
     pushTestFailOnce: false,
     allowPush404: false,
@@ -272,7 +276,25 @@ async function handleApi(req, res, url, stubState) {
       stubJson(res, 401, { error: 'unauthorized' }, setCsrf);
       return true;
     }
+    if (stubState.approvalChat) {
+      stubJson(res, 200, [approvalConversationHeader()], setCsrf);
+      return true;
+    }
     stubJson(res, 200, [], setCsrf);
+    return true;
+  }
+  if (url.pathname === '/api/conversations/smoke-approval' && req.method === 'GET') {
+    stubJson(res, 200, approvalHistory(), setCsrf);
+    return true;
+  }
+  if (url.pathname === '/api/conversations/smoke-approval/approvals' && req.method === 'GET') {
+    stubState.approvalFetches += 1;
+    if (stubState.holdApprovals) {
+      await new Promise((resolve) => {
+        stubState.releaseApprovals.push(resolve);
+      });
+    }
+    stubJson(res, 200, { approvals: [approvalCard()] }, setCsrf);
     return true;
   }
   if (url.pathname === '/api/projects' && req.method === 'GET') {
@@ -991,6 +1013,119 @@ async function runAuthLoginPhase(cdp, stubState) {
   );
 }
 
+function approvalCard() {
+  return {
+    id: 'perm-smoke',
+    title: 'Write the note',
+    summary: 'needs write',
+    options: [{ action: 'once', label: 'Once' }],
+    pending: true,
+    created_at: '2026-10-10T00:00:00Z',
+  };
+}
+
+function approvalConversationHeader() {
+  return {
+    id: 'smoke-approval',
+    title: 'Needs approval',
+    created_at: '2026-10-10T00:00:00Z',
+    surface_mode: 'chat',
+  };
+}
+
+function approvalHistory() {
+  return {
+    messages: [{ role: 'user', content: 'please write the note' }],
+    surface_mode: 'chat',
+    turn_running: false,
+    approvals: [approvalCard()],
+  };
+}
+
+function releaseHeldApprovals(stubState) {
+  stubState.holdApprovals = false;
+  const waiting = stubState.releaseApprovals.splice(0);
+  for (const release of waiting) {
+    release();
+  }
+}
+
+/// Open a chat whose approval poll is in flight, leave it, and require no panic.
+///
+/// The poll is a 3s interval. The first fetch is held until the chat unmounts, then
+/// released. A second wait covers an interval that was not cleared.
+async function runApprovalPollUnmountPhase(cdp, stubState, origin) {
+  stubState.approvalChat = true;
+  stubState.holdApprovals = true;
+  stubState.approvalFetches = 0;
+  stubState.releaseApprovals = [];
+  const reportsBefore = stubState.clientErrorReports.length;
+  try {
+    await cdp.send('Page.navigate', { url: `${origin}/` });
+    await waitFor(
+      cdp,
+      `!!document.querySelector('.phone-menu-fab, .sidebar-menu-btn')`,
+      'app shell before approval poll',
+      20_000,
+    );
+    await clickAssert(
+      cdp,
+      `(function(){
+        const btn = document.querySelector('.phone-menu-fab') || document.querySelector('.sidebar-menu-btn');
+        if (!btn) return false;
+        btn.click();
+        return true;
+      })()`,
+      'menu before approval chat',
+    );
+    await sleep(400);
+    await clickAssert(
+      cdp,
+      `(function(){
+        const row = [...document.querySelectorAll('button')].find((b) => b.textContent.includes('Needs approval'));
+        if (!row) return false;
+        row.click();
+        return true;
+      })()`,
+      'Needs approval chat',
+    );
+    await waitFor(
+      cdp,
+      `!!document.querySelector('.approval-card')`,
+      'approval card on the open chat',
+      15_000,
+    );
+    const pollStart = Date.now();
+    while (Date.now() - pollStart < 15_000) {
+      if (stubState.approvalFetches >= 1) {
+        break;
+      }
+      await sleep(200);
+    }
+    if (stubState.approvalFetches < 1) {
+      fail('approval poll did not request /approvals within 15s');
+      return;
+    }
+    await openNotificationsFromHome(cdp);
+    releaseHeldApprovals(stubState);
+    await sleep(4_000);
+    const banner = await evalBool(cdp, `!!document.getElementById('liberado-panic-banner')`);
+    if (banner) {
+      fail('panic banner after leaving a chat with an in-flight approval poll');
+    }
+    const panicReport = stubState.clientErrorReports.slice(reportsBefore).find((report) => {
+      const text = JSON.stringify(report);
+      return text.includes('panicked') || text.includes('ValueDropped') || text.includes('Dropped');
+    });
+    if (panicReport) {
+      fail(`client error after leaving approval chat: ${JSON.stringify(panicReport)}`);
+    }
+  } finally {
+    releaseHeldApprovals(stubState);
+    stubState.approvalChat = false;
+  }
+}
+
 async function runAuth401Phase(cdp, stubState) {
   await cdp.send('Page.reload');
   await waitFor(
@@ -1480,6 +1615,8 @@ async function runScenario(origin, debugPort, stubState, waitOpts) {
   await runReconcileOnLoadPhase(cdp, stubState);
   await runTurnOffDelete404Phase(cdp, stubState);
   await runSendTestReregisterPhase(cdp, stubState, origin);
+
+  await runApprovalPollUnmountPhase(cdp, stubState, origin);
 
   await runAuth401Phase(cdp, stubState);
 

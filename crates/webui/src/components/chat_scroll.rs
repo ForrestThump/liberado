@@ -57,6 +57,12 @@ impl TranscriptStick {
         self.pinned = true;
     }
 
+    /// Pin after the history fetch, and do nothing if the pane is already gone.
+    #[cfg(target_arch = "wasm32")]
+    pub(super) fn pin_if_alive(stick: &mut Signal<Self>) {
+        let _ = crate::signal_alive::call_if_alive(stick, Self::opened_conversation);
+    }
+
     /// The reader sent. Jump even if they had scrolled up.
     pub(super) fn user_sent(&mut self) {
         self.pinned = true;

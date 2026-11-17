@@ -6,6 +6,7 @@
 use dioxus::prelude::*;
 
 use super::ConversationPage;
+use crate::signal_alive::set_if_alive;
 
 pub(super) fn profile_from_page(page: &ConversationPage, id: &str) -> Option<String> {
     page.profiles.get(id).cloned()
@@ -75,12 +76,12 @@ fn note_result(
 ) -> bool {
     match result {
         Ok(()) => {
-            menu_for.set(None);
-            action_error.set(None);
-            true
+            let wrote = set_if_alive(menu_for, None);
+            let _ = set_if_alive(action_error, None);
+            wrote == crate::signal_alive::ApplyOutcome::Applied
         }
         Err(error) => {
-            action_error.set(Some(error));
+            let _ = set_if_alive(action_error, Some(error));
             false
         }
     }
