@@ -479,6 +479,15 @@ async function handleApi(req, res, url, stubState) {
   return false;
 }
 
+function clientShellPath(rel) {
+  return (
+    rel === '/projects' ||
+    rel.startsWith('/projects/') ||
+    rel === '/notifications' ||
+    rel.startsWith('/notifications/')
+  );
+}
+
 function startStaticServer(stubState) {
   if (!fs.existsSync(path.join(BUNDLE, 'index.html'))) {
     throw new Error(
@@ -491,7 +500,7 @@ function startStaticServer(stubState) {
       return;
     }
     let rel = decodeURIComponent(url.pathname);
-    if (rel === '/' || rel === '') {
+    if (rel === '/' || rel === '' || clientShellPath(rel)) {
       rel = '/index.html';
     }
     if (rel === '/favicon.ico') {
@@ -1805,4 +1814,5 @@ module.exports = {
   chromeLaunchArgs,
   isChromeStartupFailure,
   retryChromeStartup,
+  clientShellPath,
 };

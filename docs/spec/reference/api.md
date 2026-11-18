@@ -260,6 +260,9 @@ chats. The chats stay in the chat list. A topology id is `400`. An unknown id is
 `GET /api/chat-projects/{id}/chats` returns `{ "chats": [{ "id", "title"?, "updated_at" }] }`,
 newest first. Unknown id is `404`.
 
+`GET /projects` and `GET /projects/{id}` return the WebUI `index.html`, the same shell as
+`GET /notifications`. A refresh on a project page stays in the app.
+
 `POST /api/conversations` may include `project`. A standard chat stores it. The agent
 creator and the automation editor ignore the field. An unknown project is `400` and creates
 no chat.

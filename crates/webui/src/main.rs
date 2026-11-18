@@ -139,14 +139,15 @@ fn App() -> Element {
     // Automations / Projects / Plugins are reachable via the sidebar.
     let mut route = use_signal(|| Route::Chat);
     let project_focus = use_signal(|| None::<String>);
+    // Once. A later render must not snap the route back to the address bar.
     #[cfg(target_arch = "wasm32")]
-    {
+    use_hook(move || {
         if let Some(window) = web_sys::window() {
             if let Ok(path) = window.location().pathname() {
                 boot_route::apply_boot_route(&path, route, project_focus);
             }
         }
-    }
+    });
     // The active theme name, restored from the last choice. Chat writes it when `/theme set` lands,
     // and the sidebar's theme swatch writes it through `save_theme_name`. The `theme_epoch`
     // counter below is the bridge: a write through either path bumps it, and the effect re-reads
