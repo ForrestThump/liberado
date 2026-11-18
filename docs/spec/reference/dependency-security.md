@@ -24,10 +24,10 @@ cargo-vet before any job may compile a build script or procedural macro.
 a heap buffer overflow in zlib `gz_vacate`. The build script is the same
 9463-byte file as in 1.1.31. The exemption is still debt, not an audit.
 
-`deny.toml` ignores RUSTSEC-2026-0543 and RUSTSEC-2026-0555. `chrono` and
-`chrono-tz` are unmaintained, every version is affected, and no replacement
-is published. The ignore is the same kind of record as the other unmaintained
-crates in that file. It is not a vulnerability waiver.
+`deny.toml` ignores RUSTSEC-2026-0543 and RUSTSEC-2026-0555 for this PR
+only. `chrono` and `chrono-tz` are unmaintained, every version is affected,
+and no replacement is published. The jiff migration PR removes these two
+ignores. They are not a vulnerability waiver.
 
 `deny.toml` allows the build script `rustls@0.23.46`. The vet exemption
 in `supply-chain/config.toml` names the same version. 0.23.46 is the
