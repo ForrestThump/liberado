@@ -6648,7 +6648,7 @@
     "cyclomatic": 67
   },
   "crates/webui/src/components/sidebar/mod.rs": {
-    "ploc": 754,
+    "ploc": 738,
     "lloc": 87,
     "functions": 35,
     "cyclomatic": 91
@@ -6660,10 +6660,10 @@
     "cyclomatic": 24
   },
   "crates/webui/src/components/sidebar/projects.rs": {
-    "ploc": 37,
+    "ploc": 14,
     "lloc": 0,
-    "functions": 3,
-    "cyclomatic": 7
+    "functions": 2,
+    "cyclomatic": 6
   },
   "crates/webui/src/components/sidebar/rail.rs": {
     "ploc": 287,
