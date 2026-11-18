@@ -280,7 +280,7 @@ async function handleApi(req, res, url, stubState) {
       stubJson(res, 200, [approvalConversationHeader()], setCsrf);
       return true;
     }
-    stubJson(res, 200, [], setCsrf);
+    stubJson(res, 200, smokeChatHeaders(), setCsrf);
     return true;
   }
   if (url.pathname === '/api/conversations/smoke-approval' && req.method === 'GET') {
@@ -300,6 +300,11 @@ async function handleApi(req, res, url, stubState) {
   if (url.pathname === '/api/projects' && req.method === 'GET') {
     if (requireSession()) return true;
     stubJson(res, 200, { projects: [] }, setCsrf);
+    return true;
+  }
+  if (url.pathname === '/api/catalog' && req.method === 'GET') {
+    if (requireSession()) return true;
+    stubJson(res, 200, { mcps: [] }, setCsrf);
     return true;
   }
   if (url.pathname === '/api/chat-projects' && req.method === 'GET') {
@@ -1358,7 +1363,145 @@ async function runNormalFlow(cdp, stubState, origin) {
   await runProjectsPhase(cdp);
 }
 
+function smokeChatHeaders() {
+  const rows = [];
+  for (let i = 1; i <= 24; i += 1) {
+    rows.push({
+      id: `smoke-chat-${i}`,
+      title: `Smoke chat ${String(i).padStart(2, '0')}`,
+      created_at: '2026-11-01T12:00:00Z',
+      surface_mode: 'chat',
+    });
+  }
+  return rows;
+}
+
+function sidebarLayoutExpr() {
+  return `(function(){
+    const nav = document.querySelector('.sidebar-nav');
+    const history = document.querySelector('.sidebar-history');
+    const scroll = document.querySelector('.sidebar-history > .sidebar-scroll');
+    const projects = document.querySelector('.sidebar-nav button[aria-label="Projects"]');
+    const plugins = document.querySelector('.sidebar-nav button[aria-label="Plugins"]');
+    const recents = document.querySelector('.sidebar-history-label');
+    const labels = [...document.querySelectorAll('.sidebar-nav .sidebar-nav-row')].map((el) => el.getAttribute('aria-label'));
+    const projectsIdx = labels.indexOf('Projects');
+    const pluginsIdx = labels.indexOf('Plugins');
+    const sectionLabels = [...document.querySelectorAll('.sidebar-section-label')].map((el) => (el.textContent || '').trim());
+    const manage = [...document.querySelectorAll('button')].some((el) => (el.textContent || '').includes('Manage plugins'));
+    const scrollStyle = scroll ? getComputedStyle(scroll) : null;
+    const historyStyle = history ? getComputedStyle(history) : null;
+    const sidebar = document.querySelector('#sidebar');
+    const side = sidebar ? sidebar.getBoundingClientRect() : null;
+    const projectsBox = projects ? projects.getBoundingClientRect() : null;
+    const pluginsBox = plugins ? plugins.getBoundingClientRect() : null;
+    const navBox = nav ? nav.getBoundingClientRect() : null;
+    const historyBox = history ? history.getBoundingClientRect() : null;
+    const before = projectsBox ? projectsBox.top : 0;
+    if (scroll) scroll.scrollTop = scroll.scrollHeight;
+    const afterBox = projects ? projects.getBoundingClientRect() : null;
+    const chats = document.querySelector('.sidebar-history .sidebar-shelves button[aria-selected="true"]');
+    return JSON.stringify({
+      projectsRow: !!(projects && projects.classList.contains('sidebar-nav-row') && projects.querySelector('.sidebar-icon')),
+      pluginsRow: !!(plugins && plugins.classList.contains('sidebar-nav-row') && plugins.querySelector('.sidebar-icon')),
+      order: projectsIdx >= 0 && pluginsIdx === projectsIdx + 1,
+      manage,
+      sectionLabels,
+      recents: !!(recents && (recents.textContent || '').trim() === 'Recents'),
+      shelves: !!document.querySelector('.sidebar-history .sidebar-shelves'),
+      chatsShelf: !!(chats && (chats.textContent || '').includes('Chats')),
+      overflowY: scrollStyle ? scrollStyle.overflowY : '',
+      historyMin: historyStyle ? historyStyle.minHeight : '',
+      historyGrow: historyStyle ? historyStyle.flexGrow : '',
+      scrolls: !!(scroll && scroll.scrollHeight > scroll.clientHeight + 8),
+      projectsStay: !!(projectsBox && afterBox && Math.abs(afterBox.top - before) < 1),
+      projectsInView: !!(side && afterBox && afterBox.top >= side.top - 1 && afterBox.bottom <= side.bottom + 1),
+      pluginsUnderProjects: !!(projectsBox && pluginsBox && pluginsBox.top >= projectsBox.bottom - 1),
+      navAboveHistory: !!(navBox && historyBox && navBox.bottom <= historyBox.top + 1),
+    });
+  })()`;
+}
+
+async function assertSidebarLayout(cdp) {
+  await waitFor(
+    cdp,
+    `(function(){
+      return [...document.querySelectorAll('.sidebar-history .grok-row-title')].some((el) => (el.textContent || '').includes('Smoke chat 24'));
+    })()`,
+    'sidebar history rows',
+    10_000,
+  );
+  const raw = await evalString(cdp, sidebarLayoutExpr());
+  let info;
+  try {
+    info = JSON.parse(raw);
+  } catch (err) {
+    fail(`sidebar layout was not JSON: ${raw}`);
+    return;
+  }
+  if (!info.projectsRow || !info.pluginsRow) {
+    fail(`Projects and Plugins must be icon nav rows: ${raw}`);
+  }
+  if (!info.order || !info.pluginsUnderProjects) {
+    fail(`Plugins must sit directly under Projects: ${raw}`);
+  }
+  if (info.manage) {
+    fail('Manage plugins row must be gone');
+  }
+  if (info.sectionLabels.includes('Projects') || info.sectionLabels.includes('Plugins')) {
+    fail(`Projects and Plugins section headers must be gone: ${raw}`);
+  }
+  if (!info.recents || !info.shelves || !info.chatsShelf) {
+    fail(`Recents heading and Chats shelf must delineate history: ${raw}`);
+  }
+  if (info.overflowY !== 'auto' || info.historyMin !== '0px' || info.historyGrow !== '1') {
+    fail(`history list must be the scroller: ${raw}`);
+  }
+  if (!info.scrolls || !info.projectsStay || !info.projectsInView || !info.navAboveHistory) {
+    fail(`scrolling history must leave the nav on screen: ${raw}`);
+  }
+}
+
 async function runProjectsPhase(cdp) {
+  await assertSidebarLayout(cdp);
+  await clickAssert(
+    cdp,
+    `(function(){
+      const row = document.querySelector('.sidebar-nav button[aria-label="Plugins"]');
+      if (!row) return false;
+      row.click();
+      return true;
+    })()`,
+    'Plugins nav',
+  );
+  await waitFor(
+    cdp,
+    `(function(){
+      const title = document.querySelector('.plugins-page .grok-page-title');
+      return title && title.textContent.includes('Connected MCP servers');
+    })()`,
+    'plugins page',
+    15_000,
+  );
+  await clickAssert(
+    cdp,
+    `(function(){
+      const btn = document.querySelector('.phone-menu-fab') || document.querySelector('.sidebar-menu-btn');
+      if (!btn) return false;
+      btn.click();
+      return true;
+    })()`,
+    'sidebar menu before Projects',
+  );
+  await waitFor(
+    cdp,
+    `(function(){
+      const layout = document.querySelector('.grok-layout');
+      return layout && layout.classList.contains('drawer-open');
+    })()`,
+    'sidebar drawer open for Projects',
+    10_000,
+  );
   await clickAssert(
     cdp,
     `(function(){

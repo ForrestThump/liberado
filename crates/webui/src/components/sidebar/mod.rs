@@ -4,9 +4,9 @@
 //! On a phone the collapsed rail is hidden (the header menu opens the panel as an overlay).
 //! On a desk the rail's brand mark brings the panel back. On a phone the header menu does.
 //!
-//! Sections rendered when expanded: Chat / Library / Automations primary nav, Agents (Pinned +
-//! labelled categories + Show more), Chats (recent), a Projects nav entry, and
-//! Plugins. Imagine is intentionally absent — the file `components/imagine.rs` and `Route::Imagine`
+//! Sections rendered when expanded: Chat / Library / Automations / Notifications / Projects /
+//! Plugins primary nav, then a Recents block (Chats | Agents shelves and the history list).
+//! Imagine is intentionally absent — the file `components/imagine.rs` and `Route::Imagine`
 //! survive so the surface can be re-introduced later without re-shaping the rail.
 
 use std::collections::HashMap;
@@ -38,10 +38,10 @@ use self::profile_api::{profile_from_page, use_profile_actions};
 use self::agents::{
     AgentTailList, CategoryList, ChatList, PinnedList, SearchResultList, ShowMoreRow, group_agents,
 };
-use self::projects::{PluginList, project_for_open};
+use self::projects::project_for_open;
 use self::rail::{
     AgentGlyph, BellGlyph, BrandLogo, ChatBubble, ClockGlyph, CollapseGlyph, ExpandGlyph,
-    LibraryGlyph, PluginGlyph, PrimaryNavRow, ThemeSwatch,
+    LibraryGlyph, PluginGlyph, PrimaryNavRow, ProjectGlyph, ThemeSwatch,
 };
 
 pub(in crate::components) use self::agents::relative_time;
@@ -514,33 +514,38 @@ pub fn Sidebar(
                 PrimaryNavRow { route: route, collapsed: collapsed, target: Route::Library, label: "Library", icon: rsx! { LibraryGlyph {} } }
                 PrimaryNavRow { route: route, collapsed: collapsed, target: Route::Automations, label: "Automations", icon: rsx! { ClockGlyph {} } }
                 PrimaryNavRow { route: route, collapsed: collapsed, target: Route::Notifications, label: "Notifications", icon: rsx! { BellGlyph {} } }
+                PrimaryNavRow { route: route, collapsed: collapsed, target: Route::Projects, label: "Projects", icon: rsx! { ProjectGlyph {} } }
+                PrimaryNavRow { route: route, collapsed: collapsed, target: Route::Plugins, label: "Plugins", icon: rsx! { PluginGlyph {} } }
             }
 
             div {
-                class: "sidebar-shelves",
-                role: "tablist",
-                "aria-label": "Conversation shelves",
-                button {
-                    class: if shelf() == Shelf::Chats { "sidebar-shelf-btn active" } else { "sidebar-shelf-btn" },
-                    role: "tab",
-                    r#type: "button",
-                    "aria-selected": "{shelf() == Shelf::Chats}",
-                    onclick: move |_| shelf.set(Shelf::Chats),
-                    "Chats"
+                class: "sidebar-history",
+                p { class: "sidebar-history-label", "Recents" }
+                div {
+                    class: "sidebar-shelves",
+                    role: "tablist",
+                    "aria-label": "Conversation shelves",
+                    button {
+                        class: if shelf() == Shelf::Chats { "sidebar-shelf-btn active" } else { "sidebar-shelf-btn" },
+                        role: "tab",
+                        r#type: "button",
+                        "aria-selected": "{shelf() == Shelf::Chats}",
+                        onclick: move |_| shelf.set(Shelf::Chats),
+                        "Chats"
+                    }
+                    button {
+                        class: if shelf() == Shelf::Agents { "sidebar-shelf-btn active" } else { "sidebar-shelf-btn" },
+                        role: "tab",
+                        r#type: "button",
+                        "aria-selected": "{shelf() == Shelf::Agents}",
+                        onclick: move |_| shelf.set(Shelf::Agents),
+                        "Agents"
+                    }
                 }
-                button {
-                    class: if shelf() == Shelf::Agents { "sidebar-shelf-btn active" } else { "sidebar-shelf-btn" },
-                    role: "tab",
-                    r#type: "button",
-                    "aria-selected": "{shelf() == Shelf::Agents}",
-                    onclick: move |_| shelf.set(Shelf::Agents),
-                    "Agents"
-                }
-            }
 
             if search_open() && !search_query().trim().is_empty() {
                 div {
-                    class: "sidebar-list",
+                    class: "sidebar-scroll",
                     match &*search_results.read() {
                         Some(Some(Ok(results))) => rsx! {
                             SearchResultList {
@@ -775,55 +780,11 @@ pub fn Sidebar(
                         }
                     }
                     }
-
-                    section {
-                        class: "sidebar-section",
-                        header {
-                            class: "sidebar-section-header",
-                            button {
-                                class: if matches!(route(), Route::Projects | Route::ProjectDetail) {
-                                    "sidebar-section-toggle active"
-                                } else {
-                                    "sidebar-section-toggle"
-                                },
-                                r#type: "button",
-                                "aria-label": "Projects",
-                                onclick: move |_| {
-                                    route.set(Route::Projects);
-                                    close_phone_drawer(collapsed);
-                                },
-                                span { class: "sidebar-section-label", "Projects" }
-                            }
-                        }
-                    }
-
-                    section {
-                        class: "sidebar-section",
-                        header {
-                            class: "sidebar-section-header",
-                            button {
-                                class: "sidebar-section-toggle",
-                                r#type: "button",
-                                onclick: move |_| {
-                                    if route() == Route::Plugins {
-                                        route.set(Route::Chat);
-                                    } else {
-                                        route.set(Route::Plugins);
-                                    }
-                                    close_phone_drawer(collapsed);
-                                },
-                                span { class: "sidebar-section-label", "Plugins" }
-                            }
-                        }
-                        PluginList {
-                            collapsed: collapsed,
-                            on_open: move |_| route.set(Route::Plugins),
-                        }
-                    }
                 }
-                // Outside `.sidebar-scroll`. That list clips both axes, so a
-                // popover here would lose its box and leave only the shadow.
-                ThemeSwatch { theme_epoch: theme_epoch }
+            }
+            // Outside `.sidebar-scroll`. That list clips both axes, so a
+            // popover here would lose its box and leave only the shadow.
+            ThemeSwatch { theme_epoch: theme_epoch }
             }
 
             if let Some(err) = action_error() {

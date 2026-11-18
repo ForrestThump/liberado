@@ -71,10 +71,10 @@ The bundle is **mounted** into the daemon's container; `ServeDir` re-reads it pe
 | `Automations` | `components::automations::Automations` | |
 | `Projects` | `components::projects::Projects` | |
 | `Plugins` | `components::plugins::Plugins` | |
-| `Agents` | `components::imagine::Imagine` | Reuses `Imagine`; sidebar section header pushes `route.set(Route::Agents)`. |
+| `Agents` | `components::imagine::Imagine` | Reuses `Imagine`; the Agents shelf header pushes `route.set(Route::Agents)`. |
 | `Imagine` | `components::imagine::Imagine` | **Reserved** — kept in the enum and on disk so the surface can be re-introduced without re-shaping the rail; the sidebar never renders a primary-nav row targeting it. |
 
-The sidebar's **primary nav** renders only `Chat`, `Library`, `Automations` (`PrimaryNavRow` calls in `sidebar/mod.rs`). Other routes are reached via section headers ("Projects", "Plugins") or the Agents shelf. The **collapsed rail** renders Chat, Search, Library, Automations, Agents and Plugins plus the theme swatch — `Tools` is **not** in the rail, it lives in the header (`shell::GrokAppHeader`'s tools popover, opened through `tools_open` in `main.rs`). `shell::shell_route_title(route)` sets the header bar title; chat views stay "Liberado", every other route uses its view name.
+The sidebar's **primary nav** renders `Chat`, `Library`, `Automations`, `Notifications`, `Projects`, and `Plugins` (`PrimaryNavRow` calls in `sidebar/mod.rs`). Projects is directly above Plugins. Below that nav, a divider and a Recents heading separate the Chats | Agents shelves and the history list. Only that list scrolls (`sidebar-history` is `flex: 1; min-height: 0`, and `.sidebar-scroll` is `overflow-y: auto`), so the nav stays on screen. The **collapsed rail** renders Chat, Search, Library, Automations, Agents and Plugins plus the theme swatch — `Tools` is **not** in the rail, it lives in the header (`shell::GrokAppHeader`'s tools popover, opened through `tools_open` in `main.rs`). `shell::shell_route_title(route)` sets the header bar title; chat views stay "Liberado", every other route uses its view name.
 
 ---
 
@@ -94,7 +94,7 @@ Sidebar endpoints:
 
 - `/api/conversations`, `/api/conversations/search`, and `/api/conversations/{id}` rename + delete — `components/sidebar/mod.rs`.
 - `/api/profiles/{name}` — `components/sidebar/profile_api.rs`.
-- `/api/chat-projects` — the Projects page and the chat badge (`project_data::fetch_projects`). The sidebar keeps a Projects nav entry and does not list recent project chats.
+- `/api/chat-projects` — the Projects page and the chat badge (`project_data::fetch_projects`). The Projects button in the primary nav opens that page. The sidebar does not list recent project chats.
 
 The full surface is in [`docs/spec/reference/api.md`](../../docs/spec/reference/api.md).
 
