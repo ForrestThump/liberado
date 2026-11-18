@@ -4,12 +4,12 @@
 
 use dioxus::prelude::*;
 
+#[cfg(target_arch = "wasm32")]
+use super::project_catalog::{create_user_project, delete_user_project, update_user_project};
 use super::project_data::{
     PROJECT_SOURCE, close_phone_drawer, delete_prompt, fetch_projects, new_project_body,
     project_dot, project_editable, replace_project_path,
 };
-#[cfg(target_arch = "wasm32")]
-use super::project_data::{create_user_project, delete_user_project, update_user_project};
 use super::sidebar::Route;
 #[cfg(target_arch = "wasm32")]
 use crate::signal_alive::{restart_if_alive, set_if_alive};

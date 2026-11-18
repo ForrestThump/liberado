@@ -22,6 +22,7 @@ pub mod plugins;
 pub mod profile_browser;
 pub mod profile_surface;
 pub mod profiles_panel;
+pub(crate) mod project_catalog;
 pub(crate) mod project_data;
 pub mod project_page;
 pub mod projects;

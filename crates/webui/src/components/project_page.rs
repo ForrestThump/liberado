@@ -3,7 +3,7 @@
 use dioxus::prelude::*;
 
 #[cfg(target_arch = "wasm32")]
-use super::project_data::create_project_chat;
+use super::project_catalog::create_project_chat;
 use super::project_data::{
     chat_date, close_phone_drawer, fetch_project_chats, fetch_projects, project_path,
     replace_project_path,
