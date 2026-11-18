@@ -22,7 +22,7 @@ use crate::contract::{
     TaskBundle, VerifierProfile,
 };
 use crate::preflight::ResolvedCredential;
-use chrono::Utc;
+use liberado_common::UtcStamp;
 use liberado_common::process::command;
 use std::collections::BTreeMap;
 #[cfg(windows)]
@@ -436,7 +436,7 @@ fn run_args_from_spec_maps_every_field_without_argv() {
     let spec = JobSpec {
         version: JOB_SPEC_VERSION,
         job_id: JobId::new(),
-        submitted_at: Utc::now(),
+        submitted_at: UtcStamp::now(),
         repository: PathBuf::from("C:/repo"),
         base_revision: "main".to_string(),
         task: TaskBundle::new("task.txt", "do it".to_string()).unwrap(),

@@ -1,0 +1,66 @@
+[package]
+name = "turbovault-tools"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = true
+description = "MCP tools implementation using turbomcp"
+documentation = "https://docs.rs/turbovault-tools"
+
+[dependencies]
+turbovault-core = { workspace = true }
+turbovault-parser = { workspace = true }
+turbovault-graph = { workspace = true }
+turbovault-vault = { workspace = true }
+turbovault-batch = { workspace = true }
+turbovault-export = { workspace = true }
+turbovault-audit = { workspace = true }
+turbovault-git = { workspace = true }
+futures = { workspace = true }
+
+# MCP server framework
+# Note: No features needed here - tools crate only defines tool implementations
+# Transport features are handled by the main turbovault binary
+turbomcp = { workspace = true }
+
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+yaml_serde = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+log = { workspace = true }
+tracing = { workspace = true }
+jiff = { workspace = true }
+shellexpand = { workspace = true }
+urlencoding = "2"
+uuid = { workspace = true }
+
+# Diff tools
+similar = { workspace = true }
+
+# Wikilink rewriting for atomic move_note + delete_note (turbovault-lqr / oz6)
+regex = { workspace = true }
+
+# Tier 1d: Production-grade full-text search
+tantivy = { workspace = true }
+
+# Optional: SQL query engine for frontmatter queries
+turbovault-sql = { workspace = true, optional = true }
+
+[features]
+default = []
+sql = ["dep:turbovault-sql"]
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["full"] }
+tempfile = { workspace = true }
+# Tests only — production code uses `turbovault_git::Oid`, never git2 directly.
+git2 = { workspace = true }
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]

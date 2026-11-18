@@ -17,11 +17,11 @@
 //! store's append-only-JSONL posture (Decision 12/17: operational data, outside the vault) rather
 //! than introducing a database.
 
+use liberado_common::UtcStamp;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use tokio::sync::{Mutex, broadcast};
 use tracing::warn;
@@ -60,13 +60,13 @@ enum LogLine {
     Status {
         status: SessionStatus,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        finished_at: Option<DateTime<Utc>>,
+        finished_at: Option<UtcStamp>,
     },
     /// The terminal record: final status, result, and finish time.
     Finish {
         status: SessionStatus,
         result: GoalResult,
-        finished_at: DateTime<Utc>,
+        finished_at: UtcStamp,
     },
 }
 
@@ -259,7 +259,7 @@ impl GoalSessionStore {
                 Some(s) => {
                     s.record.status = status;
                     if status.is_terminal() {
-                        s.record.finished_at = Some(Utc::now());
+                        s.record.finished_at = Some(UtcStamp::now());
                     }
                     s.record.finished_at
                 }
@@ -280,7 +280,7 @@ impl GoalSessionStore {
             let mut map = self.inner.lock().await;
             match map.get_mut(id) {
                 Some(s) => {
-                    let finished_at = Utc::now();
+                    let finished_at = UtcStamp::now();
                     s.record.status = status;
                     s.record.result = Some(result.clone());
                     s.record.finished_at = Some(finished_at);
@@ -753,7 +753,7 @@ mod tests {
                 artifacts: vec![],
                 diagnostics: serde_json::json!({}),
             },
-            finished_at: chrono::Utc::now(),
+            finished_at: UtcStamp::now(),
         })
         .unwrap();
         std::fs::write(
@@ -808,7 +808,7 @@ mod tests {
             grant: Default::default(),
             visibility: crate::Visibility::Foreground,
             status: SessionStatus::Pending,
-            created_at: chrono::Utc::now(),
+            created_at: UtcStamp::now(),
             finished_at: None,
             result: None,
             event_count: 0,

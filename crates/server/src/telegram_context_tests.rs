@@ -1,6 +1,7 @@
 //! Split from `telegram.rs` for module-health boundaries.
 
 use super::*;
+use liberado_common::UtcStamp;
 
 fn header(
     id: Ulid,
@@ -17,7 +18,7 @@ fn header(
         },
         parent_conversation: parent,
         spawned_by: None,
-        created_at: chrono::Utc::now(),
+        created_at: UtcStamp::now(),
         grant: Default::default(),
         ..Default::default()
     }

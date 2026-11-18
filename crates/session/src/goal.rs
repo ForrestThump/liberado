@@ -1,7 +1,6 @@
 //! Goal and session status types (domain-neutral).
 
-use chrono::{DateTime, Utc};
-use liberado_common::CapabilitySet;
+use liberado_common::{CapabilitySet, UtcStamp};
 use serde::{Deserialize, Serialize};
 use ulid::Ulid;
 
@@ -270,9 +269,9 @@ pub struct GoalSessionRecord {
     #[serde(default)]
     pub visibility: Visibility,
     pub status: SessionStatus,
-    pub created_at: DateTime<Utc>,
+    pub created_at: UtcStamp,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub finished_at: Option<DateTime<Utc>>,
+    pub finished_at: Option<UtcStamp>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub result: Option<GoalResult>,
     #[serde(default)]
@@ -303,7 +302,7 @@ impl GoalSessionRecord {
             grant,
             visibility: Visibility::Foreground,
             status: SessionStatus::Pending,
-            created_at: Utc::now(),
+            created_at: UtcStamp::now(),
             finished_at: None,
             result: None,
             event_count: 0,

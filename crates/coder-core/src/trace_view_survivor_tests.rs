@@ -28,11 +28,10 @@ fn tmp_dir() -> std::path::PathBuf {
     p
 }
 use crate::{CoderRunRequest, CoderTask, CoderTrace, WorkspaceRef};
-use chrono::Utc;
-use liberado_common::Outcome;
+use liberado_common::{Outcome, UtcStamp};
 
-fn at() -> chrono::DateTime<Utc> {
-    Utc::now()
+fn at() -> UtcStamp {
+    UtcStamp::now()
 }
 
 fn bare_trace(events: Vec<CoderEvent>) -> CoderTrace {
@@ -405,7 +404,7 @@ fn turn(n: u32, content: Option<&str>, offered: &[&str], calls: &[&str]) -> Code
         tool_calls: calls.iter().map(|s| s.to_string()).collect(),
         prompt_tokens: 10,
         completion_tokens: 2,
-        at: Utc::now(),
+        at: UtcStamp::now(),
     }
 }
 

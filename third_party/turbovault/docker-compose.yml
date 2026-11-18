@@ -1,0 +1,17 @@
+services:
+  # TurboVault Server
+  turbovault:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: turbovault-server:latest
+    container_name: turbovault
+    user: obsidian
+    volumes:
+      - ./example-vault:/var/obsidian-vault
+    environment:
+      - RUST_LOG=info
+      - OBSIDIAN_VAULT_PATH=/var/obsidian-vault
+    restart: unless-stopped
+    stdin_open: true
+    tty: true

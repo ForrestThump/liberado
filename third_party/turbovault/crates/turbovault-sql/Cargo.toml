@@ -1,0 +1,24 @@
+[package]
+name = "turbovault-sql"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = true
+description = "SQL query engine for Obsidian vault frontmatter — powered by GlueSQL"
+documentation = "https://docs.rs/turbovault-sql"
+
+[dependencies]
+turbovault-core = { workspace = true }
+turbovault-vault = { workspace = true }
+
+gluesql = { workspace = true }
+serde_json = { workspace = true }
+log = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["full"] }
+tempfile = { workspace = true }

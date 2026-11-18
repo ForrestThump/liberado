@@ -22,7 +22,7 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 ratatui = { workspace = true }
 crossterm = { workspace = true }
-chrono = { workspace = true }
+jiff = { workspace = true }
 liberado-theme = { workspace = true }
 liberado-markdown = { workspace = true }
 liberado-commands = { workspace = true }

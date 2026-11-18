@@ -5,7 +5,7 @@
 //! singleton is not a match, and the oldest row wins.
 //!
 //! Oldest matches the daemon's `pick_oldest` (`crates/main-agent/src/sessions/agent_spawn.rs`):
-//! parsed RFC3339 `created_at` as `DateTime<Utc>`, then `id`. `GET /api/conversations`
+//! parsed RFC3339 `created_at` as `UtcStamp`, then `id`. `GET /api/conversations`
 //! serializes `ConversationHeader.created_at` with chrono `SecondsFormat::AutoSi`
 //! (0, 3, 6, or 9 fractional digits), so the raw wire strings are not chronological:
 //! `2026-02-01T00:00:00.100001Z` sorts before `2026-02-01T00:00:00.100Z`.
@@ -15,7 +15,7 @@
 //! breaks the tie. Issued ids are uppercase 26-character ULIDs; Crockford base32
 //! is ASCII-monotonic, so wire-string `id` order equals `Ulid` Ord.
 
-use chrono::{DateTime, Utc};
+use liberado_common::UtcStamp;
 use serde_json::{Value, json};
 
 use crate::error::DogfoodError;
@@ -256,18 +256,16 @@ fn grant_profile_str(header: &Value) -> Option<&str> {
         .and_then(Value::as_str)
 }
 
-fn row_key(header: &Value) -> (DateTime<Utc>, String) {
+fn row_key(header: &Value) -> (UtcStamp, String) {
     (
-        parsed_created_at(header).unwrap_or(DateTime::<Utc>::MAX_UTC),
+        parsed_created_at(header).unwrap_or_else(UtcStamp::max_value),
         text_field(header, "id"),
     )
 }
 
-fn parsed_created_at(header: &Value) -> Option<DateTime<Utc>> {
+fn parsed_created_at(header: &Value) -> Option<UtcStamp> {
     let raw = header.get("created_at").and_then(Value::as_str)?;
-    DateTime::parse_from_rfc3339(raw)
-        .ok()
-        .map(|ts| ts.with_timezone(&Utc))
+    raw.parse::<UtcStamp>().ok()
 }
 
 fn text_field(header: &Value, name: &str) -> String {

@@ -1,11 +1,11 @@
 //! Passkey rename/delete and auth-session revoke on the production router.
 
+use liberado_common::UtcStamp;
 use std::sync::Arc;
 
 use axum::Router;
 use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
-use chrono::Utc;
 use liberado_session_store::SessionStore;
 use tower::ServiceExt;
 
@@ -90,7 +90,7 @@ fn insert_passkey(guard: &ApiGuard, name: &str) -> i64 {
             &format!("cred-{name}").into_bytes(),
             "{}",
             name,
-            Utc::now(),
+            UtcStamp::now(),
         )
         .expect("insert passkey")
 }
@@ -248,13 +248,13 @@ async fn owner_lists_and_revokes_auth_sessions() {
         .guard
         .sessions
         .outbox()
-        .create_auth_session(1, "passkey", Some("browser-b"), Utc::now())
+        .create_auth_session(1, "passkey", Some("browser-b"), UtcStamp::now())
         .unwrap();
     let other = h
         .guard
         .sessions
         .outbox()
-        .touch_auth_session(&other_raw, Utc::now())
+        .touch_auth_session(&other_raw, UtcStamp::now())
         .unwrap();
 
     let (status, body) = call(
@@ -290,7 +290,7 @@ async fn owner_lists_and_revokes_auth_sessions() {
         h.guard
             .sessions
             .outbox()
-            .touch_auth_session(&other_raw, Utc::now())
+            .touch_auth_session(&other_raw, UtcStamp::now())
             .is_none()
     );
     assert!(h.guard.sessions.touch(&current_id).is_some());

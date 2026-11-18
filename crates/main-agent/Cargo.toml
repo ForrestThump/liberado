@@ -9,6 +9,7 @@ authors.workspace = true
 repository.workspace = true
 
 [dependencies]
+jiff = { workspace = true }
 async-trait = { workspace = true }
 liberado-common = { workspace = true }
 liberado-agent-workspace = { workspace = true }
@@ -19,7 +20,6 @@ liberado-mcp = { workspace = true }
 liberado-provider = { workspace = true }
 liberado-session = { workspace = true }
 serde_json = { workspace = true }
-chrono = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }

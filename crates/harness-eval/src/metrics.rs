@@ -5,17 +5,17 @@
 //! errors breed. This module parses them once, from the same artifacts the comparison already
 //! preserves, so every scoreboard reads them off the report.
 
+use liberado_common::UtcStamp;
 use std::fs;
 use std::path::Path;
 
-use chrono::{DateTime, Utc};
 use serde::Deserialize;
 
 /// Parsed, normalized metrics for a single harness run.
 #[derive(Debug, Clone, Default)]
 pub struct HarnessMetrics {
-    pub started_at: Option<DateTime<Utc>>,
-    pub finished_at: Option<DateTime<Utc>>,
+    pub started_at: Option<UtcStamp>,
+    pub finished_at: Option<UtcStamp>,
     pub duration_secs: Option<f64>,
     pub turns_used: Option<u32>,
     pub tokens_in: Option<u64>,
@@ -50,18 +50,14 @@ impl HarnessMetrics {
         let mut finished_at = None;
         for line in text.lines() {
             if let Some(value) = line.strip_prefix("started=") {
-                started_at = DateTime::parse_from_rfc3339(value)
-                    .ok()
-                    .map(|t| t.with_timezone(&Utc));
+                started_at = value.parse::<UtcStamp>().ok();
             } else if let Some(value) = line.strip_prefix("finished=") {
-                finished_at = DateTime::parse_from_rfc3339(value)
-                    .ok()
-                    .map(|t| t.with_timezone(&Utc));
+                finished_at = value.parse::<UtcStamp>().ok();
             }
         }
         let duration_secs = match (started_at, finished_at) {
             (Some(start), Some(finish)) => {
-                let secs = (finish - start).num_microseconds().unwrap_or(0) as f64 / 1_000_000.0;
+                let secs = (finish - start).as_micros() as f64 / 1_000_000.0;
                 Some(secs.max(0.0))
             }
             _ => None,
@@ -233,14 +229,13 @@ fn parse_pi_sessions(harness_dir: &Path) -> (Option<u32>, Option<u64>, Option<u6
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::TimeZone;
 
     #[test]
     fn run_status_parses_start_finish_and_duration() {
         let temp = tempfile::tempdir().unwrap();
         let path = temp.path().join("run-status.txt");
-        let start = Utc.with_ymd_and_hms(2026, 8, 16, 10, 0, 0).unwrap();
-        let finish = Utc.with_ymd_and_hms(2026, 8, 16, 10, 0, 30).unwrap();
+        let start = UtcStamp::from_civil_utc(2026, 8, 16, 10, 0, 0).unwrap();
+        let finish = UtcStamp::from_civil_utc(2026, 8, 16, 10, 0, 30).unwrap();
         fs::write(
             &path,
             format!(

@@ -554,14 +554,6 @@ criteria = "safe-to-deploy"
 version = "0.1.5"
 criteria = "safe-to-deploy"
 
-[[exemptions.chrono]]
-version = "0.4.45"
-criteria = "safe-to-deploy"
-
-[[exemptions.chrono-tz]]
-version = "0.10.4"
-criteria = "safe-to-deploy"
-
 [[exemptions.ciborium]]
 version = "0.2.2"
 criteria = "safe-to-deploy"
@@ -1914,6 +1906,11 @@ criteria = "safe-to-deploy"
 version = "0.1.0"
 criteria = "safe-to-deploy"
 
+[[exemptions.jiff-cron]]
+version = "0.3.0"
+criteria = "safe-to-deploy"
+notes = "Replaces unmaintained cron 0.12. jiff-cron 0.3.0 (2026-05-13, MIT OR Apache-2.0) parses the same 7-field seconds-first schedule and iterates with jiff. Dependencies are jiff 0.2.35, phf 0.13.1, and winnow 1.0.3, all already exempt. No build script. This exemption records that review. It is not a line-by-line audit."
+
 [[exemptions.jiff-static]]
 version = "0.2.35"
 criteria = "safe-to-deploy"
@@ -2047,7 +2044,7 @@ version = "0.3.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.libz-sys]]
-version = "1.1.31"
+version = "1.1.33"
 criteria = "safe-to-deploy"
 
 [[exemptions.linebender_resource_handle]]
@@ -3668,91 +3665,93 @@ version = "0.28.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.turbomcp]]
-version = "3.1.5@git:d5d9a9f8321f07b9693e9869b8afebfecc049e71"
+version = "3.1.5"
 criteria = "safe-to-deploy"
+notes = "Path copy of ForrestThump tag liberado-2026-08-27 under third_party/turbomcp. The copy drops chrono and uses jiff. Same review debt as the previous git SHA exemption."
 
 [[exemptions.turbomcp-client]]
-version = "3.1.5@git:d5d9a9f8321f07b9693e9869b8afebfecc049e71"
+version = "3.1.5"
 criteria = "safe-to-deploy"
 
 [[exemptions.turbomcp-core]]
-version = "3.1.5@git:d5d9a9f8321f07b9693e9869b8afebfecc049e71"
+version = "3.1.5"
 criteria = "safe-to-deploy"
 
 [[exemptions.turbomcp-http]]
-version = "3.1.5@git:d5d9a9f8321f07b9693e9869b8afebfecc049e71"
+version = "3.1.5"
 criteria = "safe-to-deploy"
 
 [[exemptions.turbomcp-macros]]
-version = "3.1.5@git:d5d9a9f8321f07b9693e9869b8afebfecc049e71"
+version = "3.1.5"
 criteria = "safe-to-deploy"
 
 [[exemptions.turbomcp-protocol]]
-version = "3.1.5@git:d5d9a9f8321f07b9693e9869b8afebfecc049e71"
+version = "3.1.5"
 criteria = "safe-to-deploy"
 
 [[exemptions.turbomcp-server]]
-version = "3.1.5@git:d5d9a9f8321f07b9693e9869b8afebfecc049e71"
+version = "3.1.5"
 criteria = "safe-to-deploy"
 
 [[exemptions.turbomcp-stdio]]
-version = "3.1.5@git:d5d9a9f8321f07b9693e9869b8afebfecc049e71"
+version = "3.1.5"
 criteria = "safe-to-deploy"
 
 [[exemptions.turbomcp-telemetry]]
-version = "3.1.5@git:d5d9a9f8321f07b9693e9869b8afebfecc049e71"
+version = "3.1.5"
 criteria = "safe-to-deploy"
 
 [[exemptions.turbomcp-transport]]
-version = "3.1.5@git:d5d9a9f8321f07b9693e9869b8afebfecc049e71"
+version = "3.1.5"
 criteria = "safe-to-deploy"
 
 [[exemptions.turbomcp-transport-traits]]
-version = "3.1.5@git:d5d9a9f8321f07b9693e9869b8afebfecc049e71"
+version = "3.1.5"
 criteria = "safe-to-deploy"
 
 [[exemptions.turbomcp-types]]
-version = "3.1.5@git:d5d9a9f8321f07b9693e9869b8afebfecc049e71"
+version = "3.1.5"
 criteria = "safe-to-deploy"
 
 [[exemptions.turbovault]]
-version = "1.6.0@git:260dc271735b8db206788296fdca6f15f1fc5430"
+version = "1.6.0"
 criteria = "safe-to-deploy"
+notes = "Path copy of ForrestThump tag liberado-2026-11-10 under third_party/turbovault. Task dates and audit stamps use jiff. Same review debt as the previous git SHA exemption."
 
 [[exemptions.turbovault-audit]]
-version = "1.6.0@git:260dc271735b8db206788296fdca6f15f1fc5430"
+version = "1.6.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.turbovault-batch]]
-version = "1.6.0@git:260dc271735b8db206788296fdca6f15f1fc5430"
+version = "1.6.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.turbovault-core]]
-version = "1.6.0@git:260dc271735b8db206788296fdca6f15f1fc5430"
+version = "1.6.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.turbovault-export]]
-version = "1.6.0@git:260dc271735b8db206788296fdca6f15f1fc5430"
+version = "1.6.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.turbovault-git]]
-version = "1.6.0@git:260dc271735b8db206788296fdca6f15f1fc5430"
+version = "1.6.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.turbovault-graph]]
-version = "1.6.0@git:260dc271735b8db206788296fdca6f15f1fc5430"
+version = "1.6.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.turbovault-parser]]
-version = "1.6.0@git:260dc271735b8db206788296fdca6f15f1fc5430"
+version = "1.6.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.turbovault-tools]]
-version = "1.6.0@git:260dc271735b8db206788296fdca6f15f1fc5430"
+version = "1.6.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.turbovault-vault]]
-version = "1.6.0@git:260dc271735b8db206788296fdca6f15f1fc5430"
+version = "1.6.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.type-map]]

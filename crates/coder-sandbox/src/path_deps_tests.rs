@@ -19,10 +19,11 @@ external = { path = "../outside/thing" }
     );
 }
 
-/// The real manifest is the case that matters — a parser that handles the fixture but not
-/// the file it exists for is worth nothing.
+/// The forks are path copies under `third_party/`, taken from the tagged
+/// checkouts. A sibling `turbovault/` or `turbomcp/` path is the junction that
+/// `git worktree remove` can delete.
 #[test]
-fn the_real_root_manifest_pins_forks_by_git_tag_not_path() {
+fn the_real_root_manifest_vendors_forks_under_third_party() {
     let manifest = std::fs::read_to_string(
         Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("..")
@@ -32,15 +33,21 @@ fn the_real_root_manifest_pins_forks_by_git_tag_not_path() {
     .expect("read root Cargo.toml");
     let roots = declared_path_dep_roots(&manifest);
     assert!(
-        !roots.iter().any(|r| r == "turbovault" || r == "turbomcp"),
-        "turbovault/turbomcp must be git+tag, not path deps; got {roots:?}"
+        roots.iter().any(|root| root == "third_party"),
+        "forks must be path deps under third_party; got {roots:?}"
     );
     assert!(
-        manifest.contains("tag = \"liberado-2026-11-10\"")
-            && manifest.contains("tag = \"liberado-2026-08-27\"")
-            && manifest.contains("https://github.com/ForrestThump/turbovault")
-            && manifest.contains("https://github.com/ForrestThump/turbomcp"),
-        "root manifest must pin turbovault at liberado-2026-11-10 and turbomcp at liberado-2026-08-27"
+        !roots
+            .iter()
+            .any(|root| root == "turbovault" || root == "turbomcp"),
+        "do not path-depend on the gitignored sibling checkouts; got {roots:?}"
+    );
+    assert!(
+        manifest.contains("third_party/turbovault/")
+            && manifest.contains("third_party/turbomcp/")
+            && manifest.contains("liberado-2026-11-10")
+            && manifest.contains("liberado-2026-08-27"),
+        "root manifest must name the vendored trees and the tags they were copied from"
     );
 }
 

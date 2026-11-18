@@ -1,0 +1,32 @@
+[package]
+name = "turbovault-parser"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = true
+description = "Obsidian Flavored Markdown (OFM) parser"
+documentation = "https://docs.rs/turbovault-parser"
+
+[features]
+default = []
+
+[dependencies]
+turbovault-core = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+yaml_serde = { workspace = true }
+regex = { workspace = true }
+log = { workspace = true }
+
+# 2025 diligence: OFM parsing with best-in-class libraries
+pulldown-cmark = { workspace = true }      # CommonMark parser with OFM extensions
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["full"] }
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]

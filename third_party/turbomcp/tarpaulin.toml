@@ -1,0 +1,51 @@
+# Tarpaulin configuration for TurboMCP coverage reporting
+
+[report]
+# Output formats for coverage reports
+out = ["Html", "Xml", "Json"]
+
+[build]
+# Build configuration for coverage
+all-features = true
+workspace = true
+
+[run]
+# Runtime configuration
+timeout = "300s"  # 5 minutes timeout for tests
+follow-exec = true
+post-args = ["--", "--test-threads=1"]
+
+[html]
+# HTML report configuration  
+output-dir = "coverage"
+
+[coverage]
+# Coverage collection configuration
+line = true
+branch = false  # Branch coverage can be flaky
+count = true
+
+# Exclude patterns
+exclude-files = [
+    "*/tests/*",
+    "*/benches/*", 
+    "*/examples/*",
+    "*/.cargo/*",
+    "*/target/*"
+]
+
+# Include only our crates
+include = [
+    "turbomcp/*",
+    "turbomcp-macros/*", 
+    "turbomcp-core/*",
+    "turbomcp-protocol/*",
+    "turbomcp-transport/*",
+    "turbomcp-server/*",
+    "turbomcp-client/*",
+    "turbomcp-cli/*"
+]
+
+[engine]
+# Use LLVM engine for better accuracy
+llvm = true

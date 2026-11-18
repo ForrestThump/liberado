@@ -8,8 +8,9 @@
 //! crates.
 
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+
+use crate::UtcStamp;
 use tokio::sync::mpsc::UnboundedSender;
 
 use crate::provenance::WriteProvenance;
@@ -65,7 +66,7 @@ pub struct Event {
     /// Domain event name, e.g. `"DecisionLogged"`, `"InboxNoteSettled"`.
     pub event_type: String,
 
-    pub timestamp: DateTime<Utc>,
+    pub timestamp: UtcStamp,
 
     /// Origin of the event; see [`event_source`] for well-known values.
     pub source: String,
@@ -116,7 +117,7 @@ impl Event {
     ) -> Self {
         Self {
             event_type: event_type.into(),
-            timestamp: Utc::now(),
+            timestamp: UtcStamp::now(),
             source: source.into(),
             correlation_id: correlation_id.into(),
             provenance: None,

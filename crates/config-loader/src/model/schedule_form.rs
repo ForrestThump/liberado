@@ -177,7 +177,7 @@ fn exactly_one(name: &str) -> String {
 
 fn cron_timing(schedule: &CronSchedule) -> Result<ScheduleTiming, String> {
     let expr = schedule.cron_expr.trim().to_string();
-    cron::Schedule::from_str(&expr).map_err(|err| {
+    jiff_cron::Schedule::from_str(&expr).map_err(|err| {
         format!(
             "topology.schedules['{}'].cron_expr '{expr}' is invalid: {err}",
             schedule.name
@@ -196,7 +196,7 @@ fn civil_timing(
         .map_err(|err| format!("topology.schedules['{}']: {err}", schedule.name))?;
     let zone = required_zone(schedule, topology_timezone)?;
     let expr = compile_cron(&spec);
-    cron::Schedule::from_str(&expr).map_err(|err| {
+    jiff_cron::Schedule::from_str(&expr).map_err(|err| {
         format!(
             "topology.schedules['{}'] compiled cron '{expr}' is invalid: {err}",
             schedule.name

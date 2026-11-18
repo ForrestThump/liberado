@@ -7,9 +7,11 @@ use super::{
     delete_accepted, deleted_the_open_conversation, page_from_list, relative_time, rename_accepted,
     rename_body,
 };
+use jiff::SignedDuration;
+use jiff::Timestamp;
 
-fn ago(dur: chrono::Duration) -> String {
-    (chrono::Utc::now() - dur).to_rfc3339()
+fn ago(dur: SignedDuration) -> String {
+    (Timestamp::now() - dur).to_string()
 }
 
 #[test]
@@ -20,7 +22,7 @@ fn unparseable_is_empty() {
 #[test]
 fn future_reads_as_just_now() {
     assert_eq!(
-        relative_time(&ago(-chrono::Duration::minutes(1))),
+        relative_time(&ago(-SignedDuration::from_mins(1))),
         "just now"
     );
 }
@@ -28,12 +30,15 @@ fn future_reads_as_just_now() {
 #[test]
 fn age_bands_choose_the_unit() {
     assert_eq!(
-        relative_time(&ago(chrono::Duration::seconds(12))),
+        relative_time(&ago(SignedDuration::from_secs(12))),
         "12s ago"
     );
-    assert_eq!(relative_time(&ago(chrono::Duration::minutes(5))), "5m ago");
-    assert_eq!(relative_time(&ago(chrono::Duration::hours(3))), "3h ago");
-    assert_eq!(relative_time(&ago(chrono::Duration::days(2))), "2d ago");
+    assert_eq!(relative_time(&ago(SignedDuration::from_mins(5))), "5m ago");
+    assert_eq!(relative_time(&ago(SignedDuration::from_hours(3))), "3h ago");
+    assert_eq!(
+        relative_time(&ago(SignedDuration::from_hours(48))),
+        "2d ago"
+    );
 }
 
 #[test]
@@ -43,15 +48,15 @@ fn past_a_month_shows_the_date() {
 
 #[test]
 fn offsetless_timestamp_is_treated_as_utc() {
-    let raw = (chrono::Utc::now() - chrono::Duration::minutes(7))
-        .format("%Y-%m-%dT%H:%M:%S%.f")
+    let raw = (Timestamp::now() - SignedDuration::from_mins(7))
+        .strftime("%Y-%m-%dT%H:%M:%S%.f")
         .to_string();
     assert_eq!(relative_time(&raw), "7m ago");
 }
 
 #[test]
 fn band_boundaries_fall_up() {
-    let at = |secs: i64| (chrono::Utc::now() - chrono::Duration::seconds(secs)).to_rfc3339();
+    let at = |secs: i64| (Timestamp::now() - SignedDuration::from_secs(secs)).to_string();
     assert_eq!(relative_time(&at(60)), "1m ago");
     assert_eq!(relative_time(&at(3600)), "1h ago");
     assert_eq!(relative_time(&at(86_400)), "1d ago");
@@ -59,17 +64,18 @@ fn band_boundaries_fall_up() {
 
 #[test]
 fn exactly_thirty_days_shows_the_date() {
-    let raw = (chrono::Utc::now() - chrono::Duration::days(30)).to_rfc3339();
-    let expected = chrono::DateTime::parse_from_rfc3339(&raw)
+    let raw = (Timestamp::now() - SignedDuration::from_hours(24 * 30)).to_string();
+    let expected = raw
+        .parse::<Timestamp>()
         .unwrap()
-        .format("%b %d")
+        .strftime("%b %d")
         .to_string();
     assert_eq!(relative_time(&raw), expected);
 }
 
 #[test]
 fn sub_second_ages_from_zero() {
-    let raw = (chrono::Utc::now() - chrono::Duration::milliseconds(500)).to_rfc3339();
+    let raw = (Timestamp::now() - SignedDuration::from_millis(500)).to_string();
     assert_eq!(relative_time(&raw), "0s ago");
 }
 

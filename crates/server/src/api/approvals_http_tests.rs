@@ -1,15 +1,15 @@
 //! HTTP resolve: 200, 404, 409, and the same resolver the Telegram callback uses.
 
+use jiff::SignedDuration;
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use axum::Router;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
-use chrono::{Duration, Utc};
 use liberado_common::{
     Capability, DecisionVia, Proposal, ProposalSigner, ProposalStatus, ProposedAction, ToolCall,
-    WriteProvenance, Zone,
+    UtcStamp, WriteProvenance, Zone,
 };
 use liberado_messaging::{ActionButton, InboundEvent, MessagingChannel, MessagingError};
 use liberado_provider::MockProvider;
@@ -252,7 +252,7 @@ async fn get_pending_lists_open_permission_requests_only() {
         "turbovault:edit_note",
         "tasks",
     );
-    older.created = Utc::now() - Duration::seconds(120);
+    older.created = UtcStamp::now() - SignedDuration::from_secs(120);
     let newer = open_permission("perm-new", None, "turbovault:move_note", "work");
     let mut decided = open_permission(
         "perm-done",

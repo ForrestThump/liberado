@@ -1,16 +1,16 @@
 //! Session and ceremony cookie helpers shared by auth HTTP handlers.
 
 use axum::http::{HeaderMap, header};
-use chrono::{DateTime, Utc};
+use liberado_common::UtcStamp;
 
 use super::sessions::{CSRF_COOKIE, SESSION_COOKIE};
 
 pub fn session_max_age(expires_at: &str) -> i64 {
-    let Ok(exp) = DateTime::parse_from_rfc3339(expires_at) else {
+    let Ok(exp) = expires_at.parse::<UtcStamp>() else {
         return liberado_outbox::SESSION_ABSOLUTE.as_secs() as i64;
     };
-    let remaining = exp.with_timezone(&Utc) - Utc::now();
-    remaining.num_seconds().max(0)
+    let remaining = exp - UtcStamp::now();
+    remaining.as_secs().max(0)
 }
 
 pub fn set_session_cookies(headers: &mut HeaderMap, session_id: &str, csrf: &str, max_age: i64) {

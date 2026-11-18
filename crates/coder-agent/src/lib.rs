@@ -71,13 +71,12 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
-use chrono::Utc;
 use liberado_coder_core::{
     CoderBackend, CoderError, CoderEvent, CoderRoleConfig, CoderRunRequest, CoderRunResult,
     CriticVerdict, LIBERADO_LOOP_BACKEND, resolve_verifier_specs,
 };
 use liberado_coder_tools::CodingToolRuntime;
-use liberado_common::Outcome;
+use liberado_common::{Outcome, UtcStamp};
 use liberado_executor::{Budget, Executor, MvlSession, Task};
 use liberado_provider::Provider;
 use progress::ProgressGuard;
@@ -583,14 +582,14 @@ fn no_changes_guard(events: &trace::EventLog) -> CoderError {
         CoderEvent::LoopGuardTriggered {
             guard: "no_changes".to_string(),
             action: "fail_run".to_string(),
-            at: Utc::now(),
+            at: UtcStamp::now(),
         },
     );
     trace::push_event(
         events,
         CoderEvent::SessionFinished {
             outcome: Outcome::Failed,
-            at: Utc::now(),
+            at: UtcStamp::now(),
         },
     );
     CoderError::NoChanges
@@ -660,7 +659,7 @@ impl LiberadoLoopBackend {
             session_id: session_id.clone(),
             backend: self.name().to_string(),
             task_id: request.task.id.clone(),
-            at: Utc::now(),
+            at: UtcStamp::now(),
         }]));
 
         let outcome = self
@@ -677,7 +676,7 @@ impl LiberadoLoopBackend {
                 &events,
                 CoderEvent::SessionAborted {
                     error: e.to_string(),
-                    at: Utc::now(),
+                    at: UtcStamp::now(),
                 },
             );
         }
@@ -803,7 +802,7 @@ impl LiberadoLoopBackend {
             CoderEvent::RoleStarted {
                 role: worker_role_name.to_string(),
                 model: worker_config.model.clone(),
-                at: Utc::now(),
+                at: UtcStamp::now(),
             },
         );
         let provider = self
@@ -891,7 +890,7 @@ impl LiberadoLoopBackend {
             &events,
             CoderEvent::RoleFinished {
                 role: worker_role_name.to_string(),
-                at: Utc::now(),
+                at: UtcStamp::now(),
             },
         );
         trace::push_event(
@@ -899,7 +898,7 @@ impl LiberadoLoopBackend {
             CoderEvent::ReportFiled {
                 outcome: report.outcome,
                 summary: report.summary.clone(),
-                at: Utc::now(),
+                at: UtcStamp::now(),
             },
         );
 
@@ -916,7 +915,7 @@ impl LiberadoLoopBackend {
                 &events,
                 CoderEvent::FileChanged {
                     path: path.clone(),
-                    at: Utc::now(),
+                    at: UtcStamp::now(),
                 },
             );
         }
@@ -957,7 +956,7 @@ impl LiberadoLoopBackend {
             &events,
             CoderEvent::SessionFinished {
                 outcome: state.outcome,
-                at: Utc::now(),
+                at: UtcStamp::now(),
             },
         );
 
@@ -1051,14 +1050,14 @@ async fn run_verifier_pipeline(
             CoderEvent::LoopGuardTriggered {
                 guard: "verifier_pipeline".to_string(),
                 action: "fail_run".to_string(),
-                at: Utc::now(),
+                at: UtcStamp::now(),
             },
         );
         trace::push_event(
             events,
             CoderEvent::SessionFinished {
                 outcome: Outcome::Failed,
-                at: Utc::now(),
+                at: UtcStamp::now(),
             },
         );
         return Err(CoderError::Validation(feedback));
@@ -1143,7 +1142,7 @@ async fn apply_judgment(
                 events,
                 CoderEvent::CriticVerdict {
                     verdict: verdict.clone(),
-                    at: Utc::now(),
+                    at: UtcStamp::now(),
                 },
             );
             if let CriticVerdict::NeedsRevision { issues } = &verdict {

@@ -8,8 +8,12 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use chrono::{DateTime, LocalResult, NaiveDate, NaiveDateTime, TimeZone, Utc};
+use jiff::SignedDuration;
+use jiff::civil::{Date, DateTime};
+use jiff::tz::TimeZone;
 use turbovault_core::{TaskItem, TaskStatus};
+
+use liberado_common::UtcStamp;
 use turbovault_plugin_tasks::TasksConfig;
 
 use liberado_outbox::{
@@ -17,6 +21,8 @@ use liberado_outbox::{
     diff_snapshot, task_identity_key,
 };
 
+use super::date::date_from_display;
+use super::local_time::{parse_zone, resolve_local};
 use super::tasks::{load_tasks_config, parse_tasks_for_jobs};
 use super::tick::ReminderTick;
 use super::walk::markdown_notes;
@@ -26,7 +32,7 @@ struct Observation {
     open: i64,
     closed: i64,
     hint_text: Option<String>,
-    done_date: Option<NaiveDate>,
+    done_date: Option<Date>,
 }
 
 /// Record checkoffs for this tick. A disabled switch, or a missing log flag, writes nothing.
@@ -55,7 +61,7 @@ fn record_note(
     path: &str,
     text: &str,
     config: &TasksConfig,
-    detected_at: DateTime<Utc>,
+    detected_at: UtcStamp,
     zone: &str,
 ) -> Result<(), liberado_outbox::Error> {
     let fingerprint = content_fingerprint(text);
@@ -113,10 +119,13 @@ fn remember_closed(entry: &mut Observation, task: &TaskItem) {
             entry.hint_text = Some(text.to_string());
         }
     }
-    entry.done_date = latest_date(entry.done_date, task.done_date);
+    entry.done_date = latest_date(
+        entry.done_date,
+        task.done_date.as_ref().and_then(date_from_display),
+    );
 }
 
-fn latest_date(current: Option<NaiveDate>, next: Option<NaiveDate>) -> Option<NaiveDate> {
+fn latest_date(current: Option<Date>, next: Option<Date>) -> Option<Date> {
     match (current, next) {
         (Some(left), Some(right)) => Some(left.max(right)),
         (None, next) => next,
@@ -197,27 +206,23 @@ fn completion_draft(
     }
 }
 
-fn detected_utc(zone: &str, local: NaiveDateTime) -> DateTime<Utc> {
+fn detected_utc(zone: &str, local: DateTime) -> UtcStamp {
     let tz = parse_zone(zone);
-    match tz.from_local_datetime(&local) {
-        LocalResult::Single(local) => local.with_timezone(&Utc),
-        LocalResult::Ambiguous(first, _) => first.with_timezone(&Utc),
-        LocalResult::None => shifted_utc(&tz, local),
-    }
+    resolve_local(&tz, local).unwrap_or_else(|| shifted_utc(&tz, local))
 }
 
-fn shifted_utc(zone: &chrono_tz::Tz, local: NaiveDateTime) -> DateTime<Utc> {
+fn shifted_utc(zone: &TimeZone, local: DateTime) -> UtcStamp {
     let shifted = local
-        .checked_add_signed(chrono::Duration::hours(1))
+        .checked_add(SignedDuration::from_hours(1))
         .unwrap_or(local);
-    match zone.from_local_datetime(&shifted) {
-        LocalResult::Single(local) | LocalResult::Ambiguous(local, _) => local.with_timezone(&Utc),
-        LocalResult::None => local.and_utc(),
-    }
+    resolve_local(zone, shifted).unwrap_or_else(|| civil_as_utc(local))
 }
 
-fn parse_zone(zone: &str) -> chrono_tz::Tz {
-    zone.parse().unwrap_or(chrono_tz::UTC)
+fn civil_as_utc(local: DateTime) -> UtcStamp {
+    local
+        .to_zoned(TimeZone::UTC)
+        .map(|zoned| UtcStamp::from(zoned.timestamp()))
+        .unwrap_or_default()
 }
 
 #[cfg(test)]

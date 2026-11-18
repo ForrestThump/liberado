@@ -13,10 +13,10 @@ name = "liberado-conformance"
 path = "src/main.rs"
 
 [dependencies]
+jiff = { workspace = true }
 liberado-common.workspace = true
 chat-client-contract = { workspace = true }
-chrono = { workspace = true }
-cron = { workspace = true }
+jiff-cron = { workspace = true }
 futures = { workspace = true }
 reqwest = { workspace = true }
 serde = { workspace = true }

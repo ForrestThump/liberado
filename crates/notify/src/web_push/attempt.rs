@@ -3,7 +3,7 @@
 //! The delivery worker builds [`PushAttemptIds`]. `post_push` records the
 //! provider outcome. The endpoint, payload, and transport error text stay out.
 
-use chrono::{DateTime, SecondsFormat, Utc};
+use liberado_common::UtcStamp;
 use tracing::Level;
 
 use super::send::{PushDelivery, origin_of};
@@ -56,13 +56,13 @@ macro_rules! push_attempt {
 pub(super) fn log_push_http(
     endpoint: &str,
     attempt: &PushAttemptIds<'_>,
-    attempt_at: DateTime<Utc>,
+    attempt_at: UtcStamp,
     class: &Classified,
     status: u16,
 ) {
     let host = host_of(endpoint);
     let row_ids = join_row_ids(attempt.row_ids);
-    let attempt_at = attempt_at.to_rfc3339_opts(SecondsFormat::Secs, true);
+    let attempt_at = attempt_at.to_rfc3339_opts(liberado_common::Rfc3339Seconds::Secs, true);
     // The callsite level is const. One macro keeps the field list in one place.
     push_attempt!(
         class.warn,
@@ -79,11 +79,11 @@ pub(super) fn log_push_http(
 pub(super) fn log_push_transport(
     endpoint: &str,
     attempt: &PushAttemptIds<'_>,
-    attempt_at: DateTime<Utc>,
+    attempt_at: UtcStamp,
 ) {
     let host = host_of(endpoint);
     let row_ids = join_row_ids(attempt.row_ids);
-    let attempt_at = attempt_at.to_rfc3339_opts(SecondsFormat::Secs, true);
+    let attempt_at = attempt_at.to_rfc3339_opts(liberado_common::Rfc3339Seconds::Secs, true);
     tracing::event!(
         Level::WARN,
         row_ids = %row_ids,

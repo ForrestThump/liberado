@@ -1,4 +1,5 @@
 use dioxus::prelude::*;
+use jiff::Timestamp;
 
 use chat_client_contract::{ReactionEvent, ReactionOutcome};
 
@@ -42,8 +43,8 @@ fn short_session_label(id: &str) -> String {
 /// The row's clock, or the raw timestamp when it cannot be parsed — the event is still shown,
 /// just without a formatted time.
 fn reaction_time_label(iso: &str) -> String {
-    chrono::DateTime::parse_from_rfc3339(iso)
-        .map(|dt| dt.format("%H:%M:%S").to_string())
+    iso.parse::<Timestamp>()
+        .map(|dt| dt.strftime("%H:%M:%S").to_string())
         .unwrap_or_else(|_| iso.to_string())
 }
 

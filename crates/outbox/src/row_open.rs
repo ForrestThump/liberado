@@ -1,4 +1,4 @@
-use chrono::Utc;
+use liberado_common::UtcStamp;
 use rusqlite::Row;
 
 use crate::kind;
@@ -18,7 +18,7 @@ pub fn read_open(row: &Row<'_>) -> rusqlite::Result<OpenRow> {
         title: row.get(3)?,
         body: row.get(4)?,
         catch_up: row.get::<_, i64>(5)? != 0,
-        due_at: parse_stamp(&due).unwrap_or_else(|_| Utc::now()),
+        due_at: parse_stamp(&due).unwrap_or_else(|_| UtcStamp::now()),
         token,
         kind: kind::parse_stored(kind_text.as_deref()).to_string(),
         source: OutboxSource::decode(source_text),

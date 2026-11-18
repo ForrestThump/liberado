@@ -1,6 +1,9 @@
 use std::path::Path;
 
-use chrono::{DateTime, Duration, NaiveDate, NaiveDateTime, Utc};
+use jiff::SignedDuration;
+use jiff::civil::DateTime;
+use jiff::tz::TimeZone;
+use liberado_common::UtcStamp;
 use liberado_config::VaultRemindersConfig;
 use liberado_outbox::{
     EnqueueOutcome, NewReminder, Outbox, OutboxSource, PRECISION_DATE, PRECISION_TAP,
@@ -36,11 +39,11 @@ impl World {
         std::fs::write(path, body).unwrap();
     }
 
-    fn run(&self, now: NaiveDateTime) {
+    fn run(&self, now: DateTime) {
         self.run_with(now, true, true);
     }
 
-    fn run_with(&self, now: NaiveDateTime, enabled: bool, completions: bool) {
+    fn run_with(&self, now: DateTime, enabled: bool, completions: bool) {
         let tick = ReminderTick {
             now,
             settings: VaultRemindersConfig {
@@ -66,20 +69,17 @@ impl World {
     }
 }
 
-fn noon() -> NaiveDateTime {
-    NaiveDate::from_ymd_opt(2026, 11, 10)
-        .unwrap()
-        .and_hms_opt(15, 0, 0)
-        .unwrap()
+fn noon() -> DateTime {
+    DateTime::new(2026, 11, 10, 15, 0, 0, 0).unwrap()
 }
 
-fn detected(now: NaiveDateTime) -> DateTime<Utc> {
-    now.and_utc()
+fn detected(now: DateTime) -> UtcStamp {
+    UtcStamp::from(now.to_zoned(TimeZone::UTC).unwrap().timestamp())
 }
 
-fn resolve(outbox: &Outbox, when: DateTime<Utc>, path: &str, text: &str) -> i64 {
+fn resolve(outbox: &Outbox, when: UtcStamp, path: &str, text: &str) -> i64 {
     let row = NewReminder {
-        idempotency_key: format!("hint-{}", when.timestamp()),
+        idempotency_key: format!("hint-{}", when.unix_seconds()),
         channel: "webpush".into(),
         target: "sub:1".into(),
         title: "Due".into(),
@@ -140,7 +140,7 @@ fn a_recent_done_hint_supplies_tap_time_and_an_old_hint_does_not() {
     world.run(noon());
     let id = resolve(
         &world.outbox,
-        detected(noon()) - Duration::minutes(10),
+        detected(noon()) - SignedDuration::from_mins(10),
         "Home.md",
         "Call dentist",
     );
@@ -158,7 +158,7 @@ fn a_recent_done_hint_supplies_tap_time_and_an_old_hint_does_not() {
     stale.run(noon());
     resolve(
         &stale.outbox,
-        detected(noon()) - Duration::minutes(16),
+        detected(noon()) - SignedDuration::from_mins(16),
         "Home.md",
         "Call dentist",
     );
@@ -378,7 +378,7 @@ fn a_recurring_tap_row_is_not_logged_again_while_the_line_stays_open() {
     assert_eq!(text, original);
 }
 
-fn tick(now: NaiveDateTime) -> ReminderTick {
+fn tick(now: DateTime) -> ReminderTick {
     ReminderTick {
         now,
         settings: VaultRemindersConfig {

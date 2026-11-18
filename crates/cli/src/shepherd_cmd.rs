@@ -11,7 +11,7 @@
 //! active goals, and it does not start a goal while the count is unknown.
 //! `--once` and `--watch` return that error, so the process exits non-zero.
 
-use chrono::Utc;
+use liberado_common::UtcStamp;
 use liberado_common::process::std_command;
 use regex::Regex;
 use serde_json::{Value, json};
@@ -385,7 +385,7 @@ fn gh_json(cfg: &Config, args: &[&str]) -> Result<Value, Box<dyn std::error::Err
     Ok(serde_json::from_str(&output)?)
 }
 fn log(cfg: &Config, event: &str, fields: Value) {
-    let record = json!({"ts":Utc::now().to_rfc3339(),"event":event,"fields":fields});
+    let record = json!({"ts":UtcStamp::now().to_rfc3339(),"event":event,"fields":fields});
     let _ = fs::create_dir_all(cfg.state());
     use std::io::Write;
     if let Ok(mut f) = fs::OpenOptions::new()
@@ -397,7 +397,7 @@ fn log(cfg: &Config, event: &str, fields: Value) {
     }
     println!(
         "[{}] {event}: {}",
-        Utc::now().format("%H:%M:%S"),
+        UtcStamp::now().strftime("%H:%M:%S"),
         record["fields"]
     );
 }
@@ -547,7 +547,7 @@ fn baseline(
     fs::write(
         path,
         serde_json::to_vec_pretty(
-            &json!({"base_sha":sha,"failures":failures,"provenance":provenance,"computed_at":Utc::now().to_rfc3339()}),
+            &json!({"base_sha":sha,"failures":failures,"provenance":provenance,"computed_at":UtcStamp::now().to_rfc3339()}),
         )?,
     )?;
     Ok((failures, provenance))

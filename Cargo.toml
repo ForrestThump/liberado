@@ -1,15 +1,15 @@
 # Liberado — Rust-native personal AI system.
 #
-# One Cargo workspace for the Liberado system (Decision 7). External dependencies
-# (turbovault, turbomcp) are NOT members — they are consumed as git+tag pins on the
-# ForrestThump forks. Leftover `turbovault/` and `turbomcp/` directories are gitignored
-# and are not required to build.
+# One Cargo workspace for the Liberado system (Decision 7). The ForrestThump
+# forks live under `third_party/` (excluded) and are path dependencies. They
+# are not workspace members.
 [workspace]
 resolver = "3"
 members = ["crates/*"]
 exclude = [
     "liberado-tool-helper-mcp", # superseded by crates/memory-store + crates/memory-mcp (Decision 7)
     "mcps",
+    "third_party",
 ]
 
 [workspace.package]
@@ -28,8 +28,13 @@ fs4 = "0.13"
 # deprecated and pulls in unmaintained unsafe-libyaml (RUSTSEC-2024-0449).
 # serde_yml is unsound and unmaintained (RUSTSEC-2025-0068).
 serde_norway = "0.9"
-chrono = { version = "0.4", features = ["serde"] }
-chrono-tz = "0.10"
+# Exact pin. 0.2.35 is already in the graph through gix-date and is cargo-vet
+# exempt. A caret range can resolve an unaudited patch. `serde` is the RFC 3339
+# timestamp shape the workspace serializes.
+jiff = { version = "=0.2.35", features = ["serde"] }
+# Maintained cron parser on jiff. Replaces the unmaintained `cron` 0.12 crate
+# (7-field, seconds first). Exact pin so a later patch needs a vet review.
+jiff-cron = "=0.3.0"
 thiserror = "2"
 toml = "0.8"
 # Exact pin: this is the toml_edit already pulled by toml 0.8, and the
@@ -67,7 +72,6 @@ crossterm = "0.28"
 hmac = "0.12"
 sha2 = "0.10"
 rand = "0.8"
-cron = "0.12"
 regex = "1"
 notify = "8"
 proptest = "1"
@@ -127,41 +131,34 @@ liberado-sysmap = { path = "crates/sysmap" }
 liberado-sysmap-gui = { path = "crates/sysmap-gui" }
 sysmap-core = { path = "crates/sysmap-core" }
 
-# --- co-developed git+tag pins (Decision 7) ---
-# ForrestThump forks. `turbovault*` is tag `liberado-2026-11-10` (Obsidian Tasks
-# parsing, the global filter, and rusqlite 0.41.1). `turbomcp*` stays
-# `liberado-2026-08-27`. Cargo fetches them; path siblings are not required.
-# Swap to crates.io versions for release builds once the forks publish.
-turbovault-core = { git = "https://github.com/ForrestThump/turbovault", tag = "liberado-2026-11-10" }
-turbovault-vault = { git = "https://github.com/ForrestThump/turbovault", tag = "liberado-2026-11-10" }
-turbovault-audit = { git = "https://github.com/ForrestThump/turbovault", tag = "liberado-2026-11-10" }
-turbovault = { git = "https://github.com/ForrestThump/turbovault", tag = "liberado-2026-11-10" } # umbrella (ObsidianMcpServer) — test-only
+# Forks live in `third_party/` so the workspace can drop `chrono`. They are the
+# tagged checkouts (`turbovault` `liberado-2026-11-10`, `turbomcp`
+# `liberado-2026-08-27`) with time types moved to `jiff`. Path deps replace the
+# git pins until those forks publish the same change.
+turbovault-core = { path = "third_party/turbovault/crates/turbovault-core" }
+turbovault-vault = { path = "third_party/turbovault/crates/turbovault-vault" }
+turbovault-audit = { path = "third_party/turbovault/crates/turbovault-audit" }
+turbovault = { path = "third_party/turbovault/crates/turbovault" } # umbrella (ObsidianMcpServer) — test-only
 # liberado-memory-store's semantic recall.
-turbovault-vector = { git = "https://github.com/ForrestThump/turbovault", tag = "liberado-2026-11-10" }
+turbovault-vector = { path = "third_party/turbovault/crates/turbovault-vector" }
 # Obsidian Tasks lines and the Tasks plugin global filter. Used by task-ping.
-turbovault-parser = { git = "https://github.com/ForrestThump/turbovault", tag = "liberado-2026-11-10" }
-turbovault-plugin-tasks = { git = "https://github.com/ForrestThump/turbovault", tag = "liberado-2026-11-10" }
-turbomcp = { git = "https://github.com/ForrestThump/turbomcp", tag = "liberado-2026-08-27" }
-turbomcp-client = { git = "https://github.com/ForrestThump/turbomcp", tag = "liberado-2026-08-27" }
-turbomcp-transport = { git = "https://github.com/ForrestThump/turbomcp", tag = "liberado-2026-08-27" } # ChildProcessTransport (stdio connector)
-turbomcp-server = { git = "https://github.com/ForrestThump/turbomcp", tag = "liberado-2026-08-27" } # test-only (in-process channel server)
-turbomcp-core = { git = "https://github.com/ForrestThump/turbomcp", tag = "liberado-2026-08-27" }     # test-only (McpHandler)
-turbomcp-types = { git = "https://github.com/ForrestThump/turbomcp", tag = "liberado-2026-08-27" }   # test-only (handler types)
+turbovault-parser = { path = "third_party/turbovault/crates/turbovault-parser" }
+turbovault-plugin-tasks = { path = "third_party/turbovault/crates/plugins/turbovault-plugin-tasks" }
+turbomcp = { path = "third_party/turbomcp/crates/turbomcp" }
+turbomcp-client = { path = "third_party/turbomcp/crates/turbomcp-client" }
+turbomcp-transport = { path = "third_party/turbomcp/crates/turbomcp-transport" } # ChildProcessTransport (stdio connector)
+turbomcp-server = { path = "third_party/turbomcp/crates/turbomcp-server" } # test-only (in-process channel server)
+turbomcp-core = { path = "third_party/turbomcp/crates/turbomcp-core" }     # test-only (McpHandler)
+turbomcp-types = { path = "third_party/turbomcp/crates/turbomcp-types" }   # test-only (handler types)
 
-# The git-pinned turbovault still declares the `turbomcp*` crates as "3.1.5" from crates.io.
-# Redirect them to the same ForrestThump tag so the whole tree builds against ONE turbomcp — the one
-# carrying the request `_meta` pass-through. Remove once turbomcp publishes the change.
-#
-# Every turbomcp-* crate turbovault names must be listed, not just the umbrella. Patching `turbomcp`
-# alone linked the fork's `turbomcp-core` (via the umbrella) alongside the registry's (via
-# turbovault's direct dep) — two crates of the same name in one graph, so identical-looking types
-# stopped unifying: "expected `ResourceTemplate`, found `turbomcp_core::ResourceTemplate`". That is
-# what kept the `e2e` provenance capstone unbuildable and switched off.
+# turbovault still names `turbomcp*` as crates.io 3.1.5. Redirect those names at
+# the same path copies. Every crate turbovault names must be listed, or Cargo
+# links two copies and identical-looking types stop unifying.
 [patch.crates-io]
-turbomcp = { git = "https://github.com/ForrestThump/turbomcp", tag = "liberado-2026-08-27" }
-turbomcp-core = { git = "https://github.com/ForrestThump/turbomcp", tag = "liberado-2026-08-27" }
-turbomcp-server = { git = "https://github.com/ForrestThump/turbomcp", tag = "liberado-2026-08-27" }
-turbomcp-types = { git = "https://github.com/ForrestThump/turbomcp", tag = "liberado-2026-08-27" }
+turbomcp = { path = "third_party/turbomcp/crates/turbomcp" }
+turbomcp-core = { path = "third_party/turbomcp/crates/turbomcp-core" }
+turbomcp-server = { path = "third_party/turbomcp/crates/turbomcp-server" }
+turbomcp-types = { path = "third_party/turbomcp/crates/turbomcp-types" }
 
 [profile.release]
 lto = true

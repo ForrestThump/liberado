@@ -1,51 +1,70 @@
-use chrono::{DateTime, Datelike, Offset, TimeZone, Timelike, Utc, Weekday};
-use chrono_tz::Tz;
+use jiff::civil::{DateTime, Weekday, date};
+use jiff::tz::TimeZone;
 use liberado_common::{
-    CivilSchedule, civil_english, compile_cron, parse_civil, parse_compiled_cron,
+    CivilSchedule, UtcStamp, civil_english, compile_cron, parse_civil, parse_compiled_cron,
 };
 
 use super::next_fires_zoned_after;
 use crate::cron_to_english_civil;
 
-fn at(year: i32, month: u32, day: u32) -> DateTime<Utc> {
-    Utc.with_ymd_and_hms(year, month, day, 0, 0, 0).unwrap()
+fn at(year: i16, month: i8, day: i8) -> UtcStamp {
+    UtcStamp::from_civil_utc(year, month, day, 0, 0, 0).unwrap()
 }
 
 fn owned(days: &[&str]) -> Vec<String> {
     days.iter().map(|day| (*day).to_string()).collect()
 }
 
-/// Independent of the cron crate: walk local midnights and keep unique civil times.
+fn zone(name: &str) -> TimeZone {
+    TimeZone::get(name).unwrap()
+}
+
+/// Independent of jiff-cron: walk local midnights and keep unique civil times.
+///
+/// `unambiguous` is the old `.single()` check. A gap or a fold is not a fire
+/// for this reference. 20:00 never lands in one, so the Tuesday walk still
+/// matches the schedule.
 fn reference_until(
     spec: &CivilSchedule,
-    zone: Tz,
-    after: DateTime<Utc>,
-    horizon: DateTime<Utc>,
-) -> Vec<DateTime<Utc>> {
+    zone: &TimeZone,
+    after: UtcStamp,
+    horizon: UtcStamp,
+) -> Vec<UtcStamp> {
     let mut out = Vec::new();
-    let mut date = after.with_timezone(&zone).date_naive();
-    let last = horizon.with_timezone(&zone).date_naive();
+    let mut date = after.timestamp().to_zoned(zone.clone()).date();
+    let last = horizon.timestamp().to_zoned(zone.clone()).date();
     while date <= last {
         if spec.days.contains(&date.weekday())
-            && let Some(naive) = date.and_hms_opt(spec.hour, spec.minute, spec.second)
-            && let Some(local) = zone.from_local_datetime(&naive).single()
+            && let Some(civil) = clock_on(date, spec)
+            && let Ok(local) = zone.to_ambiguous_zoned(civil).unambiguous()
         {
-            let utc = local.with_timezone(&Utc);
+            let utc = UtcStamp::from_timestamp(local.timestamp());
             if utc > after && utc < horizon {
                 out.push(utc);
             }
         }
-        date = date.succ_opt().expect("date");
+        date = date.tomorrow().expect("date");
     }
     out
 }
 
-fn fires_until(
-    expr: &str,
-    zone_name: &str,
-    after: DateTime<Utc>,
-    horizon: DateTime<Utc>,
-) -> Vec<DateTime<Utc>> {
+fn clock_on(date: jiff::civil::Date, spec: &CivilSchedule) -> Option<DateTime> {
+    let hour = i8::try_from(spec.hour).ok()?;
+    let minute = i8::try_from(spec.minute).ok()?;
+    let second = i8::try_from(spec.second).ok()?;
+    DateTime::new(
+        date.year(),
+        date.month(),
+        date.day(),
+        hour,
+        minute,
+        second,
+        0,
+    )
+    .ok()
+}
+
+fn fires_until(expr: &str, zone_name: &str, after: UtcStamp, horizon: UtcStamp) -> Vec<UtcStamp> {
     next_fires_zoned_after(expr, zone_name, 800, after)
         .unwrap()
         .into_iter()
@@ -54,16 +73,16 @@ fn fires_until(
         .collect()
 }
 
-fn assert_same_instants(got: &[DateTime<Utc>], expect: &[DateTime<Utc>], label: &str) {
+fn assert_same_instants(got: &[UtcStamp], expect: &[UtcStamp], label: &str) {
     assert_eq!(got.len(), expect.len(), "{label}");
     for (index, (left, right)) in got.iter().zip(expect).enumerate() {
         assert_eq!(left, right, "{label} at {index}");
     }
 }
 
-fn month_present(fires: &[DateTime<Utc>], zone: Tz, year: i32, month: u32) -> bool {
+fn month_present(fires: &[UtcStamp], zone: &TimeZone, year: i16, month: i8) -> bool {
     fires.iter().any(|utc| {
-        let local = utc.with_timezone(&zone);
+        let local = utc.timestamp().to_zoned(zone.clone());
         local.year() == year && local.month() == month
     })
 }
@@ -86,18 +105,18 @@ fn compiled_civil_fires_match_an_independent_zone_walk() {
     let start = at(2026, 1, 1);
     let horizon = at(2028, 1, 1);
     for zone_name in zones {
-        let zone: Tz = zone_name.parse().unwrap();
+        let zone = zone(zone_name);
         for days in day_sets {
             let spec = parse_civil(&owned(days), "20:00").unwrap();
             let expr = compile_cron(&spec);
             assert_eq!(parse_compiled_cron(&expr), Some(spec.clone()));
             let got = fires_until(&expr, zone_name, start, horizon);
-            let expect = reference_until(&spec, zone, start, horizon);
+            let expect = reference_until(&spec, &zone, start, horizon);
             assert_same_instants(&got, &expect, &format!("{zone_name} {days:?}"));
             assert!(got.len() > 50, "{zone_name} {days:?} {}", got.len());
         }
     }
-    let chicago: Tz = "America/Chicago".parse().unwrap();
+    let chicago = zone("America/Chicago");
     let tue = fires_until(
         &compile_cron(&parse_civil(&owned(&["tue"]), "20:00").unwrap()),
         "America/Chicago",
@@ -106,11 +125,11 @@ fn compiled_civil_fires_match_an_independent_zone_walk() {
     );
     for (year, month) in [(2026, 3), (2026, 11), (2027, 3), (2027, 11)] {
         assert!(
-            month_present(&tue, chicago, year, month),
+            month_present(&tue, &chicago, year, month),
             "missing {year}-{month}"
         );
     }
-    let sydney: Tz = "Australia/Sydney".parse().unwrap();
+    let sydney = zone("Australia/Sydney");
     let sydney_tue = fires_until(
         &compile_cron(&parse_civil(&owned(&["tue"]), "20:00").unwrap()),
         "Australia/Sydney",
@@ -119,7 +138,7 @@ fn compiled_civil_fires_match_an_independent_zone_walk() {
     );
     for (year, month) in [(2026, 4), (2026, 10), (2027, 4), (2027, 10)] {
         assert!(
-            month_present(&sydney_tue, sydney, year, month),
+            month_present(&sydney_tue, &sydney, year, month),
             "missing Sydney {year}-{month}"
         );
     }
@@ -150,10 +169,10 @@ fn chicago_tuesday_8pm_stays_8pm_across_november_2026() {
     assert_eq!(after.local.hour(), 20);
     assert_eq!(before.local.minute(), 0);
     assert_eq!(after.local.minute(), 0);
-    assert_eq!(before.weekday, Weekday::Tue);
-    assert_eq!(after.weekday, Weekday::Tue);
-    assert_eq!(before.local.offset().fix().local_minus_utc(), -5 * 3600);
-    assert_eq!(after.local.offset().fix().local_minus_utc(), -6 * 3600);
+    assert_eq!(before.weekday, Weekday::Tuesday);
+    assert_eq!(after.weekday, Weekday::Tuesday);
+    assert_eq!(before.local.offset().seconds(), -5 * 3600);
+    assert_eq!(after.local.offset().seconds(), -6 * 3600);
 }
 
 #[test]
@@ -163,11 +182,44 @@ fn a_cron_expression_with_a_zone_uses_civil_fields() {
     let utc =
         crate::next_fires_after("0 0 20 * * 3 *", "America/Chicago", 1, at(2026, 10, 1)).unwrap();
     assert_eq!(zoned[0].local.hour(), 20);
-    assert_eq!(zoned[0].weekday, Weekday::Tue);
+    assert_eq!(zoned[0].weekday, Weekday::Tuesday);
     assert_ne!(utc[0].local.hour(), zoned[0].local.hour());
 }
 
-fn at_hms(year: i32, month: u32, day: u32, hour: u32, minute: u32, second: u32) -> DateTime<Utc> {
-    Utc.with_ymd_and_hms(year, month, day, hour, minute, second)
-        .unwrap()
+/// Compatible disambiguation, not the old cron crate's skip-the-day behavior.
+/// A civil time in the spring gap is shifted one hour later.
+#[test]
+fn chicago_spring_gap_shifts_0230_one_hour_later() {
+    let fires =
+        next_fires_zoned_after("0 30 2 * * * *", "America/Chicago", 8, at(2026, 3, 6)).unwrap();
+    let on_gap_day: Vec<_> = fires
+        .iter()
+        .filter(|fire| fire.local.date() == date(2026, 3, 8))
+        .collect();
+    assert_eq!(on_gap_day.len(), 1);
+    assert_eq!(
+        on_gap_day[0].local.to_string(),
+        "2026-03-08T03:30:00-05:00[America/Chicago]"
+    );
+}
+
+/// Compatible disambiguation, not the old cron crate's skip-the-day behavior.
+/// The fall overlap fires once, at the CST occurrence.
+#[test]
+fn chicago_fall_overlap_fires_0130_once_at_cst() {
+    let fires =
+        next_fires_zoned_after("0 30 1 * * * *", "America/Chicago", 8, at(2026, 10, 30)).unwrap();
+    let on_overlap_day: Vec<_> = fires
+        .iter()
+        .filter(|fire| fire.local.date() == date(2026, 11, 1))
+        .collect();
+    assert_eq!(on_overlap_day.len(), 1);
+    assert_eq!(
+        on_overlap_day[0].local.to_string(),
+        "2026-11-01T01:30:00-06:00[America/Chicago]"
+    );
+}
+
+fn at_hms(year: i16, month: i8, day: i8, hour: i8, minute: i8, second: i8) -> UtcStamp {
+    UtcStamp::from_civil_utc(year, month, day, hour, minute, second).unwrap()
 }

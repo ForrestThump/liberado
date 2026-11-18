@@ -3,13 +3,13 @@
 //! The repository ACL is the transport ACL. A submitter can write only a typed, policy-bounded
 //! job. The worker never accepts a shell command or a secret in the request.
 
+use liberado_common::UtcStamp;
 use std::error::Error;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use chrono::Utc;
 use liberado_common::process::std_command;
 use sha2::{Digest, Sha256};
 
@@ -96,7 +96,7 @@ pub fn build_spec(options: SubmitOptions) -> Result<JobSpec, Box<dyn Error>> {
     let spec = JobSpec {
         version: JOB_SPEC_VERSION,
         job_id: JobId::new(),
-        submitted_at: Utc::now(),
+        submitted_at: UtcStamp::now(),
         repository: repository.clone(),
         base_revision,
         task,
@@ -528,7 +528,7 @@ mod tests {
         let spec = JobSpec {
             version: JOB_SPEC_VERSION,
             job_id: JobId::new(),
-            submitted_at: Utc::now(),
+            submitted_at: UtcStamp::now(),
             repository: repository.clone(),
             base_revision: "HEAD".to_string(),
             task: TaskBundle::new("task.txt", "do it".to_string()).unwrap(),

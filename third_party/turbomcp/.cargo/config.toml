@@ -1,0 +1,63 @@
+# TurboMCP Cargo Configuration
+
+[build]
+# Enable optimizations for tests in dev mode
+rustflags = ["-C", "opt-level=1"]
+
+[target.'cfg(target_os = "linux")']
+# Linux-specific settings
+rustflags = ["-C", "link-arg=-Wl,--gc-sections"]
+
+[target.'cfg(target_os = "macos")']
+# macOS-specific settings
+rustflags = ["-C", "link-arg=-Wl,-dead_strip"]
+
+[target.'cfg(windows)']
+# Windows-specific settings
+rustflags = ["-C", "link-args=/OPT:REF"]
+
+[alias]
+# Convenient aliases for common development tasks
+
+# Testing aliases
+test-unit = "test --lib --all-features"
+test-integration = "test --test '*' --all-features"
+test-doc = "test --doc --all-features"
+test-all = "test --all-features"
+test-quick = "test --lib --bins"
+test-verbose = "test --all-features -- --nocapture"
+
+# Build aliases  
+build-all = "build --all-features"
+build-release = "build --release --all-features"
+build-examples = "build --examples --all-features"
+
+# Check aliases
+check-all = "check --all-targets --all-features"
+check-format = "fmt --all -- --check"
+check-clippy = "clippy --all-targets --all-features -- -D warnings"
+
+# Documentation aliases
+doc-open = "doc --open --all-features --no-deps"
+doc-private = "doc --all-features --document-private-items"
+
+# TurboMCP specific aliases
+turbomcp-demo = "run --example turbomcp_demo --features turbomcp"
+simple-server = "run --example simple_server"
+
+# Development workflow aliases
+dev-check = ["check-format", "check-clippy", "test-unit"]
+dev-test = ["test-unit", "test-integration"]
+dev-full = ["check-all", "test-all", "build-examples"]
+
+# Release workflow aliases
+release-check = ["build-release", "test-all", "doc-private"]
+
+[env]
+# Environment variables for tests and development
+RUST_BACKTRACE = "1"
+RUST_LOG = "debug"
+
+# TurboMCP specific environment
+TURBOMCP_TEST_MODE = "true"
+TURBOMCP_LOG_LEVEL = "info"

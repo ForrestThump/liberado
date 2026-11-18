@@ -1,8 +1,8 @@
 //! Model critic for the coding domain pack: reviews *evidence* (real git diff), not the worker's
 //! self-report. Maker ≠ checker.
 
-use chrono::Utc;
 use liberado_coder_core::{CoderError, CoderEvent, CoderRunRequest, CriticVerdict};
+use liberado_common::UtcStamp;
 use liberado_provider::{CompletionRequest, Message, complete_json};
 use serde_json::json;
 
@@ -21,7 +21,7 @@ pub async fn run_critic(
         CoderEvent::RoleStarted {
             role: "critic".to_string(),
             model: request.config.critic.model.clone(),
-            at: Utc::now(),
+            at: UtcStamp::now(),
         },
     );
 
@@ -100,7 +100,7 @@ pub async fn run_critic(
         events,
         CoderEvent::RoleFinished {
             role: "critic".to_string(),
-            at: Utc::now(),
+            at: UtcStamp::now(),
         },
     );
     Ok(Some(verdict))

@@ -1,9 +1,8 @@
-use chrono::{TimeZone, Utc};
-
 use super::{cron_to_english_at, ordinal};
+use liberado_common::UtcStamp;
 
-fn at(year: i32, month: u32, day: u32) -> chrono::DateTime<Utc> {
-    Utc.with_ymd_and_hms(year, month, day, 16, 0, 0).unwrap()
+fn at(year: i32, month: u32, day: u32) -> UtcStamp {
+    UtcStamp::from_civil_utc(year as i16, month as i8, day as i8, 16, 0, 0).unwrap()
 }
 
 fn english(expr: &str, zone: &str, year: i32, month: u32, day: u32) -> String {

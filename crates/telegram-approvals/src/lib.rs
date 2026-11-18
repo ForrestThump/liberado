@@ -20,7 +20,7 @@ use std::time::Duration;
 
 use liberado_common::{
     ChannelKind, DecisionVia, GrantScope, PROPOSALS_DIR, Proposal, ProposalSigner, ProposalStatus,
-    ProposedAction, WriteProvenance,
+    ProposedAction, UtcStamp, WriteProvenance,
 };
 use liberado_config_loader::TelegramApprovalsTuning;
 use liberado_messaging::approval_action_rows;
@@ -494,7 +494,7 @@ impl ApprovalBot {
     /// Refuse a proposal that is not `Pending` (or has expired), telling the human why. Returns
     /// `false` when it was already decided.
     async fn confirm_pending(&self, event_id: &str, proposal: &Proposal) -> bool {
-        let expired = proposal.is_expired_at(chrono::Utc::now());
+        let expired = proposal.is_expired_at(UtcStamp::now());
         if proposal.status != ProposalStatus::Pending || expired {
             let note = if expired {
                 "expired".to_string()

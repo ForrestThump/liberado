@@ -1,0 +1,216 @@
+# TurboMCP Test Configuration
+# Configuration for running different categories of tests
+
+[test-suites]
+
+[test-suites.unit]
+name = "Unit Tests"
+command = "cargo test --lib --all-features"
+timeout = 120
+parallel = true
+required = true
+
+[test-suites.integration]
+name = "Integration Tests"
+command = "cargo test --test '*_test' --all-features"
+timeout = 300
+parallel = false
+required = true
+
+[test-suites.auth]
+name = "Authentication Tests"
+command = "cargo test --test auth_flows_test"
+timeout = 180
+parallel = false
+required = true
+
+[test-suites.transport]
+name = "Transport Tests"
+command = "cargo test --test transport_robustness_test --test transport_implementations_test"
+timeout = 240
+parallel = false
+required = true
+
+[test-suites.server]
+name = "Server Tests"
+command = "cargo test --test server_middleware_routing_test"
+timeout = 180
+parallel = false
+required = true
+
+[test-suites.protocol]
+name = "Protocol Tests"
+command = "cargo test --test protocol_validation_test"
+timeout = 120
+parallel = false
+required = true
+
+[test-suites.macros]
+name = "Macro Tests"
+command = "cargo test --test macro_system_test"
+timeout = 120
+parallel = false
+required = true
+
+[test-suites.performance]
+name = "Performance Tests"
+command = "cargo test --test performance_concurrency_test --release"
+timeout = 600
+parallel = false
+required = false
+env = { RUST_TEST_THREADS = "1" }
+
+[test-suites.property]
+name = "Property-Based Tests"
+command = "cargo test --test property_based_tests"
+timeout = 300
+parallel = false
+required = true
+
+[test-suites.error-handling]
+name = "Error Handling Tests"
+command = "cargo test --test error_propagation_fault_injection_test"
+timeout = 300
+parallel = false
+required = true
+
+[test-suites.docs]
+name = "Documentation Tests"
+command = "cargo test --doc --all-features"
+timeout = 120
+parallel = true
+required = true
+
+[test-suites.examples]
+name = "Example Compilation"
+command = "cargo build --examples --all-features"
+timeout = 120
+parallel = true
+required = true
+
+[test-suites.benchmarks]
+name = "Benchmark Compilation"
+command = "cargo bench --no-run --all-features"
+timeout = 180
+parallel = false
+required = false
+
+[code-quality]
+
+[code-quality.clippy]
+name = "Clippy Lints"
+command = "cargo clippy --all-features --all-targets -- -D warnings"
+timeout = 120
+required = true
+
+[code-quality.format]
+name = "Code Formatting"
+command = "cargo fmt --all -- --check"
+timeout = 30
+required = true
+
+[code-quality.audit]
+name = "Security Audit"
+command = "cargo audit"
+timeout = 60
+required = false
+requires_tool = "cargo-audit"
+
+[code-quality.outdated]
+name = "Dependency Check"
+command = "cargo outdated --exit-code 1"
+timeout = 60
+required = false
+requires_tool = "cargo-outdated"
+
+[coverage]
+tool = "tarpaulin"
+config_file = "tarpaulin.toml"
+output_formats = ["Html", "Xml", "Json"]
+output_dir = "coverage"
+timeout = 300
+target_coverage = 80.0
+fail_under = 70.0
+
+[coverage.fallback]
+tool = "llvm-cov"
+flags = "-C instrument-coverage"
+profile_file = "coverage/%p-%m.profraw"
+
+[reporting]
+output_dir = "test-reports"
+generate_html = true
+generate_json = true
+generate_junit = false
+
+[reporting.notifications]
+slack_webhook = ""  # Set via environment variable
+email_recipients = []
+github_pr_comment = true
+
+[environment]
+# Environment variables for testing
+RUST_LOG = "debug"
+RUST_BACKTRACE = "1"
+MCP_TEST_MODE = "true"
+TARPAULIN_TIMEOUT = "300"
+
+[parallel-execution]
+max_parallel_suites = 2
+max_parallel_tests = 4
+# Suites that cannot run in parallel with others
+exclusive_suites = ["performance", "benchmarks"]
+
+[test-data]
+# Paths to test data directories
+fixtures_dir = "tests/fixtures"
+temp_dir = "tests/temp"
+mock_data_dir = "tests/mock-data"
+
+[timeouts]
+# Global timeout settings
+default_test_timeout = 120
+integration_test_timeout = 300
+performance_test_timeout = 600
+property_test_timeout = 300
+
+[flaky-test-handling]
+# Configuration for handling flaky tests
+max_retries = 2
+retry_delay_seconds = 5
+retry_on_timeout = true
+retry_on_segfault = true
+
+[test-categories]
+# Categorize tests for selective running
+smoke = ["unit", "docs", "format"]
+ci = ["unit", "integration", "docs", "clippy", "format"]
+nightly = ["unit", "integration", "performance", "property", "error-handling", "docs", "clippy", "format", "audit"]
+full = ["unit", "integration", "auth", "transport", "server", "protocol", "macros", "performance", "property", "error-handling", "docs", "examples", "benchmarks", "clippy", "format", "audit", "outdated"]
+
+[performance-thresholds]
+# Performance test thresholds
+max_latency_ms = 100
+min_throughput_rps = 1000
+max_memory_growth_mb = 100
+max_cpu_usage_percent = 80
+
+[test-isolation]
+# Test isolation settings
+cleanup_temp_files = true
+reset_global_state = true
+isolated_network = false
+container_isolation = false
+
+[custom-test-runners]
+# Custom test runners for specific scenarios
+stress_test = "scripts/stress_test.sh"
+chaos_test = "scripts/chaos_test.sh" 
+fuzz_test = "scripts/fuzz_test.sh"
+
+[debugging]
+# Debug settings for failed tests
+capture_logs = true
+capture_core_dumps = false
+debug_symbols = true
+verbose_output = false

@@ -1,0 +1,31 @@
+[package]
+name = "turbovault-plugin-tasks"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+publish = true
+description = "Obsidian-tasks vertical for TurboVault, exposed as a compiled-in plugin module"
+readme = "README.md"
+keywords = ["mcp", "obsidian", "vault", "plugin", "tasks"]
+categories = ["development-tools", "text-processing"]
+
+[dependencies]
+turbovault-plugin-api = { workspace = true }
+turbovault-core = { workspace = true }
+turbovault-parser = { workspace = true }
+turbomcp-types = { workspace = true }
+async-trait = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+jiff = { workspace = true }
+# tokio::sync::OnceCell: the module resolves its Obsidian-Tasks settings once,
+# lazily, on first tool call (Plugin::build is synchronous, so detection — which
+# reads `.obsidian` via the async VaultApi — cannot happen at construction).
+tokio = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt", "macros"] }

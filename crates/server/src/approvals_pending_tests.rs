@@ -1,12 +1,11 @@
-use chrono::{DateTime, Utc};
-use liberado_common::{Capability, Proposal, ProposalStatus, ProposedAction, ToolCall, Zone};
+use liberado_common::{
+    Capability, Proposal, ProposalStatus, ProposedAction, ToolCall, UtcStamp, Zone,
+};
 
 use super::pending_approval_row;
 
-fn at(stamp: &str) -> DateTime<Utc> {
-    DateTime::parse_from_rfc3339(stamp)
-        .unwrap()
-        .with_timezone(&Utc)
+fn at(stamp: &str) -> UtcStamp {
+    stamp.parse::<UtcStamp>().unwrap()
 }
 
 fn permission(id: &str) -> Proposal {

@@ -1,0 +1,40 @@
+services:
+  server:
+    build: .
+    image: turbomcp-server:latest
+    container_name: turbomcp-server
+    environment:
+      - RUST_LOG=info
+      - MCP_SSE_PORT=8080
+    stdin_open: true
+    tty: true
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "sh", "-c", "curl -sf http://localhost:8080/health | grep -q healthy"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  dev:
+    build:
+      context: .
+      target: builder
+    image: turbomcp-dev:latest
+    container_name: turbomcp-dev
+    working_dir: /app
+    environment:
+      - RUST_LOG=info
+      - PATH=/usr/local/cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+    volumes:
+      - .:/app
+      - cargo-registry:/usr/local/cargo/registry
+      - cargo-git:/usr/local/cargo/git
+      - target-cache:/app/target
+    stdin_open: true
+    tty: true
+
+volumes:
+  cargo-registry: {}
+  cargo-git: {}
+  target-cache: {}
+

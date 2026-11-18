@@ -2,31 +2,31 @@ use std::cmp::Ordering;
 use std::fs;
 use std::path::Path;
 
-use chrono::{NaiveDate, NaiveTime};
+use jiff::civil::{Date, Time};
+
+use super::date::{date_from_display, format_hhmm, parse_ymd, time_hms};
+use super::walk::markdown_notes;
 use turbovault_core::{TaskItem, TaskPriority, TaskStatus};
 use turbovault_parser::parse_tasks;
 use turbovault_plugin_tasks::TasksConfig;
-
-use super::date::parse_ymd;
-use super::walk::markdown_notes;
 
 const OBSIDIAN_TASKS_DATA_PATH: &str = ".obsidian/plugins/obsidian-tasks-plugin/data.json";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct OpenTask {
     pub(crate) priority: u8,
-    pub(crate) due: Option<NaiveDate>,
-    pub(crate) due_at: Option<NaiveTime>,
-    pub(crate) scheduled: Option<NaiveDate>,
-    pub(crate) scheduled_at: Option<NaiveTime>,
-    pub(crate) start: Option<NaiveDate>,
+    pub(crate) due: Option<Date>,
+    pub(crate) due_at: Option<Time>,
+    pub(crate) scheduled: Option<Date>,
+    pub(crate) scheduled_at: Option<Time>,
+    pub(crate) start: Option<Date>,
     pub(crate) recurrence: Option<String>,
     pub(crate) in_progress: bool,
     pub(crate) text: String,
     pub(crate) path: String,
 }
 
-pub(crate) fn task_ping_message(root: &Path, limit: u32, today: NaiveDate) -> String {
+pub(crate) fn task_ping_message(root: &Path, limit: u32, today: Date) -> String {
     let config = load_tasks_config(root);
     let mut tasks = Vec::new();
     for (rel, text) in markdown_notes(root) {
@@ -39,7 +39,7 @@ pub(crate) fn task_ping_message(root: &Path, limit: u32, today: NaiveDate) -> St
 fn collect_tasks(
     rel: &str,
     text: &str,
-    today: NaiveDate,
+    today: Date,
     config: &TasksConfig,
     out: &mut Vec<OpenTask>,
 ) {
@@ -164,7 +164,7 @@ fn task_priority(priority: TaskPriority) -> u8 {
 
 fn open_task_from_parsed(
     rel: &str,
-    today: NaiveDate,
+    today: Date,
     config: &TasksConfig,
     source_lines: &[&str],
     index: usize,
@@ -177,7 +177,7 @@ fn open_task_from_parsed(
     if text.trim().is_empty() {
         return None;
     }
-    let start = task.start_date;
+    let start = task.start_date.as_ref().and_then(date_from_display);
     if matches!(start, Some(date) if date > today) {
         return None;
     }
@@ -186,9 +186,9 @@ fn open_task_from_parsed(
     let scheduled_at = clock_after(line, '⏳');
     Some(OpenTask {
         priority: task_priority(task.priority),
-        due: task.due_date,
+        due: task.due_date.as_ref().and_then(date_from_display),
         due_at,
-        scheduled: task.scheduled_date,
+        scheduled: task.scheduled_date.as_ref().and_then(date_from_display),
         scheduled_at,
         start,
         recurrence: task.recurrence.clone(),
@@ -201,7 +201,7 @@ fn open_task_from_parsed(
 /// Clock after `emoji` when the value is `YYYY-MM-DD HH:MM` or
 /// `YYYY-MM-DDTHH:MM`. Seconds are ignored. A later word that is not a clock
 /// stays off the label.
-fn clock_after(line: &str, emoji: char) -> Option<NaiveTime> {
+fn clock_after(line: &str, emoji: char) -> Option<Time> {
     let rest = line.split(emoji).nth(1)?;
     let mut parts = rest.split_whitespace();
     let token = parts.next()?;
@@ -212,13 +212,13 @@ fn clock_after(line: &str, emoji: char) -> Option<NaiveTime> {
     parts.next().and_then(parse_clock)
 }
 
-fn iso_clock(token: &str) -> Option<NaiveTime> {
+fn iso_clock(token: &str) -> Option<Time> {
     let (date, clock) = token.split_once('T')?;
     let _date = parse_ymd(date)?;
     parse_clock(clock)
 }
 
-fn parse_clock(value: &str) -> Option<NaiveTime> {
+fn parse_clock(value: &str) -> Option<Time> {
     let (hour, rest) = value.split_once(':')?;
     if hour.is_empty() || hour.len() > 2 || rest.len() < 2 {
         return None;
@@ -227,7 +227,9 @@ fn parse_clock(value: &str) -> Option<NaiveTime> {
     if !hour.chars().all(|c| c.is_ascii_digit()) || !minute.chars().all(|c| c.is_ascii_digit()) {
         return None;
     }
-    NaiveTime::from_hms_opt(hour.parse().ok()?, minute.parse().ok()?, 0)
+    let hour: u32 = hour.parse().ok()?;
+    let minute: u32 = minute.parse().ok()?;
+    time_hms(hour, minute, 0)
 }
 
 fn task_rank(left: &OpenTask, right: &OpenTask) -> Ordering {
@@ -242,14 +244,14 @@ fn task_rank(left: &OpenTask, right: &OpenTask) -> Ordering {
     left.text.cmp(&right.text)
 }
 
-fn sort_key(task: &OpenTask) -> (bool, NaiveDate) {
+fn sort_key(task: &OpenTask) -> (bool, Date) {
     match task.due.or(task.scheduled) {
         Some(date) => (false, date),
-        None => (true, NaiveDate::MIN),
+        None => (true, Date::MIN),
     }
 }
 
-fn render_tasks(tasks: &[OpenTask], limit: u32, today: NaiveDate) -> String {
+fn render_tasks(tasks: &[OpenTask], limit: u32, today: Date) -> String {
     if tasks.is_empty() {
         return "No open tasks.".to_string();
     }
@@ -262,7 +264,7 @@ fn render_tasks(tasks: &[OpenTask], limit: u32, today: NaiveDate) -> String {
     lines.join("\n")
 }
 
-fn format_task_line(index: usize, task: &OpenTask, today: NaiveDate) -> String {
+fn format_task_line(index: usize, task: &OpenTask, today: Date) -> String {
     let mut parts = vec![format!("{index}. {}", task.text)];
     if let Some(due) = task.due {
         parts.push(due_label(due, task.due_at, today));
@@ -280,7 +282,7 @@ fn format_task_line(index: usize, task: &OpenTask, today: NaiveDate) -> String {
     parts.join(" — ")
 }
 
-fn due_label(due: NaiveDate, clock: Option<NaiveTime>, today: NaiveDate) -> String {
+fn due_label(due: Date, clock: Option<Time>, today: Date) -> String {
     let label = when_label("due", due, clock);
     if due < today {
         format!("{label} (overdue)")
@@ -291,9 +293,9 @@ fn due_label(due: NaiveDate, clock: Option<NaiveTime>, today: NaiveDate) -> Stri
     }
 }
 
-fn when_label(kind: &str, date: NaiveDate, clock: Option<NaiveTime>) -> String {
+fn when_label(kind: &str, date: Date, clock: Option<Time>) -> String {
     match clock {
-        Some(time) => format!("{kind} {date} at {}", time.format("%H:%M")),
+        Some(time) => format!("{kind} {date} at {}", format_hhmm(time)),
         None => format!("{kind} {date}"),
     }
 }

@@ -265,7 +265,7 @@ pub struct NewSession {
 #[cfg(test)]
 mod surface_mode_tests {
     use super::*;
-    use chrono::Utc;
+    use liberado_common::UtcStamp;
 
     #[test]
     fn agent_profiles_default_includes_specialist_hats() {
@@ -295,7 +295,7 @@ mod surface_mode_tests {
 
     #[test]
     fn legacy_chat_with_agent_profile_projects_agent() {
-        let mut header = SessionHeader::chat(Ulid::new(), Some("x".into()), Utc::now());
+        let mut header = SessionHeader::chat(Ulid::new(), Some("x".into()), UtcStamp::now());
         header.grant.profile = Some("coding".into());
         // Pre-stamp default
         assert_eq!(header.surface_mode, SurfaceMode::Chat);
@@ -305,7 +305,7 @@ mod surface_mode_tests {
 
     #[test]
     fn stamped_agent_survives_projection() {
-        let mut header = SessionHeader::chat(Ulid::new(), None, Utc::now());
+        let mut header = SessionHeader::chat(Ulid::new(), None, UtcStamp::now());
         header.surface_mode = SurfaceMode::Agent;
         header.grant.profile = Some("coding".into());
         assert_eq!(
@@ -316,7 +316,7 @@ mod surface_mode_tests {
 
     #[test]
     fn unprofiled_chat_stays_chat() {
-        let header = SessionHeader::chat(Ulid::new(), None, Utc::now());
+        let header = SessionHeader::chat(Ulid::new(), None, UtcStamp::now());
         assert_eq!(
             header.to_conversation_header().surface_mode,
             SurfaceMode::Chat
@@ -340,7 +340,7 @@ mod surface_mode_tests {
     /// and a legacy row with `profile = "coding"` reads as `Chat`.
     #[test]
     fn legacy_chat_with_agent_profile_demotes_when_profile_dropped() {
-        let mut header = SessionHeader::chat(Ulid::new(), Some("x".into()), Utc::now());
+        let mut header = SessionHeader::chat(Ulid::new(), Some("x".into()), UtcStamp::now());
         header.grant.profile = Some("coding".into());
         let only_life = AgentProfiles::new(["life"]);
         let conv = header.to_conversation_header_with(&only_life);

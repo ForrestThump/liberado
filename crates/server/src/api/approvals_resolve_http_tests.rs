@@ -3,13 +3,15 @@
 //! The shared resolver test covers the Telegram hand-off. These tests pin each decision the
 //! WebUI can send, and the status the handler must return when the note cannot be decided.
 
+use jiff::SignedDuration;
 use std::sync::Arc;
 
 use axum::Router;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use liberado_common::{
-    Capability, Proposal, ProposalSigner, ProposalStatus, ProposedAction, WriteProvenance, Zone,
+    Capability, Proposal, ProposalSigner, ProposalStatus, ProposedAction, UtcStamp,
+    WriteProvenance, Zone,
 };
 use liberado_session_store::SessionStore;
 use liberado_telegram_approvals::PermissionResolver;
@@ -190,7 +192,7 @@ async fn a_second_resolve_after_deny_is_a_conflict() {
 #[tokio::test]
 async fn an_expired_request_cannot_be_approved() {
     let mut expired = permission("perm-expired", Some("sess-exp"));
-    expired.expires = Some(chrono::Utc::now() - chrono::Duration::hours(2));
+    expired.expires = Some(UtcStamp::now() - SignedDuration::from_hours(2));
     let world = world(vec![expired]).await;
 
     let (status, body) = post(&world.app, "perm-expired", r#"{"decision":"once"}"#).await;

@@ -1,5 +1,6 @@
 //! Cross-platform local readiness receipts and Debian CRAP reproduction.
 
+use liberado_common::UtcStamp;
 use liberado_common::process::std_command;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -198,7 +199,7 @@ fn write_receipt(
         tree_sha256: tree_fingerprint(root)?,
         rustc: command_text(root, "rustc", &["--version"])?,
         host: format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH),
-        completed_at: chrono::Utc::now().to_rfc3339(),
+        completed_at: UtcStamp::now().to_rfc3339(),
         checks,
     };
     let mut json = serde_json::to_string_pretty(&receipt)?;

@@ -1,0 +1,207 @@
+name: Tests
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  CARGO_NET_RETRY: 2
+  CARGO_NET_TIMEOUT: 10
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  test:
+    name: Lint & Test
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v6
+
+    - name: Free up disk space
+      run: |
+        sudo rm -rf /usr/share/dotnet /opt/ghc /opt/hostedtoolcache
+        sudo rm -rf /usr/local/.ghcup /usr/local/lib/android
+        sudo rm -rf /usr/local/share/powershell /usr/share/swift
+        sudo apt-get clean && sudo rm -rf /var/lib/apt/lists/*
+
+    - name: Install system dependencies
+      run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
+    - name: Install Rust toolchain
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        components: rustfmt, clippy
+
+    - name: Cache cargo registry & target
+      uses: actions/cache@v5
+      with:
+        path: |
+          ~/.cargo/bin/
+          ~/.cargo/registry/index/
+          ~/.cargo/registry/cache/
+          ~/.cargo/git/db/
+          target/
+        key: ${{ runner.os }}-cargo-test-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: ${{ runner.os }}-cargo-test-
+
+    - name: Check formatting
+      run: cargo fmt --all -- --check
+
+    # Clippy with --all-targets compiles libs, tests, benches, examples, and bins.
+    # Using dev profile (default) — no LTO/optimization overhead.
+    # All subsequent steps reuse these artifacts via matching features + profile.
+    - name: Clippy
+      run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+    # Same --all-features as clippy so cargo reuses compiled artifacts.
+    - name: Unit tests
+      run: cargo test --workspace --all-features --lib --bins
+
+    # Workspace-level integration / compliance tests live in `tests/` and per-crate
+    # `tests/` directories. Pre-3.1 these were never executed in CI — only `--lib
+    # --bins` ran, so ~600 integration tests across compliance, fault-injection,
+    # transport conformance, and performance silently never ran.
+    - name: Integration tests
+      run: cargo test --workspace --all-features --tests
+
+    - name: Doc tests
+      run: cargo test --workspace --all-features --doc
+
+    - name: Cleanup
+      if: always()
+      run: cargo clean 2>/dev/null || true
+
+  msrv:
+    name: MSRV (1.89.0)
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v6
+
+    - name: Free up disk space
+      run: |
+        sudo rm -rf /usr/share/dotnet /opt/ghc /opt/hostedtoolcache
+        sudo rm -rf /usr/local/.ghcup /usr/local/lib/android
+
+    - name: Install system dependencies
+      run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
+    # All crates in this workspace declare `rust-version = "1.89.0"`. The other
+    # CI jobs use `stable`, so an MSRV regression (e.g. an `&raw const` use,
+    # let-else in a const context) would pass CI and break downstream consumers
+    # pinned to 1.89. This job catches that.
+    - name: Install Rust 1.89.0
+      uses: dtolnay/rust-toolchain@1.89.0
+
+    - name: Cache cargo registry
+      uses: actions/cache@v5
+      with:
+        path: |
+          ~/.cargo/registry/index/
+          ~/.cargo/registry/cache/
+          ~/.cargo/git/db/
+        key: ${{ runner.os }}-cargo-msrv-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: ${{ runner.os }}-cargo-msrv-
+
+    - name: cargo check at MSRV
+      run: cargo check --workspace --all-features
+
+  wasm:
+    name: WASM
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v6
+
+    - name: Install Rust toolchain
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        targets: wasm32-unknown-unknown
+
+    - name: Cache cargo registry
+      uses: actions/cache@v5
+      with:
+        path: |
+          ~/.cargo/bin/
+          ~/.cargo/registry/index/
+          ~/.cargo/registry/cache/
+          ~/.cargo/git/db/
+        key: ${{ runner.os }}-cargo-wasm-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: ${{ runner.os }}-cargo-wasm-
+
+    - name: Build & test WASM
+      run: |
+        cargo build -p turbomcp-wasm --target wasm32-unknown-unknown --profile wasm-release
+        cargo test -p turbomcp-wasm --lib
+
+    - name: Check binary size
+      run: |
+        SIZE=$(stat -c%s target/wasm32-unknown-unknown/wasm-release/turbomcp_wasm.wasm 2>/dev/null || stat -f%z target/wasm32-unknown-unknown/wasm-release/turbomcp_wasm.wasm)
+        echo "WASM binary size: ${SIZE} bytes ($(numfmt --to=iec ${SIZE}))"
+        if [ $SIZE -gt 2097152 ]; then
+          echo "::warning::WASM binary exceeds 2MB"
+        fi
+
+  coverage:
+    name: Coverage
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+    steps:
+    - uses: actions/checkout@v6
+
+    - name: Free up disk space
+      run: |
+        sudo rm -rf /usr/share/dotnet /opt/ghc /opt/hostedtoolcache
+        sudo rm -rf /usr/local/lib/android /usr/local/share/powershell
+        sudo apt-get clean
+
+    - name: Install system dependencies
+      run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
+    - name: Install Rust toolchain
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        components: llvm-tools-preview
+
+    - name: Install cargo-llvm-cov
+      uses: taiki-e/install-action@cargo-llvm-cov
+
+    - name: Cache cargo registry
+      uses: actions/cache@v5
+      with:
+        path: |
+          ~/.cargo/bin/
+          ~/.cargo/registry/index/
+          ~/.cargo/registry/cache/
+          ~/.cargo/git/db/
+        key: ${{ runner.os }}-cargo-coverage-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: ${{ runner.os }}-cargo-coverage-
+
+    - name: Generate coverage
+      env:
+        CARGO_TARGET_DIR: /tmp/cargo-coverage
+      run: |
+        cargo llvm-cov --workspace --lib --lcov --output-path lcov.info \
+          --ignore-filename-regex '(tests?/|benches/|examples/)'
+
+        COVERAGE=$(cargo llvm-cov report --workspace --lib 2>/dev/null | grep -E 'TOTAL' | awk '{print $NF}' | tr -d '%')
+        echo "Coverage: ${COVERAGE}%"
+
+        MIN_COVERAGE=70
+        if [ "$(echo "$COVERAGE < $MIN_COVERAGE" | bc -l)" -eq 1 ]; then
+          echo "::error::Coverage ${COVERAGE}% is below minimum ${MIN_COVERAGE}%"
+          exit 1
+        fi
+
+    - name: Upload coverage
+      uses: codecov/codecov-action@v5
+      with:
+        files: lcov.info
+        fail_ci_if_error: false
+      env:
+        CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}

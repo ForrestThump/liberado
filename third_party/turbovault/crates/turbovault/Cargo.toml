@@ -1,0 +1,120 @@
+[package]
+name = "turbovault"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+publish = true
+description = "Production-grade MCP server for Obsidian vault management - Transform your vault into an intelligent knowledge system for AI agents"
+documentation = "https://docs.rs/turbovault"
+readme = "README.md"
+keywords = ["mcp", "obsidian", "vault", "llm", "agent"]
+include = [
+  "src/",
+  "tests/",
+  "benches/",
+  "resources/",
+  "Cargo.toml",
+  "build.rs",
+  "README.md",
+]
+
+[features]
+# Transport support - pick what you need, a la carte style
+# ✨ OPTIMIZED: Default is stdio-only (~5-6 MB binary)
+# Optional transports let users add features as needed (~100-300 KB each)
+
+# Minimal default: STDIO transport (Claude Desktop standard)
+default = []
+
+# Individual transports - add what you need
+stdio = []                                    # Always included, no external deps
+http = ["turbomcp/http"]                     # Add HTTP server support (~200 KB)
+websocket = ["turbomcp/websocket"]           # Add WebSocket support (~200 KB)
+tcp = ["turbomcp/tcp"]                       # Add TCP server support (~100 KB)
+unix = ["turbomcp/unix"]                     # Add Unix socket support (~100 KB) [Unix-only]
+
+# SQL frontmatter queries (GlueSQL)
+sql = ["turbovault-tools/sql"]
+
+# Stable compiled-in plugin boundary. Individual plugin features added under
+# crates/plugins/ must include this feature and remain default-off.
+plugin-api = ["dep:async-trait", "dep:turbovault-plugin-api"]
+
+# Tasks module: Obsidian-tasks queries/edits as a namespaced `tasks_*` vertical.
+# Default-off; enables the plugin boundary and compiles in the module crate.
+tasks = ["plugin-api", "dep:turbovault-plugin-tasks"]
+
+# Convenience bundles
+http-full = ["http", "websocket"]            # HTTP + WebSocket
+# Note: unix is excluded from all-transports on Windows (not supported)
+all-transports-unix = ["http", "websocket", "tcp", "unix"]  # Everything (Unix-only)
+all-transports = ["http", "websocket", "tcp"]  # Everything (cross-platform)
+full = ["all-transports"]                    # Alias for all-transports
+
+[[bin]]
+name = "turbovault"
+path = "src/bin/main.rs"
+
+[dependencies]
+turbovault-core = { workspace = true }
+turbovault-vault = { workspace = true }
+turbovault-audit = { workspace = true }
+turbovault-tools = { workspace = true }
+turbovault-plugin-api = { workspace = true, optional = true }
+turbovault-plugin-tasks = { workspace = true, optional = true }
+
+# MCP server framework (features passed through from turbovault)
+turbomcp = { workspace = true, features = ["stdio", "telemetry"] }
+turbomcp-core = { workspace = true }
+turbomcp-server = { workspace = true }
+turbomcp-types = { workspace = true }
+
+schemars = { workspace = true }
+shellexpand = { workspace = true }
+tokio = { workspace = true }
+uuid = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+yaml_serde = { workspace = true }
+config = { workspace = true }
+clap = { workspace = true }
+anyhow = { workspace = true }
+async-trait = { workspace = true, optional = true }
+log = { workspace = true }
+simple_logger = "5.2"
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["full"] }
+tempfile = { workspace = true }
+criterion = { workspace = true, features = ["async_tokio", "html_reports"] }
+# turbovault-6fo.18 e2e tests: direct git2 inspection (HEAD, commit
+# messages, external commits) of substrate output.
+git2 = { workspace = true }
+# turbovault-6fo.18: serialize e2e tests because libgit2's process-wide
+# init + parallel ObsidianMcpServer setup is flaky (~25% failure rate
+# on a hot machine when tests run in parallel; isolating them removes
+# the flake entirely).
+serial_test = "3"
+# turbovault-3i5: wire-level MCP e2e — spawn the real `turbovault` binary
+# over stdio and drive it with the first-party turbomcp client, exercising
+# the JSON-RPC layer the in-process 6fo.18 suite skips and asserting derived
+# graph/search state via MCP tool responses (the real flush-on-query path,
+# no `flush_*_test` backdoor).
+turbomcp-client = "3.1.5"
+turbomcp-transport = "3.1.5"
+turbomcp-protocol = "3.1.5"
+
+[[bench]]
+name = "tool_benchmarks"
+harness = false
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+features = ["full"]

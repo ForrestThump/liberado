@@ -6,6 +6,7 @@
 //! migration. The message body itself is reused verbatim from [`liberado_provider`] so there is
 //! exactly one definition of message content in the system.
 
+use liberado_common::UtcStamp;
 use liberado_provider::{Message, Role};
 use liberado_session::SessionGrant;
 use serde::{Deserialize, Serialize};
@@ -13,7 +14,7 @@ use ulid::Ulid;
 
 /// A wall-clock timestamp, UTC. An alias so the schema reads in domain terms and every record
 /// stamps time the same way.
-pub type Timestamp = chrono::DateTime<chrono::Utc>;
+pub type Timestamp = UtcStamp;
 
 /// Who produced a node — the *identity* behind a message, orthogonal to the provider [`Role`].
 ///

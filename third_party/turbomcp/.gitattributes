@@ -1,0 +1,130 @@
+# Git Attributes for TurboMCP
+# Defines how Git should handle different file types
+
+# Default behavior: normalize line endings on checkin, use native line endings on checkout
+* text=auto
+
+# Source code files - always normalize line endings
+*.rs text eol=lf
+*.toml text eol=lf
+*.md text eol=lf
+*.txt text eol=lf
+*.json text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.xml text eol=lf
+*.html text eol=lf
+*.css text eol=lf
+*.js text eol=lf
+*.ts text eol=lf
+*.sh text eol=lf
+*.py text eol=lf
+
+# Configuration files
+*.ini text eol=lf
+*.cfg text eol=lf
+*.conf text eol=lf
+*.env text eol=lf
+
+# Build files
+Makefile text eol=lf
+*.mk text eol=lf
+Dockerfile text eol=lf
+.dockerignore text eol=lf
+.gitignore text eol=lf
+.gitattributes text eol=lf
+.editorconfig text eol=lf
+
+# Documentation
+*.rst text eol=lf
+*.tex text eol=lf
+LICENSE text eol=lf
+README* text eol=lf
+CHANGELOG* text eol=lf
+CONTRIBUTING* text eol=lf
+
+# Binary files - treat as binary, don't normalize
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.svg binary
+*.webp binary
+*.pdf binary
+*.zip binary
+*.tar binary
+*.gz binary
+*.bz2 binary
+*.xz binary
+*.7z binary
+*.rar binary
+
+# Fonts
+*.otf binary
+*.ttf binary
+*.woff binary
+*.woff2 binary
+*.eot binary
+
+# Audio/Video
+*.mp3 binary
+*.mp4 binary
+*.avi binary
+*.mov binary
+*.wmv binary
+*.flv binary
+*.wav binary
+
+# Archives and packages
+*.deb binary
+*.rpm binary
+*.pkg binary
+*.dmg binary
+*.msi binary
+*.exe binary
+*.dll binary
+*.so binary
+*.dylib binary
+*.a binary
+*.lib binary
+
+# Rust-specific binaries
+*.rlib binary
+*.pdb binary
+
+# Generated files that should not have line ending conversion
+*.lock binary
+Cargo.lock text eol=lf
+
+# Language specific settings
+*.rs diff=rust linguist-language=Rust
+*.toml linguist-language=TOML
+
+# Mark vendor/generated code
+/target/ linguist-generated=true
+/vendor/ linguist-vendored=true
+**/*.min.js linguist-generated=true
+**/*.min.css linguist-generated=true
+
+# Export-ignore (files not included in git archive)
+.gitignore export-ignore
+.gitattributes export-ignore
+.editorconfig export-ignore
+/.github/ export-ignore
+/target/ export-ignore
+/docs/_build/ export-ignore
+*.log export-ignore
+*.tmp export-ignore
+
+# Diff settings for better code review
+*.rs diff=rust
+*.toml diff=toml
+*.json diff=json
+*.md diff=markdown
+*.yml diff=yaml
+*.yaml diff=yaml
+
+# Merge conflict resolution
+*.rs merge=ours
+Cargo.lock merge=binary

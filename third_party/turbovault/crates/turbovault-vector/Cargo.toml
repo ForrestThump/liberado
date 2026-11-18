@@ -1,0 +1,52 @@
+[package]
+name = "turbovault-vector"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = true
+description = "Optional dense-vector semantic search for TurboVault (fastembed + usearch + SQLite)"
+documentation = "https://docs.rs/turbovault-vector"
+
+[features]
+default = ["local"]
+local = ["dep:fastembed", "dep:usearch", "dep:rusqlite"]
+remote = ["local", "dep:reqwest"]
+
+[dependencies]
+# Only turbovault-parser is used (to_plain_text). The crate owns its own config
+# (VectorConfig) and does not depend on turbovault-core or -vault.
+turbovault-parser = { workspace = true }
+
+async-trait = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+sha2 = { workspace = true }
+jiff = { workspace = true }
+walkdir = { workspace = true }
+
+fastembed  = { version = "5.13", optional = true }
+usearch    = { version = "2.24", optional = true }
+rusqlite   = { version = "0.41.1", features = ["bundled"], optional = true }
+reqwest    = { version = "0.12", features = ["json"], optional = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+tokio = { workspace = true, features = ["full"] }
+criterion = { workspace = true }
+
+[[bench]]
+name = "mmap_vs_ram"
+harness = false
+required-features = ["local"]
+
+[[bench]]
+name = "sqlite_ops"
+harness = false
+required-features = ["local"]

@@ -1,18 +1,17 @@
-use chrono::{DateTime, NaiveDate, TimeZone, Utc};
+use jiff::civil::Date;
+use liberado_common::UtcStamp;
 
 use super::{
     DoneHint, PRECISION_DATE, PRECISION_TAP, PRECISION_TICK, SOURCE_LIBERADO, SOURCE_OBSIDIAN,
     completion_stamp, completion_timing, local_noon_utc,
 };
 
-fn at(text: &str) -> DateTime<Utc> {
-    DateTime::parse_from_rfc3339(text)
-        .expect("stamp")
-        .with_timezone(&Utc)
+fn at(text: &str) -> UtcStamp {
+    text.parse::<UtcStamp>().expect("stamp")
 }
 
-fn day(year: i32, month: u32, day: u32) -> NaiveDate {
-    NaiveDate::from_ymd_opt(year, month, day).expect("date")
+fn day(year: i16, month: i8, day: i8) -> Date {
+    Date::new(year, month, day).expect("date")
 }
 
 #[test]
@@ -83,5 +82,8 @@ fn a_done_date_is_compared_in_the_operator_zone() {
 #[test]
 fn an_unknown_zone_falls_back_to_utc() {
     let noon = local_noon_utc(day(2026, 11, 9), "Not/AZone");
-    assert_eq!(noon, Utc.with_ymd_and_hms(2026, 11, 9, 12, 0, 0).unwrap());
+    assert_eq!(
+        noon,
+        UtcStamp::from_civil_utc(2026, 11, 9, 12, 0, 0).unwrap()
+    );
 }

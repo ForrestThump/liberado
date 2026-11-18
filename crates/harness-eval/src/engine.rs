@@ -1,12 +1,11 @@
 //! Reusable comparison coordinator.
 
+use liberado_common::UtcStamp;
 use std::collections::BTreeMap;
 use std::error::Error;
 use std::fs;
 use std::io;
 use std::path::Path;
-
-use chrono::{DateTime, Utc};
 
 use crate::contract::*;
 use crate::journal::{JobStore, atomic_json};
@@ -19,7 +18,7 @@ struct RunContext<'a> {
     store: &'a JobStore,
     job_id: &'a JobId,
     spec: &'a JobSpec,
-    started_at: DateTime<Utc>,
+    started_at: UtcStamp,
     tracker: &'a mut StateTracker<'a>,
 }
 
@@ -46,7 +45,7 @@ pub fn execute(
 ) -> Result<ComparisonReport, Box<dyn Error>> {
     let _lease = store.acquire_lease(job_id)?;
     let spec = store.load_spec(job_id)?;
-    let started_at = Utc::now();
+    let started_at = UtcStamp::now();
     let mut tracker = StateTracker::new(store, job_id.clone())?;
     if store.cancellation_requested(job_id) {
         return finish_cancelled(store, &spec, started_at, &mut tracker);
@@ -163,7 +162,7 @@ fn run_preflight(
             "estimated_required_bytes": preflight.estimated_required_bytes,
             "credential_alias": ctx.spec.model.credential_alias,
             "credential_environment": preflight.credential_environment,
-            "checked_at": Utc::now(),
+            "checked_at": UtcStamp::now(),
         }),
     )?;
     atomic_json(
@@ -286,7 +285,7 @@ fn finish_and_report(
                 failure_class: None,
                 base_commit: Some(base_commit.to_string()),
                 started_at: ctx.started_at,
-                finished_at: Utc::now(),
+                finished_at: UtcStamp::now(),
                 harnesses: preserved.harnesses,
                 run_order: ctx.spec.run_order.clone(),
                 diagnostics: preserved.cleanup_diagnostics,
@@ -396,7 +395,7 @@ struct LegacySavedResult {
     exit_code: Option<i32>,
     verifier_exit_code: Option<i32>,
     session_id: Option<String>,
-    saved_at: DateTime<Utc>,
+    saved_at: UtcStamp,
     had_uncommitted_changes: bool,
 }
 
@@ -471,7 +470,7 @@ fn harness_ids(spec: &JobSpec) -> Vec<&str> {
 fn finish_cancelled(
     store: &JobStore,
     spec: &JobSpec,
-    started_at: DateTime<Utc>,
+    started_at: UtcStamp,
     tracker: &mut StateTracker<'_>,
 ) -> Result<ComparisonReport, Box<dyn Error>> {
     finish_failure(
@@ -490,7 +489,7 @@ fn finish_cancelled(
 fn finish_failure(
     store: &JobStore,
     spec: &JobSpec,
-    started_at: DateTime<Utc>,
+    started_at: UtcStamp,
     tracker: &mut StateTracker<'_>,
     class: FailureClass,
     message: String,
@@ -510,7 +509,7 @@ fn finish_failure(
         failure_class: Some(class),
         base_commit,
         started_at,
-        finished_at: Utc::now(),
+        finished_at: UtcStamp::now(),
         harnesses,
         run_order: spec.run_order.clone(),
         diagnostics: vec![message.clone()],
@@ -559,7 +558,7 @@ impl<'a> StateTracker<'a> {
         self.state.revision += 1;
         self.state.status = status;
         self.state.phase = phase.to_string();
-        self.state.updated_at = Utc::now();
+        self.state.updated_at = UtcStamp::now();
         self.state.failure_class = None;
         self.state.message = Some(message.to_string());
         self.store.write_state(&self.state)?;
@@ -579,7 +578,7 @@ impl<'a> StateTracker<'a> {
         self.state.revision += 1;
         self.state.status = status;
         self.state.phase = "terminal".to_string();
-        self.state.updated_at = Utc::now();
+        self.state.updated_at = UtcStamp::now();
         self.state.failure_class = Some(class);
         self.state.message = Some(message.to_string());
         self.store.write_state(&self.state)?;

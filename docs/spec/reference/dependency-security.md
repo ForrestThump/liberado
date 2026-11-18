@@ -19,11 +19,10 @@ cargo-vet before any job may compile a build script or procedural macro.
    entries, and the cargo-vet exemptions together.
 4. Run `just dependency-security` and request the CODEOWNER review.
 
-`deny.toml` allows the build script `libz-sys@1.1.31`. The vet exemption in
-`supply-chain/config.toml` moved from 1.1.29 to 1.1.31 for the build-script
-environment leak fixed in 1.1.31. The build script is not the same file as in
-1.1.29; the fix stops logging the zlib probe command. The exemption is still
-debt, not an audit.
+`deny.toml` allows the build script `libz-sys@1.1.33`. The vet exemption in
+`supply-chain/config.toml` names 1.1.33. That release clears RUSTSEC-2026-0544.
+The build script is the same file as 1.1.31; the version pin moves with it.
+The exemption is still debt, not an audit.
 
 `deny.toml` allows the build script `rustls@0.23.46`. The vet exemption
 in `supply-chain/config.toml` names the same version. 0.23.46 is the
@@ -46,7 +45,7 @@ replaced.
 
 | Crate | Was | Now | Advisory |
 |---|---|---|---|
-| `libz-sys` | 1.1.29 | 1.1.31 | RUSTSEC-2026-0418, build script printed probe command into build output; 1.1.30 also narrows wasm32 `Z_SOLO` and adds optional aarch64 CRC `-march` forwarding |
+| `libz-sys` | 1.1.29 | 1.1.33 | RUSTSEC-2026-0418, build script printed probe command into build output; 1.1.33 clears RUSTSEC-2026-0544 |
 | `rustls-webpki` | 0.103.15 | 0.103.16 | RUSTSEC-2026-0382, distrusted intermediates accepted |
 | `webpki-roots` | 1.0.8 | 1.0.11 | RUSTSEC-2026-0381, bundled emSign roots |
 | `webpki-root-certs` | 1.0.8 | 1.0.11 | RUSTSEC-2026-0383, bundled emSign roots |
@@ -87,12 +86,10 @@ crates from the published requirements, and this bump did not add a new
 crates.io version to Liberado's graph.
 
 GitHub Actions use full commit SHAs. Dependabot proposes Action SHA changes.
-`turbovault*` and `turbomcp*` are git+tag pins on the public ForrestThump forks.
-`turbovault*` is pinned to `tag = "liberado-2026-11-10"` and `turbomcp*` stays
-on `tag = "liberado-2026-08-27"`. `Cargo.lock` records the resolved commit SHA.
-Update tags, lockfile entries, and matching cargo-vet exemptions together after
-reviewing the fork diff. Checkout credentials are never persisted into a
-compiling job.
+`turbovault*` and `turbomcp*` are the tagged ForrestThump forks, copied under
+`third_party/` at `liberado-2026-11-10` and `liberado-2026-08-27`, with `chrono`
+replaced by `jiff`. The workspace depends on those paths. The git SHA is no
+longer in `Cargo.lock`.
 
 The cargo-vet exemption set is the accepted graph at the time this gate was
 introduced. It is debt, not an audit claim. New exemptions may not be added

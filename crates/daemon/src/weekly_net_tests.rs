@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use crate::inert_week_sender;
 use async_trait::async_trait;
-use chrono::NaiveDate;
+use jiff::civil::{Date, DateTime};
 use liberado_config::WeeklySpendingConfig;
 
 use super::{
@@ -30,23 +30,20 @@ struct Rows(Vec<CategorySpend>);
 impl SpendingSource for Rows {
     async fn spending(
         &self,
-        _start: NaiveDate,
-        _end: NaiveDate,
+        _start: Date,
+        _end: Date,
         _exclude: &[String],
     ) -> Result<Vec<CategorySpend>, String> {
         Ok(self.0.clone())
     }
 }
 
-fn at() -> chrono::NaiveDateTime {
-    NaiveDate::from_ymd_opt(2026, 10, 23)
-        .expect("date")
-        .and_hms_opt(15, 0, 0)
-        .expect("time")
+fn at() -> DateTime {
+    DateTime::new(2026, 10, 23, 15, 0, 0, 0).expect("time")
 }
 
-fn day(day_of_month: u32) -> NaiveDate {
-    NaiveDate::from_ymd_opt(2026, 10, day_of_month).expect("date")
+fn day(day_of_month: u32) -> Date {
+    Date::new(2026, 10, i8::try_from(day_of_month).expect("day")).expect("date")
 }
 
 fn tx(category: &str, amount_cents: i64) -> serde_json::Value {

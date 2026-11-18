@@ -5,7 +5,9 @@
 //! earlier than the detection's local date is only a date: the row stores
 //! local noon so the day is right and the clock is not a guess.
 
-use chrono::{DateTime, LocalResult, NaiveDate, TimeZone, Utc};
+use jiff::civil::Date;
+use jiff::tz::TimeZone;
+use liberado_common::UtcStamp;
 
 use crate::time::stamp;
 
@@ -19,13 +21,13 @@ pub const SOURCE_OBSIDIAN: &str = "obsidian";
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DoneHint {
     pub outbox_id: i64,
-    pub resolved_at: DateTime<Utc>,
+    pub resolved_at: UtcStamp,
 }
 
 /// Clock fields for one new completion row.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CompletionTiming {
-    pub completed_at: DateTime<Utc>,
+    pub completed_at: UtcStamp,
     pub local_date: String,
     pub precision: &'static str,
     pub source: &'static str,
@@ -38,9 +40,9 @@ pub struct CompletionTiming {
 /// `done_date` is used only when `prior_closed` is 0, so an older checked copy
 /// of the same text cannot supply the date. A hint wins over that date.
 pub fn completion_timing(
-    detected_at: DateTime<Utc>,
+    detected_at: UtcStamp,
     zone: &str,
-    done_date: Option<NaiveDate>,
+    done_date: Option<Date>,
     prior_closed: i64,
     hint: Option<&DoneHint>,
 ) -> CompletionTiming {
@@ -54,22 +56,19 @@ pub fn completion_timing(
     from_detection(detected_at, zone, usable)
 }
 
-pub fn local_date_of(at: DateTime<Utc>, zone: &str) -> String {
-    at.with_timezone(&parse_zone(zone)).date_naive().to_string()
+pub fn local_date_of(at: UtcStamp, zone: &str) -> String {
+    at.timestamp().to_zoned(parse_zone(zone)).date().to_string()
 }
 
-pub fn local_noon_utc(date: NaiveDate, zone: &str) -> DateTime<Utc> {
-    let Some(naive) = date.and_hms_opt(12, 0, 0) else {
-        return utc_noon(date);
-    };
-    match parse_zone(zone).from_local_datetime(&naive) {
-        LocalResult::Single(local) => local.with_timezone(&Utc),
-        LocalResult::Ambiguous(first, _) => first.with_timezone(&Utc),
-        LocalResult::None => utc_noon(date),
+pub fn local_noon_utc(date: Date, zone: &str) -> UtcStamp {
+    let civil = date.to_datetime(jiff::civil::time(12, 0, 0, 0));
+    match civil.to_zoned(parse_zone(zone)) {
+        Ok(local) => UtcStamp::from_timestamp(local.timestamp()),
+        Err(_) => utc_noon(date),
     }
 }
 
-fn from_hint(hint: &DoneHint, zone: &str, done_date: Option<NaiveDate>) -> CompletionTiming {
+fn from_hint(hint: &DoneHint, zone: &str, done_date: Option<Date>) -> CompletionTiming {
     CompletionTiming {
         completed_at: hint.resolved_at,
         local_date: local_date_of(hint.resolved_at, zone),
@@ -80,7 +79,7 @@ fn from_hint(hint: &DoneHint, zone: &str, done_date: Option<NaiveDate>) -> Compl
     }
 }
 
-fn from_done_date(date: NaiveDate, zone: &str) -> CompletionTiming {
+fn from_done_date(date: Date, zone: &str) -> CompletionTiming {
     let completed_at = local_noon_utc(date, zone);
     CompletionTiming {
         completed_at,
@@ -92,11 +91,7 @@ fn from_done_date(date: NaiveDate, zone: &str) -> CompletionTiming {
     }
 }
 
-fn from_detection(
-    detected_at: DateTime<Utc>,
-    zone: &str,
-    done_date: Option<NaiveDate>,
-) -> CompletionTiming {
+fn from_detection(detected_at: UtcStamp, zone: &str, done_date: Option<Date>) -> CompletionTiming {
     CompletionTiming {
         completed_at: detected_at,
         local_date: local_date_of(detected_at, zone),
@@ -107,32 +102,30 @@ fn from_detection(
     }
 }
 
-fn earlier_done_date(
-    done_date: Option<NaiveDate>,
-    detected_at: DateTime<Utc>,
-    zone: &str,
-) -> Option<NaiveDate> {
+fn earlier_done_date(done_date: Option<Date>, detected_at: UtcStamp, zone: &str) -> Option<Date> {
     let date = done_date?;
-    let detected = detected_at.with_timezone(&parse_zone(zone)).date_naive();
+    let detected = detected_at.timestamp().to_zoned(parse_zone(zone)).date();
     if date < detected { Some(date) } else { None }
 }
 
-fn date_text(date: Option<NaiveDate>) -> Option<String> {
+fn date_text(date: Option<Date>) -> Option<String> {
     date.map(|value| value.to_string())
 }
 
-fn parse_zone(zone: &str) -> chrono_tz::Tz {
-    zone.parse().unwrap_or(chrono_tz::UTC)
+fn parse_zone(zone: &str) -> TimeZone {
+    TimeZone::get(zone).unwrap_or(TimeZone::UTC)
 }
 
-fn utc_noon(date: NaiveDate) -> DateTime<Utc> {
-    date.and_hms_opt(12, 0, 0)
-        .map(|naive| naive.and_utc())
-        .unwrap_or(DateTime::<Utc>::UNIX_EPOCH)
+fn utc_noon(date: Date) -> UtcStamp {
+    date.to_datetime(jiff::civil::time(12, 0, 0, 0))
+        .to_zoned(TimeZone::UTC)
+        .ok()
+        .map(|zoned| UtcStamp::from_timestamp(zoned.timestamp()))
+        .unwrap_or_default()
 }
 
 /// RFC3339 UTC stamp. Exposed so callers store the same text the outbox uses.
-pub fn completion_stamp(at: DateTime<Utc>) -> String {
+pub fn completion_stamp(at: UtcStamp) -> String {
     stamp(at)
 }
 

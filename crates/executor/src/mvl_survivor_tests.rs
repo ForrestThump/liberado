@@ -6,6 +6,7 @@
 //! and tool start/result emission.
 
 use super::*;
+use liberado_common::UtcStamp;
 use serde_json::json;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -45,7 +46,7 @@ async fn emitted_timestamps_are_rfc3339_with_millis() {
     session.start_run("model-x", "mock", Some("task text"));
     let lines = lines_of(&path);
     let ts = lines[0]["ts"].as_str().expect("ts is a string");
-    chrono::DateTime::parse_from_rfc3339(ts).expect("ts must parse as RFC 3339");
+    ts.parse::<UtcStamp>().expect("ts must parse as RFC 3339");
     assert!(
         ts.ends_with('Z') && ts.contains('.'),
         "millis + Z suffix expected: {ts}"

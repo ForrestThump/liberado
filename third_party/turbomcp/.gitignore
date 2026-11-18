@@ -1,0 +1,135 @@
+# Rust build artifacts
+/target/
+**/*.rs.bk
+*.pdb
+
+# IDE and Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+*.sublime-*
+.helix/
+*.vim
+.nvimrc
+
+# OS files
+.DS_Store
+Thumbs.db
+*~
+.Spotlight-V100
+.Trashes
+
+# Logs and debugging
+*.log
+*.out
+*.err
+
+# Code coverage artifacts
+*.profraw
+*.profdata
+/lcov.info
+/tarpaulin-report.html
+/coverage_html
+/htmlcov/
+.nyc_output/
+coverage.xml
+cov.xml
+*.gcda
+*.gcno
+*.gcov
+# LLVM coverage
+**/target/llvm-cov/
+**/target/llvm-cov-target/
+**/target/coverage/
+target
+
+# Testing artifacts
+/test-results/
+/test_output/
+/.pytest_cache/
+/junit.xml
+
+# Documentation artifacts
+/doc/
+/docs/_build/
+*.pdf
+*.epub
+
+# Security and secrets
+.env
+.env.local
+.env.*.local
+*.key
+*.pem
+*.crt
+secrets.yaml
+secrets.yml
+
+# Temporary files
+*.tmp
+*.temp
+*.cache
+*.bak
+*.orig
+*.save
+*~
+
+# Performance profiling
+*.prof
+*.flame
+*.folded
+perf.data*
+flamegraph.svg
+profile.pb.gz
+
+# Docker artifacts
+.dockerignore
+docker-compose.override.yml
+
+# Node.js (if any JS tooling is used)
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Python (if any Python tooling is used)
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.python-version
+
+# Lock files for other package managers
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+
+# Miscellaneous
+*.swp
+*.swo
+.fuse_hidden*
+.nfs*
+
+.strategy
+
+# Scripts (local development only)
+scripts/
+
+# Benchmark and performance testing directories
+benchmarks/
+benchmark_results.md
+*.benchmark
+**/benchmark_results.md
+
+*.md
+!README.md
+!CHANGELOG.md
+!docs/**/*.md
+!**/MIGRATION.md
+
+site
+
+.stderr
+# Exception: Include trybuild test fixtures
+!**/tests/compile_fail/*.stderr

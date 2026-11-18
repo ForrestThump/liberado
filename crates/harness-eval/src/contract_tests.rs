@@ -6,7 +6,7 @@ fn spec() -> JobSpec {
     JobSpec {
         version: JOB_SPEC_VERSION,
         job_id: JobId::new(),
-        submitted_at: Utc::now(),
+        submitted_at: UtcStamp::now(),
         repository: PathBuf::from("C:/repo"),
         base_revision: "main".to_string(),
         task: TaskBundle::new("task.txt", "Fix the item".to_string()).unwrap(),

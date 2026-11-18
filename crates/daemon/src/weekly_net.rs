@@ -6,7 +6,7 @@
 //! The log records a count of skipped positive rows. It does not record payee,
 //! account, key, or URL.
 
-use chrono::NaiveDate;
+use jiff::civil::Date;
 
 use crate::weekly_spending::{CategorySpend, round_dollars};
 
@@ -33,8 +33,8 @@ impl<'a> BudgetHttp<'a> {
 
     pub(crate) async fn fetch(
         &self,
-        start: NaiveDate,
-        end: NaiveDate,
+        start: Date,
+        end: Date,
         exclude: &[String],
     ) -> Result<Vec<CategorySpend>, String> {
         let spent = self.load_spent(start, end).await?;
@@ -44,8 +44,8 @@ impl<'a> BudgetHttp<'a> {
     async fn with_refunds(
         &self,
         spent: Vec<CategorySpend>,
-        start: NaiveDate,
-        end: NaiveDate,
+        start: Date,
+        end: Date,
         exclude: &[String],
     ) -> Result<Vec<CategorySpend>, String> {
         let income = self.load_income().await?;
@@ -53,11 +53,7 @@ impl<'a> BudgetHttp<'a> {
         Ok(apply_refunds(spent, &positives, &income, exclude))
     }
 
-    async fn load_spent(
-        &self,
-        start: NaiveDate,
-        end: NaiveDate,
-    ) -> Result<Vec<CategorySpend>, String> {
+    async fn load_spent(&self, start: Date, end: Date) -> Result<Vec<CategorySpend>, String> {
         let body = self.get_json(&spent_path(start, end)).await?;
         Ok(parse_categories(&body))
     }
@@ -67,18 +63,14 @@ impl<'a> BudgetHttp<'a> {
         collect_income(&body)
     }
 
-    async fn load_positives(
-        &self,
-        start: NaiveDate,
-        end: NaiveDate,
-    ) -> Result<Vec<PositiveRow>, String> {
+    async fn load_positives(&self, start: Date, end: Date) -> Result<Vec<PositiveRow>, String> {
         self.collect_pages(start, end, TRANSACTION_LIMIT).await
     }
 
     async fn collect_pages(
         &self,
-        start: NaiveDate,
-        end: NaiveDate,
+        start: Date,
+        end: Date,
         limit: u32,
     ) -> Result<Vec<PositiveRow>, String> {
         let mut cursor = PageCursor::start();
@@ -91,8 +83,8 @@ impl<'a> BudgetHttp<'a> {
     async fn pull_page(
         &self,
         cursor: &mut PageCursor,
-        start: NaiveDate,
-        end: NaiveDate,
+        start: Date,
+        end: Date,
         limit: u32,
     ) -> Result<(), String> {
         let page = self.one_page(start, end, limit, cursor.offset).await?;
@@ -104,8 +96,8 @@ impl<'a> BudgetHttp<'a> {
 
     async fn one_page(
         &self,
-        start: NaiveDate,
-        end: NaiveDate,
+        start: Date,
+        end: Date,
         limit: u32,
         offset: u32,
     ) -> Result<Vec<PositiveRow>, String> {
@@ -155,11 +147,11 @@ fn next_offset(offset: u32, limit: u32) -> u32 {
     offset.saturating_add(limit.max(1))
 }
 
-fn spent_path(start: NaiveDate, end: NaiveDate) -> String {
+fn spent_path(start: Date, end: Date) -> String {
     format!("/api/v1/spending/by-category?start_date={start}&end_date={end}")
 }
 
-fn transaction_path(start: NaiveDate, end: NaiveDate, limit: u32, offset: u32) -> String {
+fn transaction_path(start: Date, end: Date, limit: u32, offset: u32) -> String {
     format!(
         "/api/v1/transactions?start_date={start}&end_date={end}&min_amount_cents=1&limit={limit}&offset={offset}"
     )

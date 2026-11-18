@@ -14,7 +14,6 @@ path = "src/main.rs"
 
 [dependencies]
 async-trait = { workspace = true }
-chrono = { workspace = true }
 liberado-coder-agent = { workspace = true }
 liberado-coder-core = { workspace = true }
 liberado-common = { workspace = true }

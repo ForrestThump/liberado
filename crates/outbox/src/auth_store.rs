@@ -1,8 +1,9 @@
 //! Accounts, passkeys, and browser auth sessions in `liberado.db`.
 
+use jiff::SignedDuration;
+use liberado_common::UtcStamp;
 use std::time::Duration;
 
-use chrono::{DateTime, Utc};
 use rand::RngCore;
 use rusqlite::{OptionalExtension, params};
 use serde::Serialize;
@@ -55,10 +56,8 @@ fn random_hex(bytes: usize) -> String {
     buf.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-fn parse_time(s: &str) -> Option<DateTime<Utc>> {
-    DateTime::parse_from_rfc3339(s)
-        .ok()
-        .map(|t| t.with_timezone(&Utc))
+fn parse_time(s: &str) -> Option<UtcStamp> {
+    s.parse::<UtcStamp>().ok()
 }
 
 impl Outbox {
@@ -119,7 +118,7 @@ impl Outbox {
         credential_id: &[u8],
         passkey_json: &str,
         name: &str,
-        now: DateTime<Utc>,
+        now: UtcStamp,
     ) -> Result<i64> {
         let conn = self.lock();
         conn.execute(
@@ -162,7 +161,7 @@ impl Outbox {
         id: i64,
         passkey_json: &str,
         sign_count: u32,
-        now: DateTime<Utc>,
+        now: UtcStamp,
     ) -> Result<()> {
         self.lock().execute(
             "UPDATE passkeys SET passkey_json = ?2, sign_count = ?3, last_used_at = ?4 WHERE id = ?1",
@@ -196,15 +195,15 @@ impl Outbox {
         account_id: i64,
         method: &str,
         user_agent: Option<&str>,
-        now: DateTime<Utc>,
+        now: UtcStamp,
     ) -> Result<(String, String)> {
         let raw_id = random_hex(32);
         let csrf = random_hex(32);
         let public_id = random_hex(8);
         let id_hash = hash_session_id(&raw_id);
         let expires = now
-            + chrono::Duration::from_std(SESSION_ABSOLUTE)
-                .unwrap_or_else(|_| chrono::Duration::days(30));
+            + SignedDuration::try_from(SESSION_ABSOLUTE)
+                .unwrap_or_else(|_| liberado_common::duration_days(30));
         let conn = self.lock();
         prune_sessions(&conn, now)?;
         conn.execute(
@@ -226,7 +225,7 @@ impl Outbox {
         Ok((raw_id, csrf))
     }
 
-    pub fn touch_auth_session(&self, raw_id: &str, now: DateTime<Utc>) -> Option<SessionRecord> {
+    pub fn touch_auth_session(&self, raw_id: &str, now: UtcStamp) -> Option<SessionRecord> {
         let id_hash = hash_session_id(raw_id);
         let conn = self.lock();
         if prune_sessions(&conn, now).is_err() {
@@ -256,7 +255,7 @@ impl Outbox {
             _ => return None,
         };
         let last = parse_time(&record.last_seen_at)?;
-        if now.signed_duration_since(last) > chrono::Duration::from_std(SESSION_IDLE).ok()? {
+        if now.duration_since(last) > SignedDuration::try_from(SESSION_IDLE).ok()? {
             let _ = conn.execute(
                 "DELETE FROM auth_sessions WHERE id_hash = ?1",
                 [id_hash.as_slice()],
@@ -319,9 +318,10 @@ impl Outbox {
     }
 }
 
-fn prune_sessions(conn: &rusqlite::Connection, now: DateTime<Utc>) -> Result<()> {
+fn prune_sessions(conn: &rusqlite::Connection, now: UtcStamp) -> Result<()> {
     let idle_cutoff = now
-        - chrono::Duration::from_std(SESSION_IDLE).unwrap_or_else(|_| chrono::Duration::days(14));
+        - SignedDuration::try_from(SESSION_IDLE)
+            .unwrap_or_else(|_| liberado_common::duration_days(14));
     conn.execute(
         "DELETE FROM auth_sessions WHERE expires_at < ?1 OR last_seen_at < ?2",
         params![stamp(now), stamp(idle_cutoff)],
@@ -338,7 +338,7 @@ mod tests {
     fn raw_session_id_is_never_stored_in_the_database() {
         let dir = tempfile::tempdir().unwrap();
         let outbox = Outbox::open(&dir.path().join("liberado.db")).unwrap();
-        let now = Utc::now();
+        let now = UtcStamp::now();
         let (raw, _) = outbox.create_auth_session(1, "token", None, now).unwrap();
         let bytes = std::fs::read(dir.path().join("liberado.db")).unwrap();
         assert!(
@@ -354,7 +354,7 @@ mod tests {
         let (raw, csrf_expected);
         {
             let outbox = Outbox::open(&path).unwrap();
-            let now = Utc::now();
+            let now = UtcStamp::now();
             (raw, csrf_expected) = outbox
                 .create_auth_session(1, "passkey", Some("test-ua"), now)
                 .unwrap();
@@ -362,7 +362,7 @@ mod tests {
         {
             let outbox = Outbox::open(&path).unwrap();
             let touched = outbox
-                .touch_auth_session(&raw, Utc::now())
+                .touch_auth_session(&raw, UtcStamp::now())
                 .expect("session should load after reopen");
             assert_eq!(touched.csrf, csrf_expected);
             assert_eq!(touched.method, "passkey");
@@ -373,7 +373,7 @@ mod tests {
     fn revoke_and_expiry_drop_sessions() {
         let dir = tempfile::tempdir().unwrap();
         let outbox = Outbox::open(&dir.path().join("liberado.db")).unwrap();
-        let now = Utc::now();
+        let now = UtcStamp::now();
         let (raw, _) = outbox.create_auth_session(1, "token", None, now).unwrap();
         outbox.revoke_auth_session(&raw).unwrap();
         assert!(outbox.touch_auth_session(&raw, now).is_none());

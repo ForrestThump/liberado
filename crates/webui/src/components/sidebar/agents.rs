@@ -5,6 +5,9 @@
 use std::collections::HashMap;
 
 use dioxus::prelude::*;
+use jiff::Timestamp;
+use jiff::civil::DateTime;
+use jiff::tz::TimeZone;
 
 use chat_client_contract::{ConvHeader, ConversationSearchResult};
 
@@ -467,22 +470,14 @@ pub(super) fn SearchResultList(
 // ── Time formatter ─────────────────────────────────────────────────────────
 
 pub(in crate::components) fn relative_time(iso: &str) -> String {
-    let parsed = chrono::DateTime::parse_from_rfc3339(iso)
-        .or_else(|_| chrono::DateTime::parse_from_rfc3339(&format!("{iso}Z")))
-        .or_else(|_| {
-            chrono::NaiveDateTime::parse_from_str(iso, "%Y-%m-%dT%H:%M:%S%.f")
-                .map(|naive| naive.and_utc().into())
-        });
-    let dt = match parsed {
-        Ok(dt) => dt,
-        Err(_) => return String::new(),
+    let Some(dt) = parse_instant(iso) else {
+        return String::new();
     };
-    let now = chrono::Utc::now();
-    let dur = now.signed_duration_since(dt);
-    if dur.num_seconds() < 0 {
+    let dur = Timestamp::now().duration_since(dt);
+    if dur.as_secs() < 0 {
         return "just now".into();
     }
-    let secs = dur.num_seconds() as u64;
+    let secs = dur.as_secs() as u64;
     if secs < 60 {
         return format!("{}s ago", secs);
     }
@@ -498,5 +493,16 @@ pub(in crate::components) fn relative_time(iso: &str) -> String {
     if days < 30 {
         return format!("{}d ago", days);
     }
-    dt.format("%b %d").to_string()
+    dt.strftime("%b %d").to_string()
+}
+
+fn parse_instant(iso: &str) -> Option<Timestamp> {
+    if let Ok(stamp) = iso.parse::<Timestamp>() {
+        return Some(stamp);
+    }
+    if let Ok(stamp) = format!("{iso}Z").parse::<Timestamp>() {
+        return Some(stamp);
+    }
+    let civil: DateTime = iso.parse().ok()?;
+    Some(civil.to_zoned(TimeZone::UTC).ok()?.timestamp())
 }

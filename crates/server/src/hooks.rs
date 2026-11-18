@@ -22,7 +22,7 @@ use axum::{
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
 };
-use liberado_common::{Event, EventPayload, event_source};
+use liberado_common::{Event, EventPayload, UtcStamp, event_source};
 use liberado_config::{HookConfig, Topology};
 use serde::Deserialize;
 use tokio::sync::Mutex;
@@ -179,7 +179,7 @@ pub async fn trigger_hook(
         .and_then(|v| v.to_str().ok());
     let correlation_id = match idempotency_key {
         Some(key) => format!("webhook:{name}:{key}"),
-        None => format!("webhook:{name}:{}", chrono::Utc::now().to_rfc3339()),
+        None => format!("webhook:{name}:{}", UtcStamp::now().to_rfc3339()),
     };
 
     if idempotency_key.is_some() && state.hook_idempotency.seen_recently(&correlation_id).await {

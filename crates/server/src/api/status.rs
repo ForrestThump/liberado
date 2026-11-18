@@ -1,5 +1,6 @@
 //! Status, models, catalog, reactions, and vault endpoints.
 
+use liberado_common::UtcStamp;
 use std::sync::Arc;
 
 use axum::{
@@ -31,7 +32,7 @@ pub async fn status(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let outbox_counts = state
         .outbox
         .as_ref()
-        .and_then(|outbox| outbox.counts(chrono::Utc::now()).ok());
+        .and_then(|outbox| outbox.counts(UtcStamp::now()).ok());
 
     Json(DaemonStatus {
         running: true,

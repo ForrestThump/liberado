@@ -1152,7 +1152,7 @@ impl Orchestrator {
 
             // Defense in depth: daemon/Telegram gate wall-clock expiry first; refuse here so any
             // alternate caller cannot run a past-deadline approved proposal.
-            if proposal.is_expired_at(chrono::Utc::now()) {
+            if proposal.is_expired_at(liberado_common::UtcStamp::now()) {
                 tracing::warn!(
                     proposal_id = %proposal.id,
                     "approved proposal is past expires — refusing to execute"
@@ -1777,7 +1777,7 @@ fn vault_note_body(report: &Report, correlation_id: &str, source: &str) -> Strin
     out.push_str(correlation_id);
     out.push('\n');
     out.push_str("generated: ");
-    out.push_str(&chrono::Utc::now().to_rfc3339());
+    out.push_str(&liberado_common::UtcStamp::now().to_rfc3339());
     out.push_str("\n---\n\n");
     out.push_str(report.summary.trim());
     out.push('\n');
