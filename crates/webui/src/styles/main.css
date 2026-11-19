@@ -3524,9 +3524,10 @@ body {
     gap: 0.75rem;
 }
 
-/* The round create button sits over the viewport corner. This padding keeps the last card
-   above it when the grid is scrolled to the end. The detail page has no such button. */
-.projects-page:not(.project-page) .project-grid {
+/* The round button sits over the viewport corner. This padding keeps the last row
+   above it when the list is scrolled to the end. */
+.projects-page:not(.project-page) .project-grid,
+.project-page .project-chat-list {
     padding-bottom: calc(5rem + env(safe-area-inset-bottom, 0px));
 }
 

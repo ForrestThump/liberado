@@ -18,6 +18,28 @@ use crate::signal_alive::{restart_if_alive, set_if_alive};
 const NEW_PROJECT_FAB_ID: &str = "new-project-fab";
 const NEW_PROJECT_NAME_ID: &str = "new-project-name";
 
+/// Round corner button shared by the project list and a project page.
+///
+/// The list opens the create dialog. A project page starts a chat. The mark is
+/// always `+`; the accessible name says which action it is.
+#[component]
+pub(crate) fn ProjectFab(
+    id: &'static str,
+    label: &'static str,
+    on_press: EventHandler<()>,
+) -> Element {
+    rsx! {
+        button {
+            id: "{id}",
+            class: "project-fab",
+            r#type: "button",
+            "aria-label": "{label}",
+            onclick: move |_| on_press.call(()),
+            "+"
+        }
+    }
+}
+
 #[cfg(target_arch = "wasm32")]
 fn focus_by_id(id: &str) {
     use wasm_bindgen::JsCast;
@@ -134,16 +156,13 @@ pub fn Projects(
                     },
                 }
             }
-            button {
-                id: "{NEW_PROJECT_FAB_ID}",
-                class: "project-fab",
-                r#type: "button",
-                "aria-label": "New project",
-                onclick: move |_| {
+            ProjectFab {
+                id: NEW_PROJECT_FAB_ID,
+                label: "New project",
+                on_press: move |_| {
                     error.set(None);
                     form_open.set(true);
                 },
-                "+"
             }
         }
     }

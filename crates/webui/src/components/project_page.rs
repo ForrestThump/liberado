@@ -1,4 +1,6 @@
 //! One project's chats.
+//!
+//! A new chat starts from the same round corner button the project list uses.
 
 use dioxus::prelude::*;
 
@@ -8,6 +10,7 @@ use super::project_data::{
     chat_date, close_phone_drawer, fetch_project_chats, fetch_projects, project_path,
     replace_project_path,
 };
+use super::projects::ProjectFab;
 use super::sidebar::Route;
 #[cfg(target_arch = "wasm32")]
 use crate::signal_alive::{bump_if_alive, set_if_alive};
@@ -69,28 +72,6 @@ pub fn ProjectPage(
             }
             div {
                 class: "grok-page-body",
-                div {
-                    class: "project-toolbar",
-                    button {
-                        class: "lib-btn primary",
-                        r#type: "button",
-                        "aria-label": "New chat",
-                        onclick: move |_| {
-                            queue_new_chat(
-                                api_base.clone(),
-                                project_id.clone(),
-                                route,
-                                active_project,
-                                active_conv_id,
-                                active_surface,
-                                list_epoch,
-                                collapsed,
-                                error,
-                            );
-                        },
-                        "New chat"
-                    }
-                }
                 if let Some(message) = error() {
                     p { class: "project-status", "{message}" }
                 }
@@ -129,6 +110,23 @@ pub fn ProjectPage(
                         }
                     },
                 }
+            }
+            ProjectFab {
+                id: "new-chat-fab",
+                label: "New chat",
+                on_press: move |_| {
+                    queue_new_chat(
+                        api_base.clone(),
+                        project_id.clone(),
+                        route,
+                        active_project,
+                        active_conv_id,
+                        active_surface,
+                        list_epoch,
+                        collapsed,
+                        error,
+                    );
+                },
             }
         }
     }

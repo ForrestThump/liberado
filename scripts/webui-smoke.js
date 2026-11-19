@@ -191,6 +191,7 @@ function createStubState() {
     passkeys: [],
     authSessions: [],
     createdProjects: [],
+    createdChats: [],
   };
 }
 
@@ -265,6 +266,24 @@ async function handleApi(req, res, url, stubState) {
   }
   if (url.pathname.startsWith('/api/auth/passkey/') && req.method === 'POST') {
     stubJson(res, 404, { error: 'passkeys are not enabled on this server' }, setCsrf);
+    return true;
+  }
+  if (url.pathname === '/api/conversations' && req.method === 'POST') {
+    if (requireSession()) return true;
+    const bodyText = await readRequestBody(req);
+    let parsed = {};
+    try {
+      parsed = JSON.parse(bodyText || '{}');
+    } catch {
+      parsed = {};
+    }
+    stubState.createdChats.push(parsed);
+    stubJson(res, 201, { id: 'chat-new' }, setCsrf);
+    return true;
+  }
+  if (url.pathname === '/api/conversations/chat-new' && req.method === 'GET') {
+    if (requireSession()) return true;
+    stubJson(res, 200, { messages: [] }, setCsrf);
     return true;
   }
   if (url.pathname === '/api/conversations' && req.method === 'GET') {
@@ -358,13 +377,19 @@ async function handleApi(req, res, url, stubState) {
   if (projectChats && req.method === 'GET') {
     if (requireSession()) return true;
     if (projectChats[1] === 'proj-trip') {
-      stubJson(res, 200, {
-        chats: [{
-          id: 'chat-1',
-          title: 'Packing list',
+      const chats = [{
+        id: 'chat-1',
+        title: 'Packing list',
+        updated_at: '2026-11-01T12:00:00Z',
+      }];
+      for (let i = 1; i <= 24; i += 1) {
+        chats.push({
+          id: `chat-fill-${i}`,
+          title: `Filler chat ${String(i).padStart(2, '0')}`,
           updated_at: '2026-11-01T12:00:00Z',
-        }],
-      }, setCsrf);
+        });
+      }
+      stubJson(res, 200, { chats }, setCsrf);
     } else {
       stubJson(res, 200, { chats: [] }, setCsrf);
     }
@@ -1503,8 +1528,26 @@ async function assertSidebarLayout(cdp) {
 }
 
 async function assertProjectFab(cdp) {
-  const phone = await projectFabProbe(cdp);
-  assertFabProbe(phone, 'phone', true);
+  await assertCornerFab(cdp, {
+    name: 'New project',
+    item: '.project-card',
+    pad: '.projects-page:not(.project-page) .project-grid',
+    noun: 'card',
+  });
+}
+
+async function assertChatFab(cdp) {
+  await assertCornerFab(cdp, {
+    name: 'New chat',
+    item: '.project-chat-open',
+    pad: '.project-page .project-chat-list',
+    noun: 'chat',
+  });
+}
+
+async function assertCornerFab(cdp, spec) {
+  const phone = await projectFabProbe(cdp, spec);
+  assertFabProbe(phone, `phone ${spec.noun}`, true, spec);
   await cdp.send('Emulation.setDeviceMetricsOverride', {
     width: 1280,
     height: 800,
@@ -1512,8 +1555,8 @@ async function assertProjectFab(cdp) {
     mobile: false,
   });
   await sleep(300);
-  const desktop = await projectFabProbe(cdp);
-  assertFabProbe(desktop, 'desktop', true);
+  const desktop = await projectFabProbe(cdp, spec);
+  assertFabProbe(desktop, `desktop ${spec.noun}`, true, spec);
   await cdp.send('Emulation.setDeviceMetricsOverride', {
     width: 412,
     height: 915,
@@ -1523,15 +1566,18 @@ async function assertProjectFab(cdp) {
   await sleep(200);
 }
 
-async function projectFabProbe(cdp) {
+async function projectFabProbe(cdp, spec) {
+  const item = JSON.stringify(spec.item);
+  const pad = JSON.stringify(spec.pad);
   const raw = await evalString(
     cdp,
     `(function(){
-      const fab = document.querySelector('button.project-fab');
+      const fabs = [...document.querySelectorAll('button.project-fab')];
+      const fab = fabs[0];
       if (!fab) return JSON.stringify({ missing: true });
       const style = getComputedStyle(fab);
       const before = fab.getBoundingClientRect();
-      const grid = document.querySelector('.projects-page:not(.project-page) .project-grid');
+      const grid = document.querySelector(${pad});
       const phone = document.querySelector('.grok-main-phone-scroll');
       const scrollers = [
         phone,
@@ -1543,10 +1589,11 @@ async function projectFabProbe(cdp) {
         node.scrollTop = node.scrollHeight;
       }
       const after = fab.getBoundingClientRect();
-      const cards = [...document.querySelectorAll('.project-card')];
+      const cards = [...document.querySelectorAll(${item})];
       const last = cards.length ? cards[cards.length - 1].getBoundingClientRect() : null;
       const scrolled = scrollers.some((node) => node && node.scrollTop > 40);
       return JSON.stringify({
+        count: fabs.length,
         text: fab.textContent.trim(),
         label: fab.getAttribute('aria-label'),
         position: style.position,
@@ -1568,13 +1615,16 @@ async function projectFabProbe(cdp) {
   return JSON.parse(raw);
 }
 
-function assertFabProbe(info, label, expectScroll) {
+function assertFabProbe(info, label, expectScroll, spec) {
   if (info.missing) {
-    fail(`${label}: New project button is missing`);
+    fail(`${label}: ${spec.name} button is missing`);
     return;
   }
-  if (info.text !== '+' || info.label !== 'New project') {
-    fail(`${label}: button must show only + and be named New project: ${JSON.stringify(info)}`);
+  if (info.count !== 1) {
+    fail(`${label}: the page must show one corner button: ${JSON.stringify(info)}`);
+  }
+  if (info.text !== '+' || info.label !== spec.name) {
+    fail(`${label}: button must show only + and be named ${spec.name}: ${JSON.stringify(info)}`);
   }
   if (info.position !== 'fixed') {
     fail(`${label}: button must be fixed to the viewport: ${JSON.stringify(info)}`);
@@ -1592,10 +1642,10 @@ function assertFabProbe(info, label, expectScroll) {
     fail(`${label}: button must stay put while the list scrolls: ${JSON.stringify(info)}`);
   }
   if (info.pad < 48) {
-    fail(`${label}: the grid needs bottom padding so the last card clears the button: ${JSON.stringify(info)}`);
+    fail(`${label}: the list needs bottom padding so the last ${spec.noun} clears the button: ${JSON.stringify(info)}`);
   }
   if (expectScroll && (!info.scrolled || !info.lastAboveFab)) {
-    fail(`${label}: the last card must scroll clear of the button: ${JSON.stringify(info)}`);
+    fail(`${label}: the last ${spec.noun} must scroll clear of the button: ${JSON.stringify(info)}`);
   }
 }
 
@@ -1764,8 +1814,9 @@ async function exerciseProjectDialog(cdp) {
     cdp,
     `(function(){
       const title = document.querySelector('.project-page .grok-page-title');
-      const fab = document.querySelector('button.project-fab');
-      return title && title.textContent.includes('Shore trip') && !fab && !document.querySelector('.project-dialog');
+      const fabs = [...document.querySelectorAll('button.project-fab')];
+      const chatFab = fabs.length === 1 && fabs[0].getAttribute('aria-label') === 'New chat';
+      return title && title.textContent.includes('Shore trip') && chatFab && !document.querySelector('.project-dialog');
     })()`,
     'created project page without the New project button',
     15_000,
@@ -1873,14 +1924,37 @@ async function runProjectsPhase(cdp, stubState) {
     `(function(){
       const title = document.querySelector('.project-page .grok-page-title');
       const chat = [...document.querySelectorAll('.project-chat-open')].some((el) => el.textContent.includes('Packing list'));
-      const create = document.querySelector('button[aria-label="New chat"]');
+      const fabs = [...document.querySelectorAll('button.project-fab')];
+      const inline = [...document.querySelectorAll('.project-page button')].some((el) => el.textContent.trim() === 'New chat');
       const back = document.querySelector('button[aria-label="Back to projects"]');
-      const fab = document.querySelector('button.project-fab');
-      return title && title.textContent.includes('Trip notes') && chat && !!create && !!back && !fab;
+      const chatFab = fabs.length === 1 && fabs[0].getAttribute('aria-label') === 'New chat' && fabs[0].textContent.trim() === '+';
+      return title && title.textContent.includes('Trip notes') && chat && chatFab && !!back && !inline;
     })()`,
     'project page with Packing list and New chat',
     15_000,
   );
+  await assertChatFab(cdp);
+  await clickAssert(
+    cdp,
+    `(function(){
+      const fab = document.querySelector('button.project-fab[aria-label="New chat"]');
+      if (!fab) return false;
+      fab.click();
+      return true;
+    })()`,
+    'New chat button',
+  );
+  await waitFor(
+    cdp,
+    `(function(){
+      return !!document.getElementById('chat-input') && !document.querySelector('button.project-fab') && !document.querySelector('.project-page');
+    })()`,
+    'new project chat',
+    15_000,
+  );
+  if (stubState.createdChats.length !== 1 || stubState.createdChats[0].project !== 'proj-trip') {
+    fail(`new chat must post this project once: ${JSON.stringify(stubState.createdChats)}`);
+  }
 }
 
 async function runReconcileOnLoadPhase(cdp, stubState) {
