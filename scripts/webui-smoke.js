@@ -190,6 +190,7 @@ function createStubState() {
     authLoginPosts: [],
     passkeys: [],
     authSessions: [],
+    createdProjects: [],
   };
 }
 
@@ -309,25 +310,64 @@ async function handleApi(req, res, url, stubState) {
   }
   if (url.pathname === '/api/chat-projects' && req.method === 'GET') {
     if (requireSession()) return true;
-    stubJson(res, 200, {
-      projects: [{
-        id: 'proj-trip',
-        name: 'Trip notes',
+    const filler = [];
+    for (let i = 1; i <= 24; i += 1) {
+      filler.push({
+        id: `proj-fill-${i}`,
+        name: `Filler ${String(i).padStart(2, '0')}`,
         source: 'user',
-        instructions: 'Pack light',
-      }],
+      });
+    }
+    stubJson(res, 200, {
+      projects: [
+        {
+          id: 'proj-trip',
+          name: 'Trip notes',
+          source: 'user',
+          instructions: 'Pack light',
+        },
+        ...filler,
+        ...stubState.createdProjects,
+      ],
     }, setCsrf);
     return true;
   }
-  if (url.pathname === '/api/chat-projects/proj-trip/chats' && req.method === 'GET') {
+  if (url.pathname === '/api/chat-projects' && req.method === 'POST') {
     if (requireSession()) return true;
-    stubJson(res, 200, {
-      chats: [{
-        id: 'chat-1',
-        title: 'Packing list',
-        updated_at: '2026-11-01T12:00:00Z',
-      }],
-    }, setCsrf);
+    const bodyText = await readRequestBody(req);
+    let parsed = {};
+    try {
+      parsed = JSON.parse(bodyText || '{}');
+    } catch {
+      parsed = {};
+    }
+    const name = typeof parsed.name === 'string' ? parsed.name.trim() : '';
+    const row = {
+      id: 'proj-new',
+      name: name || 'Untitled',
+      source: 'user',
+    };
+    if (typeof parsed.instructions === 'string' && parsed.instructions.trim()) {
+      row.instructions = parsed.instructions.trim();
+    }
+    stubState.createdProjects.push(row);
+    stubJson(res, 201, row, setCsrf);
+    return true;
+  }
+  const projectChats = url.pathname.match(/^\/api\/chat-projects\/([^/]+)\/chats$/);
+  if (projectChats && req.method === 'GET') {
+    if (requireSession()) return true;
+    if (projectChats[1] === 'proj-trip') {
+      stubJson(res, 200, {
+        chats: [{
+          id: 'chat-1',
+          title: 'Packing list',
+          updated_at: '2026-11-01T12:00:00Z',
+        }],
+      }, setCsrf);
+    } else {
+      stubJson(res, 200, { chats: [] }, setCsrf);
+    }
     return true;
   }
   if (url.pathname === '/api/profiles' && req.method === 'GET') {
@@ -1360,7 +1400,7 @@ async function runNormalFlow(cdp, stubState, origin) {
     fail('Notifications row not visible in opened menu after push flow');
   }
 
-  await runProjectsPhase(cdp);
+  await runProjectsPhase(cdp, stubState);
 }
 
 function smokeChatHeaders() {
@@ -1462,7 +1502,277 @@ async function assertSidebarLayout(cdp) {
   }
 }
 
-async function runProjectsPhase(cdp) {
+async function assertProjectFab(cdp) {
+  const phone = await projectFabProbe(cdp);
+  assertFabProbe(phone, 'phone', true);
+  await cdp.send('Emulation.setDeviceMetricsOverride', {
+    width: 1280,
+    height: 800,
+    deviceScaleFactor: 1,
+    mobile: false,
+  });
+  await sleep(300);
+  const desktop = await projectFabProbe(cdp);
+  assertFabProbe(desktop, 'desktop', true);
+  await cdp.send('Emulation.setDeviceMetricsOverride', {
+    width: 412,
+    height: 915,
+    deviceScaleFactor: 1,
+    mobile: true,
+  });
+  await sleep(200);
+}
+
+async function projectFabProbe(cdp) {
+  const raw = await evalString(
+    cdp,
+    `(function(){
+      const fab = document.querySelector('button.project-fab');
+      if (!fab) return JSON.stringify({ missing: true });
+      const style = getComputedStyle(fab);
+      const before = fab.getBoundingClientRect();
+      const grid = document.querySelector('.projects-page:not(.project-page) .project-grid');
+      const phone = document.querySelector('.grok-main-phone-scroll');
+      const scrollers = [
+        phone,
+        document.querySelector('.projects-page'),
+        document.querySelector('.projects-page .grok-page-body'),
+      ];
+      for (const node of scrollers) {
+        if (!node || getComputedStyle(node).display === 'contents') continue;
+        node.scrollTop = node.scrollHeight;
+      }
+      const after = fab.getBoundingClientRect();
+      const cards = [...document.querySelectorAll('.project-card')];
+      const last = cards.length ? cards[cards.length - 1].getBoundingClientRect() : null;
+      const scrolled = scrollers.some((node) => node && node.scrollTop > 40);
+      return JSON.stringify({
+        text: fab.textContent.trim(),
+        label: fab.getAttribute('aria-label'),
+        position: style.position,
+        radius: parseFloat(style.borderTopLeftRadius),
+        width: before.width,
+        height: before.height,
+        rightGap: window.innerWidth - before.right,
+        bottomGap: window.innerHeight - before.bottom,
+        moved: Math.abs(after.top - before.top) + Math.abs(after.left - before.left),
+        lastAboveFab: !!last && last.bottom <= after.top + 1,
+        lastBottom: last ? Math.round(last.bottom) : null,
+        fabTop: Math.round(after.top),
+        scrollTops: scrollers.map((node) => (node ? Math.round(node.scrollTop) : null)),
+        pad: grid ? parseFloat(getComputedStyle(grid).paddingBottom) : 0,
+        scrolled,
+      });
+    })()`,
+  );
+  return JSON.parse(raw);
+}
+
+function assertFabProbe(info, label, expectScroll) {
+  if (info.missing) {
+    fail(`${label}: New project button is missing`);
+    return;
+  }
+  if (info.text !== '+' || info.label !== 'New project') {
+    fail(`${label}: button must show only + and be named New project: ${JSON.stringify(info)}`);
+  }
+  if (info.position !== 'fixed') {
+    fail(`${label}: button must be fixed to the viewport: ${JSON.stringify(info)}`);
+  }
+  if (!(info.radius >= info.width / 2 - 1) || Math.abs(info.width - info.height) > 1) {
+    fail(`${label}: button must be round: ${JSON.stringify(info)}`);
+  }
+  if (info.width < 48 || info.width > 64) {
+    fail(`${label}: button must be a touch target: ${JSON.stringify(info)}`);
+  }
+  if (info.rightGap < 8 || info.rightGap > 32 || info.bottomGap < 8 || info.bottomGap > 32) {
+    fail(`${label}: button must sit in the lower-right corner: ${JSON.stringify(info)}`);
+  }
+  if (info.moved > 2) {
+    fail(`${label}: button must stay put while the list scrolls: ${JSON.stringify(info)}`);
+  }
+  if (info.pad < 48) {
+    fail(`${label}: the grid needs bottom padding so the last card clears the button: ${JSON.stringify(info)}`);
+  }
+  if (expectScroll && (!info.scrolled || !info.lastAboveFab)) {
+    fail(`${label}: the last card must scroll clear of the button: ${JSON.stringify(info)}`);
+  }
+}
+
+async function exerciseProjectDialog(cdp) {
+  const absent = await evalBool(cdp, `!document.querySelector('button.project-fab')`);
+  if (absent) {
+    fail('projects page lost the New project button before the dialog');
+    return;
+  }
+  await clickAssert(
+    cdp,
+    `(function(){
+      const fab = document.querySelector('button.project-fab');
+      if (!fab) return false;
+      fab.click();
+      return true;
+    })()`,
+    'New project button',
+  );
+  await waitFor(
+    cdp,
+    `(function(){
+      const name = document.getElementById('new-project-name');
+      return !!document.querySelector('.project-dialog') && document.activeElement === name;
+    })()`,
+    'new project dialog focuses the name',
+    10_000,
+  );
+  await clickAssert(
+    cdp,
+    `(function(){
+      const create = [...document.querySelectorAll('.project-dialog button')].find((el) => el.textContent.trim() === 'Create');
+      if (!create) return false;
+      create.click();
+      return true;
+    })()`,
+    'Create with an empty name',
+  );
+  await waitFor(
+    cdp,
+    `(function(){
+      const alert = document.querySelector('.project-dialog [role="alert"]');
+      return !!document.querySelector('.project-dialog') && !!alert && alert.textContent.includes('A project needs a name.');
+    })()`,
+    'name validation inside the dialog',
+    10_000,
+  );
+  await clickAssert(
+    cdp,
+    `(function(){
+      const cancel = [...document.querySelectorAll('.project-dialog button')].find((el) => el.textContent.trim() === 'Cancel');
+      if (!cancel) return false;
+      cancel.click();
+      return true;
+    })()`,
+    'Cancel new project',
+  );
+  await waitFor(
+    cdp,
+    `(function(){
+      return !document.querySelector('.project-dialog') && document.activeElement && document.activeElement.id === 'new-project-fab';
+    })()`,
+    'Cancel returns focus to the New project button',
+    10_000,
+  );
+  await clickAssert(
+    cdp,
+    `(function(){
+      const fab = document.querySelector('button.project-fab');
+      if (!fab) return false;
+      fab.click();
+      return true;
+    })()`,
+    'New project button again',
+  );
+  await waitFor(
+    cdp,
+    `!!document.querySelector('.project-dialog') && document.activeElement && document.activeElement.id === 'new-project-name'`,
+    'dialog open for Escape',
+    10_000,
+  );
+  await evalBool(
+    cdp,
+    `(function(){
+      const input = document.getElementById('new-project-name');
+      if (!input) return false;
+      input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', bubbles: true, cancelable: true }));
+      return true;
+    })()`,
+  );
+  await waitFor(
+    cdp,
+    `(function(){
+      return !document.querySelector('.project-dialog') && document.activeElement && document.activeElement.id === 'new-project-fab';
+    })()`,
+    'Escape closes the dialog and returns focus',
+    10_000,
+  );
+  await clickAssert(
+    cdp,
+    `(function(){
+      const fab = document.querySelector('button.project-fab');
+      if (!fab) return false;
+      fab.click();
+      return true;
+    })()`,
+    'New project button for backdrop',
+  );
+  await waitFor(
+    cdp,
+    `!!document.querySelector('.project-create-backdrop')`,
+    'dialog open for backdrop',
+    10_000,
+  );
+  await clickAssert(
+    cdp,
+    `(function(){
+      const backdrop = document.querySelector('.project-create-backdrop');
+      if (!backdrop) return false;
+      backdrop.click();
+      return true;
+    })()`,
+    'backdrop',
+  );
+  await waitFor(
+    cdp,
+    `(function(){
+      return !document.querySelector('.project-dialog') && document.activeElement && document.activeElement.id === 'new-project-fab';
+    })()`,
+    'backdrop closes the dialog and returns focus',
+    10_000,
+  );
+  await clickAssert(
+    cdp,
+    `(function(){
+      const fab = document.querySelector('button.project-fab');
+      if (!fab) return false;
+      fab.click();
+      return true;
+    })()`,
+    'New project button for create',
+  );
+  await waitFor(
+    cdp,
+    `document.activeElement && document.activeElement.id === 'new-project-name'`,
+    'name field focused for create',
+    10_000,
+  );
+  const typed = await evalBool(
+    cdp,
+    `(function(){
+      const input = document.getElementById('new-project-name');
+      if (!input) return false;
+      const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+      set.call(input, 'Shore trip');
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', bubbles: true, cancelable: true }));
+      return true;
+    })()`,
+  );
+  if (!typed) {
+    fail('could not type a project name');
+    return;
+  }
+  await waitFor(
+    cdp,
+    `(function(){
+      const title = document.querySelector('.project-page .grok-page-title');
+      const fab = document.querySelector('button.project-fab');
+      return title && title.textContent.includes('Shore trip') && !fab && !document.querySelector('.project-dialog');
+    })()`,
+    'created project page without the New project button',
+    15_000,
+  );
+}
+
+async function runProjectsPhase(cdp, stubState) {
   await assertSidebarLayout(cdp);
   await clickAssert(
     cdp,
@@ -1516,11 +1826,36 @@ async function runProjectsPhase(cdp) {
     cdp,
     `(function(){
       const title = document.querySelector('.projects-page .grok-page-title');
-      const create = document.querySelector('button[aria-label="New project"]');
+      const create = document.querySelector('button.project-fab[aria-label="New project"]');
       const card = [...document.querySelectorAll('.project-card-name')].some((el) => el.textContent.includes('Trip notes'));
       return title && title.textContent.includes('Projects') && !!create && card;
     })()`,
     'projects page with Trip notes and New project',
+    15_000,
+  );
+  await assertProjectFab(cdp);
+  await exerciseProjectDialog(cdp);
+  if (stubState.createdProjects.length !== 1 || stubState.createdProjects[0].name !== 'Shore trip') {
+    fail(`create must post one project: ${JSON.stringify(stubState.createdProjects)}`);
+  }
+  await clickAssert(
+    cdp,
+    `(function(){
+      const back = document.querySelector('button[aria-label="Back to projects"]');
+      if (!back) return false;
+      back.click();
+      return true;
+    })()`,
+    'Back to projects after create',
+  );
+  await waitFor(
+    cdp,
+    `(function(){
+      const title = document.querySelector('.projects-page:not(.project-page) .grok-page-title');
+      const fab = document.querySelector('button.project-fab');
+      return title && title.textContent.includes('Projects') && !!fab;
+    })()`,
+    'projects list after create',
     15_000,
   );
   await clickAssert(
@@ -1540,7 +1875,8 @@ async function runProjectsPhase(cdp) {
       const chat = [...document.querySelectorAll('.project-chat-open')].some((el) => el.textContent.includes('Packing list'));
       const create = document.querySelector('button[aria-label="New chat"]');
       const back = document.querySelector('button[aria-label="Back to projects"]');
-      return title && title.textContent.includes('Trip notes') && chat && !!create && !!back;
+      const fab = document.querySelector('button.project-fab');
+      return title && title.textContent.includes('Trip notes') && chat && !!create && !!back && !fab;
     })()`,
     'project page with Packing list and New chat',
     15_000,

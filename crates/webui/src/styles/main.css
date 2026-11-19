@@ -3509,6 +3509,12 @@ body {
     overflow-y: auto;
 }
 
+/* The list has to shrink inside the canvas. Without a zero minimum, the page grows with
+   the cards and the canvas clips the last rows under the create button. */
+.projects-page {
+    min-height: 0;
+}
+
 .project-grid {
     list-style: none;
     margin: 0;
@@ -3516,6 +3522,12 @@ body {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr));
     gap: 0.75rem;
+}
+
+/* The round create button sits over the viewport corner. This padding keeps the last card
+   above it when the grid is scrolled to the end. The detail page has no such button. */
+.projects-page:not(.project-page) .project-grid {
+    padding-bottom: calc(5rem + env(safe-area-inset-bottom, 0px));
 }
 
 .project-card {
@@ -3573,6 +3585,69 @@ body {
 .project-form textarea {
     width: 100%;
     box-sizing: border-box;
+}
+
+.project-fab {
+    position: fixed;
+    z-index: 15;
+    right: max(1rem, env(safe-area-inset-right, 0px));
+    bottom: max(1rem, env(safe-area-inset-bottom, 0px));
+    width: 3.25rem;
+    height: 3.25rem;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    border-radius: 999px;
+    background: var(--lib-accent, #f5a623);
+    color: var(--lib-app-bg);
+    font-family: inherit;
+    font-size: 1.75rem;
+    font-weight: 500;
+    line-height: 1;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    box-shadow: 0 0.35rem 1rem color-mix(in srgb, black 28%, transparent);
+}
+
+.project-fab:focus-visible {
+    outline: 2px solid var(--lib-accent, #f5a623);
+    outline-offset: 3px;
+}
+
+.project-create-backdrop {
+    padding:
+        max(1rem, env(safe-area-inset-top, 0px))
+        max(1rem, env(safe-area-inset-right, 0px))
+        max(1rem, env(safe-area-inset-bottom, 0px))
+        max(1rem, env(safe-area-inset-left, 0px));
+}
+
+.project-dialog {
+    width: 100%;
+    max-width: 28rem;
+    max-height: 100%;
+    overflow: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    padding: 1rem;
+    border: 1px solid var(--lib-border);
+    border-radius: 0.9rem;
+    background: var(--lib-app-bg);
+    box-sizing: border-box;
+}
+
+.project-dialog-title {
+    margin: 0;
+    font-size: 1.125rem;
+}
+
+.project-dialog-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
 }
 
 .project-chat-list {
