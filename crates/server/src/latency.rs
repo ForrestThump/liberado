@@ -11,13 +11,18 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use liberado_provider::{LatencyEvent, LatencyRecorder};
+use liberado_provider::{LatencyEvent, LatencyRecorder, ToolCallEvent};
 use tokio::io::AsyncWriteExt;
 use tokio::sync::mpsc;
 
+enum JournalLine {
+    Llm(LatencyEvent),
+    Tool(ToolCallEvent),
+}
+
 /// Append-only JSONL recorder with a background writer task.
 pub struct JsonlLatencyRecorder {
-    tx: mpsc::UnboundedSender<LatencyEvent>,
+    tx: mpsc::UnboundedSender<JournalLine>,
 }
 
 impl JsonlLatencyRecorder {
@@ -34,7 +39,7 @@ impl JsonlLatencyRecorder {
     /// process-global state.
     pub fn spawn_at(dir: PathBuf) -> Arc<Self> {
         let path = dir.join("events.jsonl");
-        let (tx, mut rx) = mpsc::unbounded_channel::<LatencyEvent>();
+        let (tx, mut rx) = mpsc::unbounded_channel::<JournalLine>();
 
         tokio::spawn(async move {
             let _ = tokio::fs::create_dir_all(&dir).await;
@@ -54,7 +59,7 @@ impl JsonlLatencyRecorder {
             };
             tracing::info!(path = %path.display(), "latency journal active");
             while let Some(event) = rx.recv().await {
-                match serde_json::to_string(&event) {
+                match encode(&event) {
                     Ok(mut line) => {
                         line.push('\n');
                         if let Err(e) = file.write_all(line.as_bytes()).await {
@@ -70,10 +75,21 @@ impl JsonlLatencyRecorder {
     }
 }
 
+fn encode(line: &JournalLine) -> Result<String, serde_json::Error> {
+    match line {
+        JournalLine::Llm(event) => serde_json::to_string(event),
+        JournalLine::Tool(event) => serde_json::to_string(event),
+    }
+}
+
 impl LatencyRecorder for JsonlLatencyRecorder {
     fn record(&self, event: LatencyEvent) {
         // Best-effort: never block inference; drop if the writer is gone.
-        let _ = self.tx.send(event);
+        let _ = self.tx.send(JournalLine::Llm(event));
+    }
+
+    fn record_tool(&self, event: ToolCallEvent) {
+        let _ = self.tx.send(JournalLine::Tool(event));
     }
 }
 

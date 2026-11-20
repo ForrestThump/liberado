@@ -47,6 +47,59 @@ fn default_kind() -> String {
     "llm_call".into()
 }
 
+/// One tool call as recorded beside the LLM rows. Sizes only — no argument or result text.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct ToolCallRecord {
+    pub correlation: String,
+    pub turn: u32,
+    pub tool: String,
+    pub args_bytes: u64,
+    pub result_bytes: u64,
+    pub duration_ms: u64,
+    pub is_error: bool,
+}
+
+#[derive(Deserialize)]
+struct KindOnly {
+    #[serde(default)]
+    kind: String,
+}
+
+fn is_tool_call_line(line: &str) -> bool {
+    serde_json::from_str::<KindOnly>(line).is_ok_and(|row| row.kind == "tool_call")
+}
+
+/// Parse tool-call rows from an in-memory JSONL string. LLM rows are skipped.
+/// A `tool_call` line that does not match [`ToolCallRecord`] is an error.
+pub fn load_tool_call_events_from_str(src: &str) -> Result<Vec<ToolCallRecord>, LoadError> {
+    load_tool_call_events_reader("<memory>".into(), src.as_bytes())
+}
+
+fn load_tool_call_events_reader<R: BufRead>(
+    path_label: String,
+    reader: R,
+) -> Result<Vec<ToolCallRecord>, LoadError> {
+    let mut out = Vec::new();
+    for (idx, line) in reader.lines().enumerate() {
+        let line = line.map_err(|source| LoadError::Io {
+            path: path_label.clone(),
+            source,
+        })?;
+        let line = line.trim();
+        if line.is_empty() || !is_tool_call_line(line) {
+            continue;
+        }
+        let event: ToolCallRecord =
+            serde_json::from_str(line).map_err(|source| LoadError::Json {
+                path: path_label.clone(),
+                line: idx + 1,
+                source,
+            })?;
+        out.push(event);
+    }
+    Ok(out)
+}
+
 #[derive(Debug, Error)]
 pub enum LoadError {
     #[error("io error on {path}: {source}")]
@@ -93,7 +146,7 @@ fn load_latency_events_reader<R: BufRead>(
             source,
         })?;
         let line = line.trim();
-        if line.is_empty() {
+        if line.is_empty() || is_tool_call_line(line) {
             continue;
         }
         let event: JournalEvent = serde_json::from_str(line).map_err(|source| LoadError::Json {
@@ -140,7 +193,7 @@ pub fn load_latency_events_tail(path: &Path, max_bytes: u64) -> Option<Vec<Journ
     let mut out = Vec::new();
     for line in lines {
         let line = line.trim();
-        if line.is_empty() {
+        if line.is_empty() || is_tool_call_line(line) {
             continue;
         }
         out.push(serde_json::from_str::<JournalEvent>(line).ok()?);
@@ -245,3 +298,7 @@ where
 {
     pairs.into_iter().collect()
 }
+
+#[cfg(test)]
+#[path = "journal_tool_tests.rs"]
+mod journal_tool_tests;

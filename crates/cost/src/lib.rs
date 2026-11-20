@@ -21,8 +21,8 @@ mod rollup;
 mod survivor_tests;
 
 pub use journal::{
-    JournalEvent, LoadError, child_to_parent_map, load_dispatch_parent_map, load_latency_events,
-    load_latency_events_from_str,
+    JournalEvent, LoadError, ToolCallRecord, child_to_parent_map, load_dispatch_parent_map,
+    load_latency_events, load_latency_events_from_str, load_tool_call_events_from_str,
 };
 pub use latency_report::{LatencySummary, format_latency_report, latency_summary};
 pub use price::{PriceTable, PricedEvent, price_event, price_table_from_models};

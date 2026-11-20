@@ -94,6 +94,7 @@ mod agent_spawn;
 mod approval;
 #[path = "sessions/pending_choice.rs"]
 mod pending_choice;
+mod profile_budget;
 mod provider_route;
 #[path = "sessions/reasoning_stamp.rs"]
 mod reasoning_stamp;
@@ -342,6 +343,8 @@ pub struct ChatSessions {
     agent_profiles: AgentProfiles,
     /// Live profile name → provider. Empty means every turn uses `executor`'s provider.
     profile_providers: provider_route::ProfileProviderTable,
+    /// Face turn ceiling by profile name. Empty means every chat uses the executor's budget.
+    profile_max_turns: Mutex<HashMap<String, u32>>,
     /// Private file workspace. Absent in tests, so they do not grow a shared directory.
     agent_workspace: Option<WorkspaceSettings>,
     /// Operator timezone used to stamp wall-clock context onto the model-visible copy of every
@@ -418,6 +421,7 @@ impl ChatSessions {
             compaction: None,
             agent_profiles: AgentProfiles::default(),
             profile_providers: provider_route::ProfileProviderTable::default(),
+            profile_max_turns: Mutex::new(HashMap::new()),
             agent_workspace: None,
             user_timezone: None,
             approval_hooks: approval::ApprovalHooks::new(),

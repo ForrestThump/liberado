@@ -46,6 +46,9 @@ mod model;
 #[path = "provider_route_tests.rs"]
 mod provider_route_tests;
 
+#[path = "profile_budget_tests.rs"]
+mod profile_budget_tests;
+
 #[path = "metering.rs"]
 mod metering;
 

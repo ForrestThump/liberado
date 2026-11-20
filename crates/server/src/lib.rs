@@ -49,6 +49,7 @@ mod pr_review_poll;
 mod pr_review_publish;
 #[cfg(feature = "coding")]
 mod pr_review_publish_flow;
+mod profile_budgets;
 mod profile_providers;
 mod shutdown;
 mod state;
@@ -166,7 +167,8 @@ async fn assemble_daemon(
     // the daemon/chat get the role-specific providers via `providers`.
     let latency_recorder: Arc<dyn liberado_provider::LatencyRecorder> =
         crate::latency::JsonlLatencyRecorder::spawn();
-    let providers = liberado_bootstrap::role_providers_from_config(&config, latency_recorder);
+    let providers =
+        liberado_bootstrap::role_providers_from_config(&config, Arc::clone(&latency_recorder));
     let provider = providers.primary.clone();
     let dispatcher_attached = provider.is_some();
     let model_name = provider.as_ref().map(|p| p.model().to_string());
@@ -217,6 +219,7 @@ async fn assemble_daemon(
             store: sessions.clone(),
             goals: goals.clone(),
             surfaces: surfaces.clone(),
+            tool_journal: latency_recorder,
         },
     )
     .await;
@@ -748,6 +751,8 @@ struct SessionEngine {
     goals: Arc<liberado_session::GoalSessionHub>,
     /// Live profile names and the chat plugin mask. Not an extra `build_chat` argument.
     surfaces: crate::surfaces::LiveSurfaces,
+    /// Same journal as the LLM rows. Attached to the face executor only.
+    tool_journal: Arc<dyn liberado_provider::LatencyRecorder>,
 }
 
 async fn build_chat(
@@ -763,6 +768,7 @@ async fn build_chat(
         store,
         goals,
         surfaces,
+        tool_journal,
     } = engine;
     // The chat face runs on the `main_agent` role provider; its `delegate` classifier uses the
     // `dispatcher` role provider (falling back to the face provider if somehow unset).
@@ -823,7 +829,8 @@ async fn build_chat(
 
     let mut sessions = ChatSessions::new(
         store,
-        Executor::new(provider.clone(), main_agent_budget(main_agent_cfg)),
+        Executor::new(provider.clone(), main_agent_budget(main_agent_cfg))
+            .with_tool_journal(tool_journal),
         runtime,
     )
     .with_system_prompt(system_prompt)
@@ -873,6 +880,7 @@ async fn build_chat(
 
     sessions = sessions.with_agent_workspace(workspace);
     sessions = crate::profile_providers::attach(sessions, config);
+    sessions = crate::profile_budgets::attach(sessions, config);
 
     if compact_enabled {
         info!(

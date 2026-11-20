@@ -131,21 +131,37 @@ impl ChatSessions {
     }
 
     /// The executor for this turn: the profile's provider when the live table names
-    /// one, otherwise the shared default. The model override is applied after the
-    /// swap so a pinned slug still wins over the backend's own default.
+    /// one, otherwise the shared default. A profile `max_turns` replaces the face
+    /// ceiling. The model override is applied last so a pinned slug still wins.
     pub(super) fn executor_for_turn(&self, settings: &TurnSettings) -> liberado_executor::Executor {
         let model = settings.model.clone();
+        let exec = self.executor_for_profile(settings);
+        let exec = match self.profile_turn_ceiling(settings.profile.as_deref()) {
+            Some(turns) => exec.with_max_turns(turns),
+            None => exec,
+        };
+        exec.with_model(model)
+    }
+
+    fn executor_for_profile(&self, settings: &TurnSettings) -> liberado_executor::Executor {
         let Some(profile) = settings.profile.as_deref() else {
-            return self.executor.with_model(model);
+            return self.executor.clone();
         };
         let Some(provider_id) = self.profile_providers.provider_id(profile) else {
-            return self.executor.with_model(model);
+            return self.executor.clone();
         };
-        self.executor
-            .with_provider(
-                self.profile_providers
-                    .backend_or_failure(profile, &provider_id),
-            )
-            .with_model(model)
+        self.executor.with_provider(
+            self.profile_providers
+                .backend_or_failure(profile, &provider_id),
+        )
+    }
+
+    fn profile_turn_ceiling(&self, profile: Option<&str>) -> Option<u32> {
+        let name = profile?;
+        self.profile_max_turns
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .get(name)
+            .copied()
     }
 }

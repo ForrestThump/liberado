@@ -402,6 +402,17 @@ from deciding whether real work can finish. When the main agent reaches its ceil
 withdraws its tools and grants one final response-only turn, so the user gets an honest status
 instead of a bare budget error.
 
+A `[[session_profiles]]` row may set `max_turns`. Chat sessions on that profile use it instead of
+`[main_agent] max_turns`. Omit the key and the face ceiling stays. `0` is rejected at load. The
+key does not change the direct, subagent, or research ceilings, and it does not change a goal's
+own `max_turns`.
+
+```toml
+[[session_profiles]]
+name = "budget-bot"
+max_turns = 18
+```
+
 ### Coding repository context — `tuning.toml`
 
 ```toml

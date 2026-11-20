@@ -20,3 +20,21 @@ fn every_turn_budget_parses_at_its_documented_scope() {
     assert_eq!(topology.research_max_turns, Some(30));
     assert_eq!(topology.main_agent.max_turns, Some(12));
 }
+
+#[test]
+fn a_session_profile_turn_budget_parses_and_stays_absent_when_omitted() {
+    let topology: Topology = toml::from_str(
+        r#"
+            vault_path = "/vault"
+            [[session_profiles]]
+            name = "budget-bot"
+            max_turns = 18
+            [[session_profiles]]
+            name = "chat-default"
+        "#,
+    )
+    .unwrap();
+
+    assert_eq!(topology.session_profiles[0].max_turns, Some(18));
+    assert_eq!(topology.session_profiles[1].max_turns, None);
+}

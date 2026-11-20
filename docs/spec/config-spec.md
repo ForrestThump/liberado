@@ -218,6 +218,22 @@ is set. Only an omitted `provider` shares the face client.
 
 `delegate`, and a pre-turn dispatch hosted from that chat, gives the child the caller's grant narrowed to the `dispatcher` ceiling. `AskHuman` is then removed. The child is never wider than the caller.
 
+### Turn budget
+
+`max_turns` on `[[session_profiles]]` is optional. It is the face-agent tool-work ceiling for chat sessions on that profile. It replaces `[main_agent] max_turns` for those sessions. Omit it and the session keeps the main-agent ceiling (compiled default 8).
+
+```toml
+[[session_profiles]]
+name = "budget-bot"
+max_turns = 18
+```
+
+`0` fails config load. The message names the profile: `topology.session_profiles['budget-bot'].max_turns must be >= 1`. Disabled profiles are checked too.
+
+The value is read from the live profile table on each turn. It is not copied onto the session grant. A restart applies an edit to sessions that already exist. Renaming a profile keeps the ceiling. This key does not change `direct_max_turns`, `subagent_max_turns`, `research_max_turns`, or a goal's own `max_turns`.
+
+A finance profile's `prompt_append` should name the narrow read tools (`live_spending`, `upcoming`, `get_summary`, `list_loans`), tell the model to call `upcoming` once and not again with a longer horizon, and tell it not to promise a schedule cleanup unless a tool for that cleanup exists. This repository does not ship that profile.
+
 ## 4.5 Schedule file writer
 
 `[[schedules]]` is the only schedule store. The daemon copies enabled rows into the cron task

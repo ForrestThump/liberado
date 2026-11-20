@@ -153,3 +153,50 @@ fn a_pre_change_orchestrator_record_still_parses() {
     );
     assert_eq!(read.correlation, "cron:evening-debrief");
 }
+
+fn tool_event() -> liberado_provider::ToolCallEvent {
+    liberado_provider::ToolCallEvent {
+        ts_ms: 1_754_000_000_200,
+        kind: "tool_call",
+        correlation: "chat-delegate-01KZ0JQJ5V359744Y3Q2M5RGXC".into(),
+        turn: 4,
+        tool: "live_spending".into(),
+        args_bytes: 28,
+        result_bytes: 105_221,
+        duration_ms: 86,
+        is_error: false,
+    }
+}
+
+/// A tool row must survive a write → read, and it must not become an LLM call.
+#[test]
+fn a_tool_row_round_trips_and_stays_out_of_the_llm_loader() {
+    let written = serde_json::to_string(&tool_event()).expect("writer serializes");
+    assert!(!written.contains("arguments"), "{written}");
+    assert!(!written.contains("result\""), "{written}");
+    let llm = serde_json::to_string(&writer_event()).expect("llm");
+    let mixed = format!("{llm}\n{written}\n");
+
+    let llm_events = load_latency_events_from_str(&mixed).expect("llm rows still parse");
+    assert_eq!(llm_events.len(), 1);
+    assert_eq!(llm_events[0].kind, "llm_call");
+
+    let tools = liberado_cost::load_tool_call_events_from_str(&mixed).expect("tool rows");
+    assert_eq!(tools.len(), 1);
+    let tool = &tools[0];
+    assert_eq!(tool.correlation, "chat-delegate-01KZ0JQJ5V359744Y3Q2M5RGXC");
+    assert_eq!(tool.turn, 4);
+    assert_eq!(tool.tool, "live_spending");
+    assert_eq!(tool.args_bytes, 28);
+    assert_eq!(tool.result_bytes, 105_221);
+    assert_eq!(tool.duration_ms, 86);
+    assert!(!tool.is_error);
+
+    let broken = r#"{"kind":"tool_call","correlation":"s","turn":1,"tool":"upcoming"}"#;
+    let with_llm = format!("{llm}\n{broken}\n");
+    assert!(liberado_cost::load_tool_call_events_from_str(&with_llm).is_err());
+    assert_eq!(
+        load_latency_events_from_str(&with_llm).expect("skip").len(),
+        1
+    );
+}

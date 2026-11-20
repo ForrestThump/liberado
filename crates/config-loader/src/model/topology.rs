@@ -794,6 +794,16 @@ pub struct SessionProfile {
     /// `GoalSpec.max_idle_secs` wins when set). Interactive coding profiles typically want hours.
     #[serde(default)]
     pub max_idle_secs: Option<u64>,
+    /// Face-agent turn ceiling for chat sessions on this profile.
+    ///
+    /// `None` keeps `[main_agent] max_turns`, or the compiled default of 8 when that key is also
+    /// unset. A set value replaces that ceiling for sessions whose grant names this profile. It
+    /// does not change `direct_max_turns`, `subagent_max_turns`, `research_max_turns`, or a goal's
+    /// own `max_turns`. `0` is rejected at load, including on a disabled profile. The daemon reads
+    /// the value from the live profile table, not from the session grant, so a restart applies it
+    /// to sessions that already exist.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_turns: Option<u32>,
     /// Opaque, pack-parsed overrides. Never interpreted by the config stack.
     #[serde(default = "empty_table")]
     pub overrides: toml::Value,
@@ -856,6 +866,7 @@ impl SessionProfile {
             provider: None,
             prompt_append: None,
             max_idle_secs: None,
+            max_turns: None,
             overrides: empty_table(),
         }
     }

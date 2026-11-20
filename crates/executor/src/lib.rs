@@ -30,6 +30,7 @@ mod mvl;
 mod provider_swap;
 mod reasoning_log;
 mod risk_gated;
+mod tool_journal;
 
 pub use reasoning_log::take as take_turn_reasoning;
 
@@ -518,6 +519,8 @@ pub struct Executor {
     spill_dir: Option<PathBuf>,
     /// Byte threshold for spilling a tool result. Default 64 KiB.
     spill_max_bytes: usize,
+    /// Tool-call journal. `None` records nothing. The daemon sets this on the face executor.
+    tool_journal: Option<std::sync::Arc<dyn liberado_provider::LatencyRecorder>>,
     /// Thinking for each assistant message this turn appended, in order.
     /// Not sent to the model. `with_model` starts a fresh log so concurrent
     /// sessions that clone the shared executor do not share one vec.
@@ -767,6 +770,7 @@ impl Executor {
             mvl: None,
             spill_dir: None,
             spill_max_bytes: 64 * 1024,
+            tool_journal: None,
             reasoning: Arc::new(Mutex::new(Vec::new())),
         }
     }
@@ -1231,29 +1235,20 @@ impl Executor {
             })
             .await;
         self.mvl_tool_started(turn, call);
-        let (ok, result) = match runtime.invoke(call).await {
-            Ok(content) => (true, content),
-            Err(message) => (false, format!("tool error: {message}")),
-        };
-        let shown = run_tool_spill(
-            &result,
-            self.spill_dir.as_deref(),
-            self.spill_max_bytes,
-            &call.id,
-        );
+        let ran = self.run_recorded_tool(turn, runtime, call).await;
         let _ = events
             .send(AgentEvent::ToolFinished {
                 name: call.name.clone(),
-                ok,
-                preview: preview(&shown),
+                ok: ran.ok,
+                preview: preview(&ran.shown),
             })
             .await;
         if runtime.parks_for_human(&call.name) {
             self.mvl_end("awaiting_human", &call.id);
             return Ok(Some(call.id.clone()));
         }
-        self.mvl_tool_result(turn, call, ok, &result);
-        messages.push(Message::tool_result(&call.id, shown));
+        self.mvl_tool_result(turn, call, ran.ok, &ran.raw);
+        messages.push(Message::tool_result(&call.id, ran.shown));
         Ok(None)
     }
 
@@ -1715,17 +1710,9 @@ impl Executor {
                 async move {
                     let tool_span =
                         tracing::debug_span!("tool_call", name = %call.name, id = %call.id);
-                    async {
-                        run_tool(
-                            runtime,
-                            &call,
-                            self.spill_dir.as_deref(),
-                            self.spill_max_bytes,
-                        )
+                    async { self.run_recorded_tool(turn, runtime, &call).await.shown }
+                        .instrument(tool_span)
                         .await
-                    }
-                    .instrument(tool_span)
-                    .await
                 }
             })
             .collect();
@@ -1770,17 +1757,9 @@ impl Executor {
         for call in writes {
             let tool_span = tracing::debug_span!("tool_call", name = %call.name, id = %call.id);
             self.mvl_tool_started(turn, call);
-            let result = async {
-                run_tool(
-                    runtime,
-                    call,
-                    self.spill_dir.as_deref(),
-                    self.spill_max_bytes,
-                )
-                .await
-            }
-            .instrument(tool_span)
-            .await;
+            let result = async { self.run_recorded_tool(turn, runtime, call).await.shown }
+                .instrument(tool_span)
+                .await;
             let ok = !result.starts_with("tool error:");
             self.mvl_tool_result(turn, call, ok, &result);
             call_history.push((call.name.clone(), call.arguments.clone(), result.clone()));
@@ -1939,17 +1918,10 @@ impl Executor {
         reasoning_log::note(&self.reasoning, None);
         for inv in &invocations {
             let span = tracing::debug_span!("seed_call", tool = %inv.name, id = %inv.id);
-            let result = async {
-                run_tool(
-                    runtime,
-                    inv,
-                    self.spill_dir.as_deref(),
-                    self.spill_max_bytes,
-                )
-                .await
-            }
-            .instrument(span)
-            .await;
+            // Turn 0: a seed runs before the first model turn.
+            let result = async { self.run_recorded_tool(0, runtime, inv).await.shown }
+                .instrument(span)
+                .await;
             messages.push(Message::tool_result(&inv.id, result));
         }
     }
@@ -1969,19 +1941,6 @@ fn run_tool_spill(
         Some(dir) => spill_oversized_result(result, spill_max_bytes, dir, label).0,
         None => result.to_string(),
     }
-}
-
-async fn run_tool(
-    runtime: &dyn ToolRuntime,
-    call: &ToolInvocation,
-    spill_dir: Option<&std::path::Path>,
-    spill_max_bytes: usize,
-) -> String {
-    let raw = match runtime.invoke(call).await {
-        Ok(content) => content,
-        Err(message) => format!("tool error: {message}"),
-    };
-    run_tool_spill(&raw, spill_dir, spill_max_bytes, &call.id)
 }
 
 /// Reconstruct the assistant message from a completion response (content + requested tool calls).
