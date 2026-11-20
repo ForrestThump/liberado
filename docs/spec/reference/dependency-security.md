@@ -19,11 +19,14 @@ cargo-vet before any job may compile a build script or procedural macro.
    entries, and the cargo-vet exemptions together.
 4. Run `just dependency-security` and request the CODEOWNER review.
 
-`deny.toml` allows the build script `libz-sys@1.1.31`. The vet exemption in
-`supply-chain/config.toml` moved from 1.1.29 to 1.1.31 for the build-script
-environment leak fixed in 1.1.31. The build script is not the same file as in
-1.1.29; the fix stops logging the zlib probe command. The exemption is still
-debt, not an audit.
+`deny.toml` allows the build script `libz-sys@1.1.33`. The vet exemption in
+`supply-chain/config.toml` moved from 1.1.31 to 1.1.33 for RUSTSEC-2026-0544.
+zlib 1.3.1.2 through 1.3.2 overflows the heap in `gz_vacate` during a
+non-blocking `gzwrite` when the external buffer pointer is stale. 1.1.33 is
+the patched release (`>= 1.1.33`). The previous exemption, 1.1.31, fixed
+RUSTSEC-2026-0418: the build script printed the zlib probe command, and that
+script is not the 1.1.29 file. The 1.1.33 exemption is still debt, not an
+audit.
 
 `deny.toml` allows the build script `rustls@0.23.46`. The vet exemption
 in `supply-chain/config.toml` names the same version. 0.23.46 is the
@@ -51,6 +54,9 @@ replaced.
 | `webpki-roots` | 1.0.8 | 1.0.11 | RUSTSEC-2026-0381, bundled emSign roots |
 | `webpki-root-certs` | 1.0.8 | 1.0.11 | RUSTSEC-2026-0383, bundled emSign roots |
 | `tokio` | 1.52.3 | 1.53.3 | RUSTSEC-2026-0386, `AsyncFd::new` I/O safety |
+
+The `libz-sys` row is the 2026-10 pin. The live allow-list entry and vet
+exemption are 1.1.33, for RUSTSEC-2026-0544.
 
 `tokio` is pinned to 1.53.3, the first release in the 1.53 line that carries
 the fix, rather than the newest 1.54. The smaller step is the one the lockfile
@@ -116,6 +122,7 @@ crate and the upstream that should drop it.
 - `RUSTSEC-2024-0436` (`paste`) is transitive through fastembed/tokenizers and ratatui.
 - `RUSTSEC-2026-0192` (`ttf-parser`) is transitive through eframe's Linux window stack.
 - `RUSTSEC-2026-0370` (`zvariant`), `RUSTSEC-2026-0371` (`zbus_names`), and `RUSTSEC-2026-0372` (`zvariant_derive`) are unmaintained, not vulnerable. They are transitive through eframe (`accesskit_unix` -> zbus 5.19) for `liberado-sysmap-gui`, and folded into zbus 6. Revisit when that stack moves to zbus 6.
+- `RUSTSEC-2026-0543` (`chrono` 0.4.45) and `RUSTSEC-2026-0555` (`chrono-tz` 0.10.4) are unmaintained. Every version is affected and no safe upgrade exists. The advisory names `jiff` and `time` as replacements. The workspace uses both crates for clocks and schedules, including `liberado-common` and `liberado-cron`. Replacing them is a separate migration. These ignores are not vulnerability exceptions.
 
 ## YAML
 
