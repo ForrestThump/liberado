@@ -2,8 +2,8 @@
 
 The single binary: a thin **client + launcher**. It owns nothing but argument dispatch and
 tracing-subscriber init; every bit of daemon and chat behavior lives in libraries. The composition
-root (wiring the provider/dispatcher/orchestrator into the daemon) now lives in `liberado-server`,
-which this binary launches.
+root (wiring the provider/dispatcher/orchestrator into the daemon) lives in `liberado-bootstrap`,
+which `liberado-server` uses and this binary launches.
 
 ## What it does
 
@@ -31,8 +31,11 @@ The daemon's operating mode (watch-only / decide-only / act) is selected by the 
 
 ## Dependencies
 
-- Depends on: `liberado-server` (the launched daemon/API), plus `tokio` + `tracing-subscriber` for
-  the runtime and logging, and `reqwest` / `futures` / `serde_json` for the `chat` client.
+- Depends on: `liberado-server` (the launched daemon/API), `liberado-bootstrap` is reached through
+  it, plus `chat-client-contract`, `liberado-coder-core`, `liberado-common`, `liberado-config`,
+  `liberado-config-loader`, `liberado-harness-eval`, `liberado-notify`, `liberado-ops`,
+  `tokio` + `tracing-subscriber` for the runtime and logging, and `reqwest` / `futures` /
+  `serde_json` for the `chat` client.
 
 ## Tests
 

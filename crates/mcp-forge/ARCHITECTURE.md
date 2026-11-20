@@ -29,7 +29,7 @@ gap without needing them to stop being path-coupled — see "Two kinds of source
 
 This tool never writes into `topology.toml`. `McpConfig.name`/`description`/`consequence` stay
 human-authored (Liberado owns risk classification; MCPs don't self-declare it — see
-`crates/config-loader/src/model.rs`'s `McpConfig` doc comment). The only contract between this crate and
+`crates/config-loader/src/model/topology.rs`'s `McpConfig` doc comment). The only contract between this crate and
 the daemon is [`liberado_config::managed_binary_path`]: given an install directory and a
 name, both sides compute the same path independently. This crate's job ends at "make the binary
 exist there"; `crates/bootstrap/src/lib.rs`'s `McpTransport::Managed` match arm is the read side.
@@ -89,8 +89,8 @@ quirk, not a choice made here. `sources.rs`'s `McpSource::package` doc comment c
 
 ## Dependencies
 
-- `liberado-common` — `managed_binary_path()`, the shared path convention.
-- `liberado-config` — `config_dir()` (where `mcp-sources.toml` lives), `mcp_install_dir()`
+- `liberado-config` — `managed_binary_path()` (the shared path convention), `config_dir()` (where
+  `mcp-sources.toml` lives), `mcp_install_dir()`
   (where binaries get installed). Deliberately depends on `liberado-config` directly, not
   `liberado-bootstrap` — the config/path resolution helpers were factored out specifically so a
   build tool like this one isn't forced to pull in the whole provider/dispatcher/orchestrator

@@ -95,7 +95,8 @@ ever toward *less* autonomy. A model that "wants to just do it" cannot escape a 
 
 - Depends on: `liberado-common` (decision/capability/zone-resolution types), `liberado-config-loader`
   (`DispatchTuning`), `liberado-provider` (inference).
-- Depended on by: `daemon`, `cli`, and (consumes its output) `orchestrator`.
+- Depended on by: `liberado-bootstrap`, `liberado-daemon`, `liberado-dispatch-pack`, `liberado-eval`,
+  `liberado-heuristics-tuner`, `liberado-main-agent`, `liberado-server`.
 
 ## Tests
 
