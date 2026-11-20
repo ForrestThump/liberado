@@ -6624,7 +6624,7 @@
     "cyclomatic": 48
   },
   "crates/webui/src/components/project_page.rs": {
-    "ploc": 201,
+    "ploc": 197,
     "lloc": 42,
     "functions": 12,
     "cyclomatic": 18
