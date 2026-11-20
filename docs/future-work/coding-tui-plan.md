@@ -357,4 +357,5 @@ S2 makes it visible; S3 makes it safe against real repos; S4 makes it reversible
 `agentic-loops.md` (gate row in the kernel table), `verifiers.md` (gate as the critic layer's
 generalization), `session-surface-contract.md` (goal-view conformance rows), `overview.md` (crate
 map: `completion_gate` module, checkpoint service), `reference/api.md` (`/api/projects`,
-`/api/loops*`, park/resume/rewind/diff endpoints), `roadmap.md` (slice tracking).
+`/api/loops*`, park/resume/rewind/diff endpoints). Slice tracking lives in this file: `roadmap.md` is
+now a pointer to the backlog and the direction.
