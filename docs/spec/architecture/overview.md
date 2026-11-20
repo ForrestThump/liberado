@@ -5,9 +5,9 @@ about changes with an LLM, and acts on your behalf through tools — safely, and
 own work. This document is the cold-start map. Each crate has its own zoomed-in
 `crates/<name>/ARCHITECTURE.md`.
 
-> **Before you change anything**, read [`failure-modes.md`](failure-modes.md). It is five pages on the
-> five bugs this system produces repeatedly — every one of which shipped with a green test suite, and
-> none of which was found by reading the code.
+> **Before you change anything**, read [`failure-modes.md`](failure-modes.md). It is a short
+> catalogue of the seven bug classes this system produces repeatedly — every one of which shipped with
+> a green test suite, and none of which was found by reading the code.
 
 ## Three pillars
 
@@ -185,8 +185,9 @@ domain pack** (first pack — not the product center; see [`agentic-loops.md`](a
 
 ## Co-development with Turbovault & Turbomcp
 
-`turbovault*` and `turbomcp*` crates are **git+tag pins** on the ForrestThump forks at
-`liberado-2026-08-27`. Nested sibling clones inside this repo are not required. A root
+`turbovault*` and `turbomcp*` crates are **git+tag pins** on the ForrestThump forks:
+`turbovault*` at `liberado-2026-11-10`, `turbomcp*` at `liberado-2026-08-27`. Nested sibling clones
+inside this repo are not required. A root
 `[patch.crates-io]` redirects Turbovault's published `turbomcp` to the same git tag so the
 whole tree builds against one Turbomcp — the one carrying the request-`_meta` pass-through
 that the provenance loop depends on. Leftover `turbovault/` and `turbomcp/` directories stay
@@ -220,7 +221,7 @@ security and reliability basics next. Open work is the
 5. ✅ **Web UI** — `liberado-server` (Axum, `:4201`, run via `liberado serve`) hosts the daemon and serves a JSON API; `liberado-webui` (Dioxus WASM) is the browser dashboard showing daemon status, reactions, and vault info. LAN-accessible. Build with `dx build --release --package liberado-webui --web` (see the [`webui` README](../../../crates/webui/README.md#build-commands)).
 6. ✅ **Conversational chat loop** — `crates/main-agent`'s `Conversation` drives the executor's conversational tool-calling loop with context carried across turns. Served over the shared chat/SSE contract (`docs/spec/reference/api.md`): `POST /api/chat` and the streaming `GET`/`POST /api/chat/stream` with token streaming, tool-call visibility (`tool`/`tool_result`), and stop/cancel (close the stream → turn aborts + history rolls back, persisting nothing).
 7. ✅ **Session persistence** — Decision 17, then **converged** (D7, 2026-07-13): every session — chat, goal session, background run — is one append-only JSONL log of DAG message-nodes *and* pack events, under `<LIBERADO_DATA_DIR>/sessions`, outside the vault. ULIDs are minted **monotonically** at append time, so file-order == id-order. `main-agent`'s `ChatSessions` rehydrates per turn from the store and **persists only on success**, so the server holds no in-memory conversation cache and a cancelled turn is a clean on-disk no-op. `GET /api/sessions` is the one list; `/api/conversations` and `/api/goals` remain as the chat and kernel lenses. The pre-convergence `conversations/` and `goal-sessions/` directories are left on disk but no longer read. **See [`sessions.md`](sessions.md)** — the Session model is the load-bearing abstraction of the whole system.
-8. ✅ **`liberado chat` CLI client** — a `reqwest`/SSE terminal REPL (`crates/cli/chat_client.rs`), the first native (non-browser) client of the shared chat API.
+8. ✅ **`liberado chat` CLI client** — a `reqwest`/SSE terminal REPL (`crates/cli/src/chat_client.rs`), the first native (non-browser) client of the shared chat API.
 9. ✅ **Config-driven substrate** — the daemon boots on one validated `Config` (Decision 14, `crates/bootstrap`): the dispatcher holds `policy.toml`'s grants as its base authority, and `topology.mcps` is now the **single source** for both the dispatcher's catalog AND the runtime's MCP connection. Each `[[mcps]]` entry declares a required `description` (routing), `consequence` (the risk gate), and `transport` (`stdio` command/args or `http` url — how the runtime reaches it); the dispatcher routes over the enabled MCPs and the orchestrator connects to those same names by transport, so a routed name is always a name the runtime can reach (slice 2b done — no env path remains).
 
 10. ✅ **Proposal workflow (Decision 11, emit AND approve→execute)** — the full propose→approve→execute loop is closed. The EMIT path writes a `proposals/<id>.md` artifact for high-consequence concrete actions (YAML frontmatter with `status: pending`); the APPROVE→EXECUTE half picks up a human `status: approved` edit via the watch loop, calls `orchestrator.execute_approved()` with the proposal's `correlation_id` as provenance (no re-dispatch, no guards — the edit is the authorization), and flips `status` to `done` (loop-broken, idempotent). As of 2026-07-02 every proposal also carries an HMAC-SHA256 integrity
@@ -274,11 +275,15 @@ pipeline picks up the write and archives it — closed the gap where an expired-
   [conformance runbook](../../impl/live-conformance.md).
 - Splitting `liberado-common`'s grab-bag along its natural boundaries — partially underway (`config`
   and `config-loader` have already been carved off into their own crates), but `common` still has
-  eight modules (`provenance`, `capability`, `catalog`, `dispatch`, `event`, `model`,
-  `proposal`, `error`) — the last open item in [`crate-modularity-audit.md`](../../future-work/archive/crate-modularity-audit.md).
+  24 modules (`provenance`, `capability`, `catalog`, `dispatch`, `event`, `model`,
+  `proposal`, `error`, `approval_ledger`, `bundled_vault`, `civil_schedule`, `clock`,
+  `permission`, `write_target`, `failure_excerpt`, `frontmatter`, `guidance`, `local_time`,
+  `path`, `process`, `redact`, `risk_waiver`, `session_grants`, `sweeping`) — the last open item in
+  [`crate-modularity-audit.md`](../../future-work/archive/crate-modularity-audit.md).
   (Finding 2 of that same audit, `ChatClient` trait adoption, was resolved 2026-07-05 — the
   never-implemented trait was deleted rather than adopted; `chat_client_contract::native` now just
-  documents `SseDecoder`/`ChatEvent::from_sse_data` as the real shared boundary.)
+  documents `SseDecoder` and `SessionEvent::from_sse_data` as the real shared boundary. The old
+  `ChatEvent` type was folded into `SessionEvent`.)
 - Writer-identity verification on proposal approval (item 1 of [`hardening-audit-2026-07-02.md`](../../future-work/archive/hardening-audit-2026-07-02.md)) — needs OS-level MCP process isolation or an out-of-band approval channel, not a code patch.
 - Phase 4's live Docker-daemon smoke test (item 19 above) and its serverless-hibernation slice
   (deferred, no concrete need yet).

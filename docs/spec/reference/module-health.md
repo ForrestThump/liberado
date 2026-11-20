@@ -52,7 +52,7 @@ splitting tests by state made those ceilings unnecessary; they are gone from
 `code-metrics/module-health.toml`. The committed `code-metrics/module-health-baseline.json` is still the
 last accepted measurement — this change does not raise it.
 
-CAS1 (chat vs. agent surface mode) wires two narrow waivers for the irreducible
+CAS1 (chat vs. agent surface mode) wires three narrow waivers for the irreducible
 introductions on `crates/main-agent/src/sessions.rs` (the new `AgentProfiles`
 field + the `#[path = "sessions/agent_profiles.rs"] mod agent_profiles;`
 declaration) and on `crates/session-store/src/jsonl.rs` (the +1 cyclomatic
@@ -74,18 +74,19 @@ are partitioned into modular sibling files (`crates/daemon/src/tests/*.rs`, `lib
 `lib_loop_tests.rs`, `lib_disposition_tests.rs`) to eliminate monolithic test blocks and preserve
 clean module health without synthetic waivers.
 
-The cross-provider fallback feature wires three narrow waivers for irreducible growth on the
-config-schema side. `crates/config-loader/src/model/topology.rs` grows by one struct (`ProviderFallback`),
+The cross-provider fallback feature wires nine narrow waivers for irreducible growth on the
+config-schema side: a `cyclomatic`, a `functions`, and a `ploc` waiver on each of the three
+config-loader model files. `crates/config-loader/src/model/topology.rs` grows by one struct (`ProviderFallback`),
 one default helper, and one cross-cutting doc comment — a schema addition that has no other home.
 `crates/config-loader/src/model/config.rs` adds two error checks inside `validate_providers`'s
 per-provider loop (self-reference guard + undeclared-name guard). The functions metric grew by
 one closure, `providers.iter().any(|p| p.name == fb.provider)`; that waiver's ceiling is the
-measured count, 88. Splitting the checks into a helper adds another function and its own
+measured count, 90. Splitting the checks into a helper adds another function and its own
 cyclomatic, so the checks stay inline.
 `crates/config-loader/src/model/builder.rs` adds a shared `provider_profile` fixture at module scope so
 the sibling `builder_fallback_tests.rs` can use it via `super::provider_profile` — the
 fallback-specific tests themselves live in the sibling and add zero regression to `builder.rs`.
-The three waivers carry hard ceilings and review dates; any further growth in these files must be
+The nine waivers carry hard ceilings and review dates; any further growth in these files must be
 split, not waived.
 
 The mechanical-jobs feature (ADR-0020) wires narrow waivers for the wiring-side growth that the
@@ -99,8 +100,8 @@ sibling module would split the wiring from the dispatch composition that owns it
 `TelegramNotifier::from_reminder_env` is a thin loader parallel to the existing `from_env` (one
 `let-else` per env var, two total), and the two loaders are kept side-by-side so the wiring in
 `bootstrap` can pick the right one by env name. The three config-loader `ploc` ceilings from the
-cross-provider fallback feature (`builder.rs` 1130 → 1200, `config.rs` 1080 → 1120,
-`topology.rs` 1120 → 1150) absorb the `CronSchedule` field plumbing this PR added on the schedule
+cross-provider fallback feature (`builder.rs` 1300, `config.rs` 1120,
+`topology.rs` 1151) absorb the `CronSchedule` field plumbing this PR added on the schedule
 schema (nine new fields with their doc comments) — every one of them belongs on the schema, and
 the `config.rs` `functions` ceiling (88 → 90) absorbs the module-scope `validate_schedule_job`
 helper that was split out to keep `validate_schedules` at its cyclomatic baseline. All five

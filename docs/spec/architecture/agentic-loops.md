@@ -182,7 +182,7 @@ which they get connected matters more than the connecting does.
 | Bounded-concurrent fan-out | `Orchestrator::dispatch_parallel` — semaphore over `tuning.dispatch.max_concurrent_subagents`, per-subagent capability narrowing, merged `Report` | **Yes, via the dispatch pack.** A `parallel_goals` payload constructs `SubDispatch`s. Optional `workspace_root` is forwarded to `RuntimeFactory::runtime_for_in`. |
 | Expressing "these are independent" | — | **No.** `DispatchAction` is `{ExecuteDirect, DispatchSubagent, Clarify, Propose}`; `DispatchSubagent` is singular. A classifier cannot say *fan out*. |
 | Background session + later callback | `hub.start_background` + `spawn_return_handoff` + `ChatSessions::append_note` | **No.** Wired to the human `/spawn` path (`POST /api/goals` with an `origin`), not to any tool. |
-| Several tool calls in one turn | executor's tool loop | **Yes, but serialized** — `for call in &response.tool_calls { … runtime.invoke(call).await }` (`liberado-executor` `src/lib.rs`, both the streaming and non-streaming paths). No `JoinSet`, no `join_all`. |
+| Several tool calls in one turn | executor's tool loop | **Yes, but split by class** — the executor partitions one turn's tool calls into reads and writes. Reads run concurrently (`run_reads` uses `join_all`); writes run one at a time (`run_writes`), so a write never races another write. (`liberado-executor` `src/lib.rs`, both the streaming and non-streaming paths.) |
 
 Consequences worth stating plainly, because each is easy to assume otherwise:
 

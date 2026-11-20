@@ -165,9 +165,10 @@ stream puts that same text on a `failed` event. A `profile` sent with an existin
 not retarget that conversation; an unknown name still fails the request.
 
 Two read endpoints back the conversation sidebar: **`GET /api/conversations`** lists every
-conversation header (`[{id,title,created_at,project?,pending_model?}]`, newest first), and
+conversation header (`[{id,title,created_at,project?,pending_model?,grant,surface_mode,
+agent_creator,parent_conversation,spawned_by}]`, newest first), and
 **`GET /api/conversations/{id}`** returns one conversation's full message history
-(`{"messages":[…],project?,pending_model?}`; `404` if it doesn't exist).
+(`{"messages":[…],profile,surface_mode,project,pending_model?}`; `404` if it doesn't exist).
 **`PATCH /api/conversations/{id}`** updates a conversation (`200` on success, `404` if it doesn't
 exist, `400` for an unknown project or an empty body, `503` if chat is disabled). The body may
 include any of `title`, `project`, and `pending_model`. A missing field is left unchanged. `null`
@@ -360,9 +361,11 @@ Ordered by feel-impact. Each is a client + (sometimes) server change behind the 
   (`crates/webui/src/components/chat.rs`'s `stop-btn`, wired to `close_current_stream()`) calls
   `EventSource.close()` on click — both halves are landed, not just the backend primitive.
 - **Sessions / persistence** — conversations are keyed by session id and persisted via the
-  `ConversationStore` (Decision 17, `liberado-conversation-store`): an append-only log of message
+  converged `SessionStore` (Decision 17, `liberado-session-store`): an append-only log of message
   *nodes* (a DAG, so branching is additive), JSONL outside the vault under
-  `<LIBERADO_DATA_DIR>/conversations`, so chats survive restarts. The chat requests gained a `session`
+  `<LIBERADO_DATA_DIR>/sessions`, so chats survive restarts. `liberado-conversation-store` holds the
+  `ConversationStore` trait the store implements; the pre-convergence `conversations/` directory is
+  left on disk but no longer read. The chat requests gained a `session`
   field, the stream emits a `session` event, and `GET /api/conversations` + `GET /api/conversations/{id}`
   list and reopen them. All persistence orchestration lives in `main-agent`'s `ChatSessions` (one code
   path the web server and a future TUI-hosting daemon share), depending on the `ConversationStore`
@@ -403,7 +406,7 @@ each of them. Shepherd sends that bearer only on its goal calls. GitHub access s
 
 | Path | Contents |
 |---|---|
-| `<LIBERADO_DATA_DIR>/conversations/*.jsonl` | Face chat history (Decision 17) |
+| `<LIBERADO_DATA_DIR>/sessions/*.jsonl` | Face chat history and goal-session events (Decision 17, D7). The pre-convergence `conversations/` and `goal-sessions/` directories are left on disk but no longer read. |
 | `<LIBERADO_DATA_DIR>/dispatches/chat-delegate-*.jsonl` | Mesh delegation journals (classify + disposition; linked from `delegate` tool results) |
 | Platform config `liberado/settings.toml` | Client UI prefs (e.g. TUI theme name) — not daemon data |
 

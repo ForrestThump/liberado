@@ -177,9 +177,9 @@ no failing assertion, only two components confidently disagreeing in different l
 
 The fixes are all the same shape and all cheap: make one side the source and have the other read it
 (`CONSEQUENCE_GATE` moved to `liberado-common` so two guards share one constant; both magnitude
-checks now call `instruction_scope`), or add the thing whose job is to compare them (`smoke.sh`
-asserts the *in-container* config, not the mirror; `config explain` answers the authority question
-from the same descriptors the daemon enforces).
+checks now call `instruction_scope`), or add the thing whose job is to compare them (the deploy
+smoke asserts the *in-container* config, not the mirror; `config explain` answers the authority
+question from the same descriptors the daemon enforces).
 
 Related to **#4** — a machine check overruling a human is one *specific* way two authorities
 disagree. This entry is the general case, and it is usually silent rather than wrong.
@@ -237,13 +237,14 @@ In order of strength:
    `from_tuning(&Tuning)` and `with_*` overrides. A new field then flows to every consumer by
    default, and shadowing becomes something you must write on purpose.
 2. **`#[serde(deny_unknown_fields)]`** on config and payload structs, so a key nothing reads is an
-   error rather than silence. Currently used **zero** times here.
+   error rather than silence. It is now used across the tree — 24 occurrences, 9 of them on config
+   and payload structs (re-counted 2026-11-20).
 3. **A field-equality test.** Build the tuning with every field non-default, convert, serialize both
    sides, and assert every key present in both agrees — with a documented exception list. It
    enumerates fields rather than naming them, so it cannot go stale.
-4. **An effective-config dump** (`liberado doctor`, or a startup log with provenance). The only one
-   that catches a value copied correctly and then overridden downstream, and the only one available
-   to an operator mid-incident.
+4. **An effective-config dump** (`liberado config check`, or a startup log with provenance). The
+   only one that catches a value copied correctly and then overridden downstream, and the only one
+   available to an operator mid-incident. There is no top-level `liberado doctor` command.
 
 ### 7b. The whole config file that was never loaded (2026-08-11)
 
