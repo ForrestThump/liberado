@@ -25,6 +25,18 @@ impl Config {
                 return Err(Error::Config(format!("{name} must be >= 1")));
             }
         }
+        self.validate_profile_turn_budgets()
+    }
+
+    fn validate_profile_turn_budgets(&self) -> Result<()> {
+        for profile in &self.topology.session_profiles {
+            if profile.max_turns == Some(0) {
+                return Err(Error::Config(format!(
+                    "topology.session_profiles['{}'].max_turns must be >= 1",
+                    profile.name
+                )));
+            }
+        }
         Ok(())
     }
 }

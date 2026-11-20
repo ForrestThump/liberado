@@ -22,7 +22,9 @@ mod think_text;
 mod types;
 
 pub use error::{ProviderError, ProviderResult};
-pub use latency::{AgentRole, LatencyEvent, LatencyRecorder, MeteredProvider, NoopRecorder};
+pub use latency::{
+    AgentRole, LatencyEvent, LatencyRecorder, MeteredProvider, NoopRecorder, ToolCallEvent,
+};
 pub use mock::MockProvider;
 pub use provider::{CompletionStream, Provider, complete_json};
 pub use reasoning_text::transcript_parts;

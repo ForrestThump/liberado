@@ -615,6 +615,16 @@ categories = ["Dining Out", "Vending", "Housewares", "Fuel & Gas", "Entertainmen
 # Declaring none changes nothing: an unprofiled session runs its pack with the grant keyed by the
 # domain name (`life`, `coding`), exactly as before profiles existed.
 #
+# A profile may set max_turns (integer >= 1). Chat sessions on that profile use it
+# instead of [main_agent] max_turns. Omit the key and the face ceiling stays.
+# This example is not an enabled profile. A finance prompt should name the narrow
+# read tools (live_spending, upcoming, get_summary, list_loans), call upcoming once
+# and not again with a longer horizon, and not promise a schedule cleanup unless a
+# tool for that cleanup exists.
+# [[session_profiles]]
+# name = "budget-bot"
+# max_turns = 18
+
 # --- Chat hats (CAS3 + Reading B) --------------------------------------------------------------
 # No `domain` = chat profile (WebUI /profile + New Agent picker). New Chat stays the
 # default grant (no profile). Pick a named hat with /profile.

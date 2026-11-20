@@ -64,6 +64,7 @@ pub async fn rename_profile(
     };
     if let Some(chat) = &state.chat {
         chat.rename_profile_route(&name, &to);
+        chat.rename_profile_max_turns(&name, &to);
     }
     Json(serde_json::json!({
         "name": name,
@@ -94,6 +95,7 @@ pub async fn delete_profile(
     };
     if let Some(chat) = &state.chat {
         chat.set_profile_route(&name, None);
+        chat.clear_profile_max_turns(&name);
     }
     Json(serde_json::json!({
         "name": name,

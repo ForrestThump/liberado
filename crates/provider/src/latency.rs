@@ -3,7 +3,9 @@
 //! Every LLM roundtrip in Liberado goes through [`Provider::complete`] / `complete_stream`, so
 //! wrapping the shared provider in [`MeteredProvider`] captures the whole face → dispatcher →
 //! orchestrator → face hop chain from one place — one [`LatencyEvent`] per call: role, model, wall
-//! time, time-to-first-token (streaming), and token usage.
+//! time, time-to-first-token (streaming), and token usage. Tool calls are a second row,
+//! [`ToolCallEvent`]: name, sizes, duration, and an error flag. The row does not carry argument
+//! text or result text.
 //!
 //! The **role** is fixed on each wrapped provider (the per-role providers the daemon builds from
 //! config carry it), so it needs no plumbing. The **correlation id** rides on a tokio task-local set
@@ -92,7 +94,7 @@ pub struct LatencyEvent {
     pub role: &'static str,
     /// Model id the provider reported.
     pub model: String,
-    /// Always `"llm_call"` for now; leaves room for `"stage"` records later.
+    /// Always `"llm_call"`. A tool call is a separate [`ToolCallEvent`], not a row of this struct.
     pub kind: &'static str,
     /// Total wall time of the call (request → response, or request → final `Done` for streams).
     pub wall_ms: u64,
@@ -124,10 +126,46 @@ pub struct LatencyEvent {
     pub repeat_calls: Option<usize>,
 }
 
-/// Sink for [`LatencyEvent`]s. The daemon supplies a JSONL-appending implementation; tests and
-/// non-daemon callers can use [`NoopRecorder`].
+/// One tool invocation. Counts and sizes only: argument text and result text stay out of the
+/// journal, because a budget or mail tool can return account data.
+///
+/// `kind` is always `"tool_call"`, so a reader can skip the line without treating it as an LLM
+/// call. `correlation` is the chat session id when the turn set one, otherwise `"-"`. `turn` is
+/// the executor's turn index, or `0` for a classifier seed that runs before the first model turn.
+/// `args_bytes` and `result_bytes` are the raw JSON and the raw tool payload, measured before any
+/// spill preview. `duration_ms` is invoke plus spill. `is_error` is true when the runtime returned
+/// `Err`, which is also the path that prefixes the model-facing text with `tool error:`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ToolCallEvent {
+    /// Wall-clock time the record was made (epoch milliseconds).
+    pub ts_ms: u64,
+    /// Always `"tool_call"`.
+    pub kind: &'static str,
+    /// Joins this call to the LLM rows of the same turn. `"-"` when no correlation was set.
+    pub correlation: String,
+    /// Executor turn index. `0` is a seed call.
+    pub turn: u32,
+    /// Tool name. Not the arguments.
+    pub tool: String,
+    /// `serde_json` length of the argument value.
+    pub args_bytes: u64,
+    /// Length of the raw tool payload, before a spill preview replaces what the model sees.
+    pub result_bytes: u64,
+    /// Milliseconds from the start of `invoke` through spill.
+    pub duration_ms: u64,
+    /// The runtime returned `Err`.
+    pub is_error: bool,
+}
+
+/// Sink for latency rows. The daemon writes both LLM calls and tool calls to one JSONL file.
+///
+/// [`record_tool`](LatencyRecorder::record_tool) defaults to a no-op so existing recorders keep
+/// compiling. A journal that wants tool totals must override it. The default drops the row.
 pub trait LatencyRecorder: Send + Sync {
     fn record(&self, event: LatencyEvent);
+
+    /// Record one tool call. The default drops it.
+    fn record_tool(&self, _event: ToolCallEvent) {}
 }
 
 /// Drops every event — the default when no journal is wired.
