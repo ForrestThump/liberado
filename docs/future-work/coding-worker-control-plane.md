@@ -468,7 +468,9 @@ Acceptance for that slice:
      actual harness process to verify that session continuation, file mutations, and failure handling
      work reliably before enabling in automated routing.
 4. **Step 4: Shepherd integration**
-   Slice 1 writes shepherd facts to the ledger. Slice 2 (not landed) may invoke `WorkerPort` for
+   Slice 1 writes shepherd facts to the ledger. Slice 2 records a stable `RepairRequested` command
+   (the `TaskEventKind::RepairRequested` fact is in the tree, in
+   `crates/coder-core/src/control_plane/events.rs`). Slice 2 may still invoke `WorkerPort` for
    kickbacks. Do not add a fourth orchestrator.
 
 ## 11. Constraints (why this stays a draft)

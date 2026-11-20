@@ -281,8 +281,9 @@ kept as a record of how the modules were expected to land against that old page.
 | **Liberado todos** | **Live** — briefs and chat drive tasks through TurboVault. |
 | **Nice-to-have: A2A / mesh** | Unchanged. |
 
-**Wired into [`roadmap.md`](../roadmap.md)** (2026-07-19): cross-cutting TurboVault modules line +
-"Recently landed" entry for live vector/tasks + "What's next" one-screen summary.
+**Was wired into [`roadmap.md`](../roadmap.md)** (2026-07-19): cross-cutting TurboVault modules line +
+"Recently landed" entry for live vector/tasks + "What's next" one-screen summary. `docs/roadmap.md`
+is now a pointer to the direction and the backlog, so that line is gone. (Re-checked 2026-11-20.)
 
 ---
 
