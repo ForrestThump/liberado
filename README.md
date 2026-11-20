@@ -20,7 +20,7 @@ Rust-native **personal AI Liberado** and **agentic orchestration** substrate: on
 
 ## Strategy (short)
 
-Personal assistant first. Liberado owns the data, the rules, and reliable delivery: tasks, reminders, budget, and recovery. The coding pack is frozen. Next build work is the security and reliability basics in the [backlog](docs/future-work/backlog.md): close the control plane, then make delivery durable.
+Personal assistant first. Liberado owns the data, the rules, and reliable delivery: tasks, reminders, budget, and recovery. The coding pack is frozen. The next build work is in the [backlog](docs/future-work/backlog.md); it names the active track and the row order.
 
 Direction: [docs/direction.md](docs/direction.md). The July 2026 competitive note is historical: [docs/spec/architecture/positioning.md](docs/spec/architecture/positioning.md).
 
@@ -40,4 +40,4 @@ Nested MCP checkouts (`liberado-*-mcp/`, `turbovault/`, …) may appear for co-d
 
 See [LICENSE](LICENSE).
 
-**Last updated:** 2026-10-25 — strategy follows [docs/direction.md](docs/direction.md). The work queue is the backlog.
+**Last updated:** 2026-11-20 — strategy follows [docs/direction.md](docs/direction.md). The work queue is the backlog.

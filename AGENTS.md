@@ -10,10 +10,10 @@ local run is how you keep GitHub from sending the work back.
 
 ## Build and test
 
-**Cargo fetches the co-developed forks by git tag.** `turbovault*` and `turbomcp*` crates are
-pinned to the ForrestThump forks at tag `liberado-2026-08-27` (the same SHAs CI previously
-checked out as path siblings). Nested `turbovault/` and `turbomcp/` clones inside this repo are
-not required; leftover directories stay gitignored if present.
+**Cargo fetches the co-developed forks by git tag.** `turbovault*` crates are pinned to the
+ForrestThump fork at tag `liberado-2026-11-10`; `turbomcp*` crates stay at `liberado-2026-08-27`
+(the same SHAs CI previously checked out as path siblings). Nested `turbovault/` and `turbomcp/`
+clones inside this repo are not required; leftover directories stay gitignored if present.
 
 `.github/workflows/ci.yml` is the authority on what CI runs, and preflight mirrors it.
 
@@ -45,7 +45,9 @@ something rather than being in the way.
 - **What each crate is:** [`docs/spec/reference/crate-map.md`](docs/spec/reference/crate-map.md) —
   generated from the manifests; regenerate with `just gen-crate-map`.
 - **Why the layers are what they are:** [`docs/spec/architecture/contracts.md`](docs/spec/architecture/contracts.md).
-- **What is being worked on:** [`docs/roadmap.md`](docs/roadmap.md) — the living scoreboard.
+- **What is being worked on:** [`docs/future-work/backlog.md`](docs/future-work/backlog.md) — the
+  only implementation queue. [`docs/roadmap.md`](docs/roadmap.md) is a pointer to the backlog and to
+  the direction; it is not the queue.
 
 ## Which docs are true
 
@@ -55,7 +57,9 @@ something rather than being in the way.
 | Path | What it is |
 |---|---|
 | `docs/spec/` | Contracts and reference. Closest to truth; changes with the code. |
-| `docs/roadmap.md` | Open work in priority order. Start here. |
+| `docs/direction.md` | Product mission, layers, principles, decision filter. |
+| `docs/future-work/backlog.md` | Open work in priority order. **Start here.** |
+| `docs/roadmap.md` | A pointer to the direction and the backlog. Not the queue. |
 | `docs/future-work/` | Plans and findings. **Read the status header.** Some are shipped and kept only for the rules or review record they carry. |
 | `docs/future-work/*/archive/` | Finished or abandoned. **Not current truth.** |
 | `docs/validation/` | Mutation-testing records. Historical evidence, not instructions. |
@@ -122,10 +126,11 @@ machine and on no CI runner, so `git commit` in a temp repo passes locally and f
 
 **Never junction leftover `turbovault/` or `turbomcp/` directories into a git worktree.** Those
 names stay gitignored in case a local clone is present, but they are not required to build: Cargo
-fetches the ForrestThump forks at tag `liberado-2026-08-27`. Creating a scratch worktree and
-linking leftover clones in with `mklink /J` works — until `git worktree remove --force` follows
-the junction and deletes the **contents of the originals**. Copying leftover dirs, or omitting
-them, both avoid it. Confirm the git+tag pins with `cargo metadata --locked`.
+fetches the ForrestThump forks by tag (`liberado-2026-11-10` for `turbovault*`,
+`liberado-2026-08-27` for `turbomcp*`). Creating a scratch worktree and linking leftover clones in
+with `mklink /J` works — until `git worktree remove --force` follows the junction and deletes the
+**contents of the originals**. Copying leftover dirs, or omitting them, both avoid it. Confirm the
+git+tag pins with `cargo metadata --locked`.
 
 **A trait that shared test doubles implement must live below every crate that tests against it.**
 A crate's `#[cfg(test)]` binary is a *second* rustc instance of that crate, so a double from
@@ -214,13 +219,15 @@ proposing a fix to the coding pack.
 
 **Check that the config file was loaded at all before blaming a setting.** `liberado-acp` read
 `LIBERADO_CONFIG_DIR` directly instead of calling `liberado_config::config_dir()`, so it opted out
-of the other three resolution tiers. Nothing set the variable — not Paseo's provider entry, not
-`scripts/dispatch-acp-run.js` — so every dogfood run since Paseo landed read **no** `topology.toml`,
-`policy.toml`, or `tuning.toml`: no declared project (hence no ship bar), and an empty capability
-grant. The bridge now logs the resolved directory and which of the three files exist at startup;
-read that line before concluding a setting does not work. Note the installed binary lives in
-`~/.cargo/bin`, so the walk-up-from-the-binary tier finds no repo `config/` — an explicit
-`LIBERADO_CONFIG_DIR` is the only reliable answer for an installed bridge.
+of the other three resolution tiers. At the time, nothing set the variable — not Paseo's provider
+entry, not `scripts/dispatch-acp-run.js` — so every dogfood run since Paseo landed read **no**
+`topology.toml`, `policy.toml`, or `tuning.toml`: no declared project (hence no ship bar), and an
+empty capability grant. Both now set it (`crates/ops/src/paseo.rs` and
+`scripts/dispatch-acp-run.js`), but the lesson stands: the bridge logs the resolved directory and
+which of the three files exist at startup, so read that line before concluding a setting does not
+work. Note the installed binary lives in `~/.cargo/bin`, so the walk-up-from-the-binary tier finds
+no repo `config/` — an explicit `LIBERADO_CONFIG_DIR` is the only reliable answer for an installed
+bridge.
 
 **A config value that parses is not a config value that is read.** Ten settings have shipped green
 while a consumer hardcoded a literal instead of reading them — `[coder.gate]`, `[coder.coder]`,

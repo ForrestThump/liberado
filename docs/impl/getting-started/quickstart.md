@@ -35,8 +35,10 @@ are loaded. See
 config lives":
 
 1. `$LIBERADO_CONFIG_DIR`
-2. the platform config dir — `~/.config/liberado` (or `%APPDATA%\liberado` on Windows)
-3. the directory of the running binary
+2. the platform config dir — `~/.config/liberado` (or `%APPDATA%\liberado` on Windows) — but only
+   when it already holds at least one of the three config files
+3. a `config/` subdirectory found by walking up from the running binary (at most five ancestors)
+4. the platform config dir again, as the final fallback, even when it is empty
 
 For value overrides once the directory is chosen — code defaults, then files,
 then env (`LIBERADO_*`), then CLI flags; the highest source wins — see
