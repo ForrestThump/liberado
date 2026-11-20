@@ -82,9 +82,11 @@ plan look OK?" — that's what presenting the plan for approval is for.
 
 ### 3. Implementation discipline
 
-- **Move code, don't duplicate it, when relocating for architectural reasons.** When `RuntimeFactory`
-  moved from `liberado-orchestrator` to `liberado-executor` to break a near-circular crate dependency
-  (`docs/future-work/archive/hygiene-audit-2026-07-02.md`, item 6), every call site was updated in the same pass, not
+- **Move code, don't duplicate it, when relocating for architectural reasons.** When the tool-runtime
+  contract (`ToolRuntime`, `RuntimeFactory`, `RuntimeSetupError`) moved out of `liberado-orchestrator`
+  and `liberado-executor` into the foundation crate `liberado-tool-runtime`, to break a
+  near-circular crate dependency (`docs/future-work/archive/hygiene-audit-2026-07-02.md`, item 6),
+  every call site was updated in the same pass, not
   left as a re-export shim indefinitely (a re-export was used *temporarily* in one case —
   `liberado-bootstrap` re-exporting `liberado-config`'s surface — specifically because dozens of existing
   call sites had no reason to change and re-exporting was the correct, deliberate choice there, not a
@@ -207,7 +209,7 @@ Don't duplicate what already exists elsewhere — this doc is process, not archi
 | How do I run and configure it? | `crates/cli/ARCHITECTURE.md` and `docs/spec/config-spec.md` |
 | What's next? | `docs/future-work/backlog.md`. `docs/roadmap.md` points at `docs/direction.md` and the backlog. |
 | Why was decision N made? | `docs/decisions/ADR-NNNN-*.md` |
-| Per-crate design detail | `crates/<name>/ARCHITECTURE.md` (each crate has one) |
+| Per-crate design detail | `crates/<name>/ARCHITECTURE.md` where one exists; the generated `docs/spec/reference/crate-map.md` lists every crate |
 | The chat/SSE API contract | `docs/spec/reference/api.md` |
 | Past hygiene/hardening audit findings (including deferred items) | `docs/future-work/archive/*-audit-*.md` |
 | Point-in-time state snapshots from past sessions | `docs/future-work/ideas/archive/handoff.md` (snapshot, not a

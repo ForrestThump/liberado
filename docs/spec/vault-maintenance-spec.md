@@ -102,11 +102,14 @@ Turbovault tooling.
 | Name | Default | Meaning |
 |---|---|---|
 | `git_commit_schedule` | per-batch + hourly | When the homelab commits. |
-| `git_authority_node` | homelab | The only node running git ops / holding `.git/`. |
 | `stignore_machine_dirs` | `.git/`, `.turbovault/`, `.liberado/` | Dirs Syncthing must not replicate. |
 | `maintenance_schedule` | weekly | When `maintenance-hook` runs the hygiene sweep. |
 | `prune_requires_proposal` | true (human-authored) | Pruning human content always proposes first. |
-| `conflict_merge_autonomy` | direct-if-confident | Confident union merges act directly (git backstop); else propose. |
+
+These four are the keys the config model actually carries
+(`MaintenanceTuning` in `crates/config-loader/src/model/tuning.rs`). The single-node git authority and
+the conflict-merge autonomy rule are design intentions in this document, not tunables; nothing reads
+them. (Re-checked 2026-11-20.)
 
 ## 6. v1 Scope
 

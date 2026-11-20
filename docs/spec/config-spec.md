@@ -256,20 +256,21 @@ not change the compose mount.
 ## 5. Where the Tunables Come From
 
 Each companion spec already defines its tunables and defaults in a "Tunables (single source of truth
-— Decision 14)" table. Those tables are the **authoritative list**; the `crates/common` config model
-mirrors them as typed fields with matching `Default`s. Concretely, the model aggregates:
+— Decision 14)" table. Those tables are the **authoritative list**; the `crates/config-loader` config
+model mirrors them as typed fields with matching `Default`s. Concretely, the model aggregates:
 - Capability/zone/write-class policy (Decision 4 / concurrency spec) → `policy.toml`.
 - Concurrency: `WINDOW`, `MAX_REACTION_DEPTH`, `RETRY_MAX`.
 - Dispatch: `SMALL_FANOUT`, tiered `CLARIFY_THRESHOLD`, `MAX_CONCURRENT_SUBAGENTS`,
-  `DETACH_SOFT_TIMEOUT`, `dispatcher_model`, `guidance_match_floor`, `subagent.isolation`.
-- Context policy: `MAX_GOALS`, `MAX_DECISIONS`, `DECISION_RECENCY`, `header_template`, `inbox_lookback`.
+  `DETACH_SOFT_TIMEOUT`, `guidance_match_floor`, `subagent.isolation`. The dispatcher model is not a
+  tuning key: it is `[roles.dispatcher].model` in `topology.toml`.
+- Context policy: `max_goals`, `max_decisions`, `decision_recency_days`.
 - Capture/inbox: paths, settle windows, flags, `ambient_sweep_schedule`, ignore globs.
 - Maintenance/git: commit schedule, `stignore_machine_dirs`, maintenance schedule, prune/merge policy.
 - Topology: component enablement, transports, ports/sockets, model/provider selection.
 
 ## 6. v1 Scope
 
-- Typed config model in `crates/common` with `Default`s = specced defaults.
+- Typed config model in `crates/config-loader` with `Default`s = specced defaults.
 - Layered loader (defaults → files → env → CLI) producing one validated model.
 - Cross-cutting validation + `liberado config check`.
 - Three concern files; all optional (empty/absent config boots on defaults, modulo the minimum

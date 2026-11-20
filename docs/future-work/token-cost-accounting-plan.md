@@ -13,7 +13,7 @@ open_items: true
 
 # Token cost accounting
 
-**Status**: D1 (price table) and D2 (`liberado-cost` read-time rollup) are on main. `token_usage_total` is filled from the journal. D3 (a pre-flight `estimated_cost` on the latency event) is still open. Written 2026-08-02; checked 2026-09-22.
+**Status**: D1 (price table) and D2 (`liberado-cost` read-time rollup) are on main. `token_usage_total` is filled from the journal. D3 (a pre-flight `estimated_cost` on the latency event) is still open. Written 2026-08-02; checked 2026-09-22; re-checked 2026-11-20.
 **Purpose**: answer design questions with measurements instead of guesses. The immediate one is
 open in [`delegated-work-is-discarded-at-the-seam.md`](archive/delegated-work-is-discarded-at-the-seam.md) —
 *what does carrying a research report inline actually cost?* — and it is currently unanswerable.
@@ -68,6 +68,12 @@ receipt — it can inform a decision, and it can be compared against the actual 
 
 `/api/status` has `token_usage_total: null` — a stub that has never been filled.
 
+> **Updated 2026-11-20.** This gap is closed, with different semantics than planned.
+> `/api/status` now fills `token_usage_total` from the latency journal
+> (`crates/server/src/api/status.rs`), but it reports **context occupancy of the newest chat turn**,
+> not lifetime spend. Pricing stays read-time, so no money appears in the field. The D4 intent
+> below (a cost figure a surface can show) is still open.
+
 ## Deliverables
 
 In order. Each is independently useful; stopping after 2 already answers the question that prompted
@@ -114,6 +120,9 @@ report estimator error.
 
 Fill `token_usage_total`, and add cost to the conversation header a surface can show. Last on
 purpose: a number on a screen invites tuning, and tuning before D2 is guessing with extra steps.
+
+> **Updated 2026-11-20.** `token_usage_total` is filled, with context-occupancy semantics. The cost
+> half of D4 is still open.
 
 ## Design decisions worth stating up front
 

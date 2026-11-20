@@ -106,11 +106,11 @@ Keep them. Do not add a coordinator allowlist or blacklist. Base protections (`.
 
 ## 4. Adapter gap
 
-Compiled adapters today are Liberado and Pi (`HarnessAdapter` in `crates/harness-eval`).
-Hermes and Deep Agents live as gitignored checkouts and are MIT. They do not implement the trait.
+Compiled adapters today are Liberado, Pi, Hermes, and Deep Agents (`HarnessAdapter` in
+`crates/harness-eval`; the two external ones live in `crates/harness-eval/src/legacy/external.rs`).
+`liberado coder compare save` accepts `liberado`, `pi`, `hermes`, and `deepagents`.
 
-C3 may add **thin launch adapters** so those two harnesses run under the same coordinator. That is
-measurement plumbing. It is not a coding-pack feature and it is not the control-plane worker trait.
+What is still missing is the published four-way score, not the adapters.
 
 An adapter may only:
 

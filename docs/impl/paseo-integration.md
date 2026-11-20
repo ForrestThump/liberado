@@ -63,13 +63,9 @@
 ## Prerequisites (Windows)
 
 1. **Rust toolchain** matching `rust-toolchain.toml` (workspace builds `liberado-acp`).
-2. **Sibling checkouts** for path deps (same as the rest of Liberado):
-
-   ```powershell
-   # from liberado/
-   git clone <fork>/turbovault turbovault; git -C turbovault checkout develop
-   git clone <fork>/turbomcp turbomcp;   git -C turbomcp  checkout develop
-   ```
+2. **No sibling checkouts are needed.** Cargo fetches the `turbovault*` and `turbomcp*` forks by
+   git tag (`liberado-2026-11-10` and `liberado-2026-08-27`). A local clone in `turbovault/` or
+   `turbomcp/` is not required to build.
 
 3. An LLM API key in the environment (any one). **Prefer OpenRouter** so the model
    picker gets `author/model` ids (`deepseek/deepseek-v4-pro`, …) from live `GET /models`:
@@ -81,7 +77,7 @@
    | `OPENAI_API_KEY` | `https://api.openai.com/v1` | `gpt-4o-mini` | Live OpenAI `/models` |
 
    Or set `LIBERADO_CONFIG_DIR` to a Liberado config directory with a working
-   `[[topology.providers]]` entry (same resolution as the daemon).
+   `[[providers]]` entry in `topology.toml` (same resolution as the daemon).
 
 4. Optional: `LIBERADO_ACP_MODEL` to override the initial model id (e.g.
    `deepseek/deepseek-v4-flash`). Paseo's model picker calls ACP `session/set_model`
@@ -203,7 +199,8 @@ you want green rows for launcher binary, ACP `initialize`, and ACP `session/new`
 - Session history persists under `<LIBERADO_DATA_DIR>/acp-sessions/` and survives bridge
   restarts when the client calls `session/load`.
 - **Coding / chat** are self-contained. **Face** requires a running `liberado serve` and
-  streams its events into ACP; cancel mid-face-stream is not wired yet.
+  streams its events into ACP; cooperative cancel is wired (the SSE future is dropped), but the
+  daemon may still finish its turn.
 - Coding pack live tool streaming mid-run is a follow-up (report streams at end today).
 
 **Ordered residual work** (error stop reasons, fork productization, remote track):

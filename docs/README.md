@@ -51,11 +51,11 @@ If you are an agent: start at the [backlog](future-work/backlog.md) → [directi
 3. [Architecture overview](spec/architecture/overview.md) — pillars, daemon-first loop, safety
 4. [Sessions](spec/architecture/sessions.md) — everything is a `Session` (D7)
 5. [Contracts](spec/architecture/contracts.md) — narrow waists / frozen seams
-6. [Failure modes](spec/architecture/failure-modes.md) — six recurring bug classes
+6. [Failure modes](spec/architecture/failure-modes.md) — seven recurring bug classes
 7. [Contributor orientation](../AGENTS.md) — build, test, architecture, and repository rules
 8. [Developer workflow](impl/development-workflow.md) — how work gets done here
 
-Per-crate detail: generated [crate map](spec/reference/crate-map.md) + each crate's `crates/*/ARCHITECTURE.md`.
+Per-crate detail: the generated [crate map](spec/reference/crate-map.md) lists every crate, its layer role, and its internal dependencies. Some crates also carry a hand-written `crates/*/ARCHITECTURE.md`.
 
 ---
 
@@ -67,13 +67,13 @@ Per-crate detail: generated [crate map](spec/reference/crate-map.md) + each crat
 | **Roadmap** | [roadmap.md](roadmap.md) | Pointer to direction and the backlog |
 | **Backlog** | [future-work/backlog.md](future-work/backlog.md) | Next implementation items only |
 | **Doc authority** | [spec/reference/doc-authority.md](spec/reference/doc-authority.md) | What each document may claim |
-| **Failure modes** | [spec/architecture/failure-modes.md](spec/architecture/failure-modes.md) | Six recurring bug classes |
+| **Failure modes** | [spec/architecture/failure-modes.md](spec/architecture/failure-modes.md) | Seven recurring bug classes |
 | **Architecture decisions** | [decisions/README.md](decisions/README.md) | ADRs (why this design) |
 | **Config spec** | [spec/config-spec.md](spec/config-spec.md) | TOML config file contract |
 | **Dispatch logic** | [spec/dispatch-logic-spec.md](spec/dispatch-logic-spec.md) | Dispatcher design |
 | **API reference** | [spec/reference/api.md](spec/reference/api.md) | HTTP/SSE surface |
 | **Tuning** | [spec/reference/tuning.md](spec/reference/tuning.md) | All behavioral knobs |
-| **Mutation testing** | [validation/mutation-testing-plan.md](validation/mutation-testing-plan.md) | Plan + results across 13 crates |
+| **Mutation testing** | [validation/mutation-testing-plan.md](validation/mutation-testing-plan.md) | Plan, plus per-crate reports under [validation/mutation-testing/](validation/mutation-testing/) |
 | **Coverage gaps** | [validation/coverage-gaps.md](validation/coverage-gaps.md) | Historical llvm-cov snapshot (2026-07-29); see `mutation-testing-plan.md` for the executable guarantee |
 | **Invariants** | [spec/architecture/failure-modes.md](spec/architecture/failure-modes.md) §6 | "Two things that should agree" |
 
@@ -81,9 +81,9 @@ Per-crate detail: generated [crate map](spec/reference/crate-map.md) + each crat
 
 ## Product frame
 
-Personal assistant first: the data, the rules, and reliable delivery. The coding pack is frozen. Security and reliability basics are next. See [direction.md](direction.md) and the [backlog](future-work/backlog.md).
+Personal assistant first: the data, the rules, and reliable delivery. The coding pack is frozen. For what to build next, read the [backlog](future-work/backlog.md). See also [direction.md](direction.md).
 
-**Recently hardened (2026-07-30):** complete mutation testing pass (13 crates), Tier-1 conformance suite (L1–L11), dual-guard conformance tests, negative-case API tests, cargo-deny CI gate, session state-machine invariants, JSONL rehydration fuzzing, provider wire-body seam tests. See [validation/](validation/).
+**Recently hardened (2026-07-30):** a mutation testing pass over the core crates (per-crate reports under [validation/mutation-testing/](validation/mutation-testing/)), Tier-1 conformance suite (L1–L11), dual-guard conformance tests, negative-case API tests, cargo-deny CI gate, session state-machine invariants, JSONL rehydration fuzzing, provider wire-body seam tests. See [validation/](validation/).
 
 ---
 
@@ -95,4 +95,4 @@ Personal assistant first: the data, the rules, and reliable delivery. The coding
 
 **Checking links:** run `just check-links` (or `cargo run --locked -p liberado-cli -- docs check-links`) to verify every relative markdown link in `docs/`, the repo-root `README.md`, and every `crates/*/ARCHITECTURE.md` resolves to a real file, resolved from each linking file's directory. External `http(s)`/protocol URLs and `.secret` files are skipped, so the check never needs network access. CI enforces the same check in the `doc-links` job.
 
-**Last updated:** 2026-09-18 — archived stale `docs/project/handoff.md` and `docs/project/design_questions.md` (2026-07 diary / closed questions) to `docs/future-work/archive/`. The empty `docs/project/` directory was removed; the `project/` row in the folder-structure table is gone with it.
+**Last updated:** 2026-11-20 — corrected stale counts, wrong crate paths, and the crate-architecture link. The 2026-09-18 archive of `docs/project/handoff.md` and `docs/project/design_questions.md` into `docs/future-work/archive/` still stands.

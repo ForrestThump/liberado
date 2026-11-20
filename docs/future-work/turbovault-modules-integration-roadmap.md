@@ -22,7 +22,7 @@ daemon working, staying loosely coupled, and minimizing upstream maintainer fric
 **Relationship to other docs**: this is the *umbrella*. The vault-events vertical already has a deep
 implementation plan — [`turbovault-vault-events-plugin-plan.md`](turbovault-vault-events-plugin-plan.md).
 This doc sits above it, tracks **tasks** / **vector** status, defines shared conventions, and ties
-into [`roadmap.md`](../roadmap.md).
+into the backlog ([`backlog.md`](backlog.md)).
 
 > If this conflicts with a newer maintainer comment on #33/#34/#39, the maintainer comment wins —
 > update this file.
@@ -49,7 +49,7 @@ into [`roadmap.md`](../roadmap.md).
 - **None of the three blocks Liberado P1.** The daemon already perceives the vault via its own watcher
   (the `L0` fallback). Modules are a **consolidation + capability + synergy** play. With vector + tasks
   live, Liberado's *remaining* P1 is the phone-grade interfacing loop (W1 / E5-b), not vault storage —
-  see [`roadmap.md`](../roadmap.md). *Don't let module polish derail the daily-driver bar.*
+  see [`backlog.md`](backlog.md). *Don't let module polish derail the daily-driver bar.*
 - **Actual build order diverged productively:** scaffolding + **vector** landed on `develop` first
   (highest capability payoff once the engine existed); **tasks** completed as a clean extraction on
   `feat/plugin-tasks`. **Next module work: land tasks onto `develop`, then `vault_events`.**
@@ -281,8 +281,9 @@ kept as a record of how the modules were expected to land against that old page.
 | **Liberado todos** | **Live** — briefs and chat drive tasks through TurboVault. |
 | **Nice-to-have: A2A / mesh** | Unchanged. |
 
-**Wired into [`roadmap.md`](../roadmap.md)** (2026-07-19): cross-cutting TurboVault modules line +
-"Recently landed" entry for live vector/tasks + "What's next" one-screen summary.
+**Was wired into [`roadmap.md`](../roadmap.md)** (2026-07-19): cross-cutting TurboVault modules line +
+"Recently landed" entry for live vector/tasks + "What's next" one-screen summary. `docs/roadmap.md`
+is now a pointer to the direction and the backlog, so that line is gone. (Re-checked 2026-11-20.)
 
 ---
 

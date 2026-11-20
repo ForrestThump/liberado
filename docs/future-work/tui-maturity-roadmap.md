@@ -13,7 +13,13 @@ open_items: true
 
 # Liberado TUI — Maturity Audit & Revamped Roadmap
 
-**Status**: audit 2026-07-10 · living roadmap  
+**Status**: audit 2026-07-10 · living roadmap
+**Snapshot note (2026-11-20)**: the audit, the capability matrix, and the size table are a
+2026-07-10 snapshot. The goal surface has since landed: the TUI has a goal client
+(`crates/tui/src/api.rs`), a goal sidebar (`crates/tui/src/render/goal_sidebar.rs`), a unified
+session switcher listing chats and goal sessions (`crates/tui/src/app.rs`), and a working fork
+(`POST /api/sessions/{id}/fork`). The entries marked below as updated say so; read them as current
+and treat the rest of the matrix as history.  
 **Crate**: [`crates/tui`](../../crates/tui/)  
 **Peers (UX bar)**: Claude Code, Grok Build, OpenCode, KiloCode, VTCode  
 **Related**: [`crates/tui/ARCHITECTURE.md`](../../crates/tui/ARCHITECTURE.md), [`crates/tui/ROADMAP.md`](../../crates/tui/ROADMAP.md) (historical), [`../spec/reference/api.md`](../spec/reference/api.md), goal sessions (`liberado-session` / `/api/goals*`), agentic mesh (`docs/spec/architecture/agentic-loops.md`), WebUI [`crates/webui`](../../crates/webui/)
@@ -29,7 +35,7 @@ open_items: true
 | **Architecture** | Solid thin client; Action/Effect; decomposed handlers/render | Thin client over daemon | Small |
 | **WebUI reuse** | Partial (`chat-client-contract`, theme, markdown, commands) | Shared client core for chat + goals | **High** |
 | **Chat usability** | Works: stream, tools chips, sidebar, themes, slash cmds | Fast chat + history | Medium |
-| **Agent / goal UX** | **Absent** — no goal sessions, freeze, planner, verifiers | Goal mode, plan, cancel, live tools | **Critical** |
+| **Agent / goal UX** | **Partly present** (updated 2026-11-20) — goal sessions, a goal sidebar, a unified session switcher, and a working fork are in the tree; no planner or verifier panel yet | Goal mode, plan, cancel, live tools | Medium |
 | **Coding agent UX** | Not a coding TUI (no diff, worktree, PR, gates) | Claude Code / OpenCode / Grok Build | **Critical** |
 | **Speed / feel** | Acceptable; full redraw + full markdown reparse every frame | Sub-frame stream paint, zero jank | High |
 | **Polish / density** | Functional, life-ops sidebar heavy | Command palette, dense HUD, status tokens | High |
@@ -110,13 +116,17 @@ EffectRunner → HTTP/SSE → Action channel → App::update → redraw
 
 | Area | Lines (approx) |
 |---|---|
-| `app/tests.rs` | 1.8k |
-| `app.rs` | 0.6k |
-| `effects.rs` | 0.4k |
-| `render/chat.rs` | 0.3k |
-| Rest of crate | ~2k |
+| `app/tests.rs` | 3.6k |
+| `app.rs` | 1.9k |
+| `effects.rs` | 0.8k |
+| `render/chat.rs` | 0.7k |
+| Rest of crate | ~8k |
 
-Tests are a real asset. The risk is **product surface lagging API surface** (`/api/goals*` exists; TUI ignores it).
+Sizes updated 2026-11-20; the whole crate is ~15.6k lines.
+
+Tests are a real asset. The risk is **product surface lagging API surface**. The TUI does read
+`/api/goals*` now (updated 2026-11-20), but the goal client lives inside `crates/tui/src/api.rs`
+and the WebUI has its own `/api/goals` HTTP calls, so §1.1 rule 4 is still unmet.
 
 ---
 
@@ -131,7 +141,7 @@ Peers (Claude Code, Grok Build, OpenCode, KiloCode, VTCode) are not “pretty ch
 | Conversational chat | ✓ | ✓ |
 | Streaming tokens | ✓ | ✓ |
 | Live tool timeline | ✓ dense | △ chips only |
-| **Goal / agent mode** | ✓ first-class | ✗ |
+| **Goal / agent mode** | ✓ first-class | ✓ partial (updated 2026-11-20: goal client, goal sidebar, session switcher) |
 | Plan before act | ✓ | ✗ (planner exists in backend only) |
 | Verifier / CI-in-loop UI | ✓ (tests/lint as first-class) | ✗ |
 | Criteria freeze / intake | rare | ✗ (backend ready) |
@@ -199,8 +209,10 @@ Until the TUI **drives goal sessions**, dogfooding the agentic stack stays on CL
 6. **Slash commands** work but no **fuzzy command palette** (Ctrl+K / Ctrl+P class).  
 7. **No visual hierarchy** for system vs tool vs assistant (peers use columns / collapsible trees).  
 8. **ARCHITECTURE shortcuts table** incomplete vs actual keybinds (Ctrl+S, mouse, etc.).  
-9. **No goal session list** despite server support.  
-10. **Fork** command exists as stub while server support was “pending” — dead ends hurt trust.
+9. **No goal session list** despite server support. → **Fixed** (updated 2026-11-20): the unified
+   session switcher lists chats and goal sessions.  
+10. **Fork** command exists as stub while server support was “pending” — dead ends hurt trust. →
+   **Fixed** (updated 2026-11-20): the TUI calls `POST /api/sessions/{id}/fork`.
 11. **Network calls in the effect loop have no timeout** — the stop button is the one that hurts.
     See §5.1.1.
 

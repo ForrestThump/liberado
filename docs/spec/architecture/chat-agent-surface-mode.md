@@ -43,8 +43,8 @@ This plan locks **Reading B**. The reasons are concrete:
    not touched. The shelf split is a **client-side** distinction; the
    kernel does not branch on it.
 3. **The stamp is operator-visible.** `agent_profiles` is a small,
-   named, configurable set (default: `coding`, `life`, `researcher`; see
-   §3). Adding a new specialist hat means adding a name, not a kernel
+   named, configurable set (default: `coding`, `life`, `operator`,
+   `researcher`; see §3). Adding a new specialist hat means adding a name, not a kernel
    change. Jev's eventual "which agent does this belong to" wedge reads
    more naturally against an addressable set of named profiles than
    against a projection of `goal.is_some()`.
@@ -74,7 +74,7 @@ profile one.
 ## 3. How `create` picks chat vs agent
 
 The stamp is decided in **one** place: `ChatSessions::create_conversation`
-in `crates/main-agent/src/sessions.rs`. Every create path routes through
+in `crates/main-agent/src/sessions/surface_mode.rs`. Every create path routes through
 it (`create`, `create_with_grant`, `create_background`, `create_incognito`,
 plus the kernel's `SessionStore::create_session` for goal sessions, and
 the chat lens's `to_conversation_header` for legacy rows).
@@ -82,7 +82,7 @@ the chat lens's `to_conversation_header` for legacy rows).
 The decision:
 
 ```
-stamp_surface_mode(grant: &SessionGrant, explicit: Option<SurfaceMode>) -> SurfaceMode
+stamp_surface_mode(grant: &SessionGrant, explicit: Option<SurfaceMode>, profiles: &AgentProfiles) -> SurfaceMode
     if let Some(m) = explicit: return m
     if let Some(profile) = grant.profile.as_deref():
         if profile is in agent_profiles: return Agent

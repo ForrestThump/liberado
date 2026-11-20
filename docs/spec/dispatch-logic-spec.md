@@ -386,7 +386,7 @@ pub struct JobHandle {                // returned immediately for Detach (and on
 | `MAX_REACTION_DEPTH` | 4 | Correlation-chain depth before a cascade is halted (shared with concurrency spec). |
 | `MAX_CONCURRENT_SUBAGENTS` | 2 | In-flight subagent cap (KV-cache / homelab bound); excess queues. |
 | `DETACH_SOFT_TIMEOUT` | 20s | Await → Detach promotion point for foreground dispatches. |
-| `dispatcher_model` | fast/cheap | Model for classification (provider-agnostic; may differ from main & subagents). |
+| `dispatcher_model` | fast/cheap | Model for classification (provider-agnostic; may differ from main & subagents). Not a `tuning.toml` key: it is `[roles.dispatcher].model` in `topology.toml`. |
 | `guidance_match_floor` | tuned | Procedural-memory score above which the §5 short-circuit fires. |
 
 ---

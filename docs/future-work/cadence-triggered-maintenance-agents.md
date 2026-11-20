@@ -106,14 +106,20 @@ The first is sufficient on its own and is a few lines. The other two are cheap i
 
 ## Do not build this yet
 
-**The harness cannot currently measure its own runs.** As of 2026-08-10 the trace is incomplete for
-multi-attempt runs — 122 tool calls on the wire, 76 recorded — and three harness bugs are open
-including one where a completed run is discarded because a reviewer call returned empty
+**The harness could not measure its own runs.** As of 2026-08-10 the trace was incomplete for
+multi-attempt runs — 122 tool calls on the wire, 76 recorded — and three harness bugs were open
+including one where a completed run was discarded because a reviewer call returned empty
 ([`coder-harness-reliability-2026-08.md`](coder-harness-reliability-2026-08.md)).
 
 Automating dispatch multiplies whatever the harness currently does, including the parts that are
 wrong, and removes the human who would notice. The prerequisite is not more capability; it is
-knowing what a run actually did. Fix the trace gap first.
+knowing what a run actually did.
+
+**That gate is lifted.** PR #124 closed the trace gap: the attempt body moved into `attempt_body`,
+`run_attempt` writes the trace on every exit path, and `CoderEvent::SessionAborted` records a crash
+and its reason. Measurements taken after 2026-08-10 are complete. The open items below are
+re-checked against the tree before any build starts; this document is retained design, not a
+commitment to build it.
 
 ---
 

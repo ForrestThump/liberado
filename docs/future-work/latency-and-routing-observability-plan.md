@@ -36,16 +36,16 @@ measure, and today we measure nothing on this path.
 
 ## 1. The problem — the hop chain
 
-Deployed mode is **face-agent mode** (`server/src/lib.rs:549`: `chat: face-agent mode`). For a chat
+Deployed mode is **face-agent mode** (`server/src/lib.rs`: `chat: face-agent mode`). For a chat
 message that needs any real-world action, one user turn walks:
 
 ```
 user prompt
   └─ FACE turn #1        LLM (+thinking)   main-agent/src/face.rs  — decides to call `delegate`
-       └─ delegate       blocks on hub.await_terminal (face.rs:114) — chat turn stalls here
-            └─ DISPATCHER LLM (+thinking)  dispatch-pack/src/lib.rs:170 — classify → DispatchDecision
+       └─ delegate       blocks on hub.await_terminal (`main-agent/src/face.rs`) — chat turn stalls here
+            └─ DISPATCHER LLM (+thinking)  `dispatch-pack/src/lib.rs` — classify → DispatchDecision
                  └─ ORCHESTRATOR  LLM loop (+thinking, ≥1 turn, maybe parallel subagents)
-                                             dispatch-pack/src/lib.rs:200 / orchestrator/src/lib.rs
+                                             `dispatch-pack/src/lib.rs` / `orchestrator/src/lib.rs`
             ◀─ compact report string
   └─ FACE turn #2        LLM (+thinking)   face.rs — phrases the report into the user-facing reply
 final response
@@ -57,7 +57,7 @@ each consumes the previous one's output. Two of the four (the dispatcher classif
 turn #2) are "glue" calls that rarely need a strong thinking model at all.
 
 Secondary pain: while `delegate` blocks (step 2), the chat SSE goes **quiet**. The subagent *is*
-emitting `SessionEventKind::Progress` events (`dispatch-pack/src/lib.rs:189`) but those go to the
+emitting `SessionEventKind::Progress` events (`dispatch-pack/src/lib.rs`) but those go to the
 goal-session stream, not the chat surface — so the user stares at dead air, which makes the real
 latency feel worse than it is.
 
@@ -89,7 +89,7 @@ guess: the orchestrator/report schema gains a `presentation` hint (`direct` | `n
 by the disposition type + a cheap check (terminal kind, single-vs-multi, length). Default to
 `needs_framing` (today's behavior) so this is opt-in and safe. `Clarify`/`Propose` always route
 through the face. This lives around `Report`/`Disposition` (`orchestrator`) and the `delegate` return
-in `face.rs:120-151`.
+in `main-agent/src/face.rs`.
 
 **Win:** removes one strong-model thinking roundtrip from the critical path on a large fraction of
 turns — likely the single biggest interactive-latency lever, and independent of model choice.
@@ -106,7 +106,7 @@ turns — likely the single biggest interactive-latency lever, and independent o
      "understand the human, call delegate, relay the answer."
    - **Orchestrator/subagent:** keep the strong model where the actual work + judgment happens.
    Requires per-role model config (new) — the `Dispatcher`, `Orchestrator`, and face `build_chat`
-   construction sites (`server/src/lib.rs:444+`) each take a provider; wire distinct providers/models
+   construction sites (`server/src/lib.rs`) each take a provider; wire distinct providers/models
    there. **Measure per-role before choosing** — see §4.
 
 2. **Disable thinking where it earns nothing.** Even before swapping models, turn off reasoning
@@ -148,10 +148,12 @@ later, measurement-gated.
 - **No wall-clock timing** anywhere hot — zero `Instant::now()/elapsed()` in `provider`,
   `dispatcher`, `orchestrator`, or the face bridge.
 - **Spans don't emit durations.** `info_span!`s exist in dispatcher/orchestrator, but the serve-path
-  subscriber (`cli/src/main.rs:22`) is plain `fmt()` — no `FmtSpan::CLOSE`, no JSON — so span timings
+  subscriber (`cli/src/lib.rs`) is plain `fmt()` — no `FmtSpan::CLOSE`, no JSON — so span timings
   never print and logs aren't machine-parseable.
 - **Tokens parsed but dropped.** `Usage` (prompt/completion/total) is parsed in
-  `provider/src/openai_compat.rs:311` and then discarded; `/api/status.token_usage_total` is `null`.
+  `provider/src/openai_compat.rs` and then discarded. `/api/status.token_usage_total` was `null`
+  when this was written; it is now filled with context occupancy, not money (see
+  [`token-cost-accounting-plan.md`](token-cost-accounting-plan.md)).
 - **The dispatch journal is two bookends.** `.liberado/dispatches/<cid>.jsonl` holds only `start` and
   `disposition` records (`main-agent/src/dispatch_journal.rs`) — nothing between, and **nothing for
   the two face turns**, which are the roundtrips we most want to cut.
@@ -178,8 +180,8 @@ one query, not a stopwatch.
    `orchestrator`) is passed down from the call site. This alone gives per-hop timing + tokens for
    free across the whole system.
 2. **Add stage timing** with `Instant` at the seams: dispatch decision vs orchestrate in
-   `dispatch-pack/src/lib.rs:170/200`; queue-wait + subagent wall in `DispatchBridge.delegate`
-   (`face.rs`); and the two face turns in `chat_stream_core` (`server/src/api.rs`).
+   `dispatch-pack/src/lib.rs`; queue-wait + subagent wall in `DispatchBridge.delegate`
+   (`face.rs`); and the two face turns in `chat_stream_core` (`server/src/api/chat.rs`).
 3. **Write a latency journal** — either extend the dispatch journal with a `turn` record per LLM call
    plus per-stage durations, or a sibling `.liberado/latency/<cid>.jsonl`. Must include the face
    turns (extend the journal's scope up into `chat_stream_core`, keyed by the same `correlation_id`).
@@ -204,7 +206,7 @@ the §2/§3 tuning and compare against that baseline. Do not tune before the bas
 ### Why the face delegated vault work even when it held the turbovault tools
 
 Not a bug in routing — the **face system prompt makes it delegate regardless of what tools are in
-context**. `HUMAN_INTERFACE_SYSTEM_PROMPT` (`crates/main-agent/src/lib.rs:39`) is emphatic and
+context**. `HUMAN_INTERFACE_SYSTEM_PROMPT` (`crates/main-agent/src/lib.rs`) is emphatic and
 "non-negotiable": *"You are a face agent, not a tool user… **Do not** try to enumerate tools from
 your own context. You will usually see only `delegate`… Delegation is how work gets done."* The
 `delegate` tool description reinforces it: *"you do NOT have those tools yourself."* So when the box
@@ -252,9 +254,12 @@ regression-safe. Likely a new `crates/…` bin or a `deploy/homelab/` script hit
 - Face agent + `delegate` bridge: `crates/main-agent/src/face.rs`
 - Dispatch journal: `crates/main-agent/src/dispatch_journal.rs`
 - Dispatch pack (dispatch → orchestrate): `crates/dispatch-pack/src/lib.rs`
-- Dispatcher (classification LLM): `crates/dispatcher/src/lib.rs:113`
-- Orchestrator (subagent loop): `crates/orchestrator/src/lib.rs:316`
-- Provider completion + `Usage` parse: `crates/provider/src/openai_compat.rs:311`
-- Chat SSE turn: `crates/server/src/api.rs` (`chat_stream_core`)
-- Chat assembly / face-agent mode: `crates/server/src/lib.rs:444` (`build_chat`), `:549`
-- Serve-path tracing init: `crates/cli/src/main.rs:22`
+- Dispatcher (classification LLM): `crates/dispatcher/src/lib.rs`
+- Orchestrator (subagent loop): `crates/orchestrator/src/lib.rs`
+- Provider completion + `Usage` parse: `crates/provider/src/openai_compat.rs`
+- Chat SSE turn: `crates/server/src/api/chat.rs` (`chat_stream_core`)
+- Chat assembly / face-agent mode: `crates/server/src/lib.rs` (`build_chat`)
+- Serve-path tracing init: `crates/cli/src/lib.rs`
+
+Line numbers are omitted on purpose. They drift on every refactor and were already wrong by
+2026-11-20; the file paths are the durable anchor.

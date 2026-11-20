@@ -62,9 +62,10 @@ the note in place — never lost, never re-executed.
 
 ## Dependencies
 
-- Depends on: `liberado-common`, `liberado-vault` (attribution), `liberado-dispatcher`,
-  `liberado-orchestrator` (execution).
-- Depended on by: `cli`.
+- Depends on: `liberado-common`, `liberado-config`, `liberado-cron`, `liberado-dispatcher`,
+  `liberado-notify`, `liberado-outbox`, `liberado-orchestrator` (execution), `liberado-provider`,
+  `liberado-session`, `liberado-vault` (attribution).
+- Depended on by: `liberado-bootstrap`, `liberado-server`, `liberado-telegram-approvals`.
 
 ## Tests
 

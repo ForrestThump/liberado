@@ -11,8 +11,9 @@ open_items: true
 
 > Evidence, not a work queue. Read this before changing the coding pack. Select the change from [`backlog.md`](backlog.md).
 
-**Status**: Active. Fixes through PR #119 are on `main`. The measurement is real but incomplete —
-read [Where the numbers came from](#where-the-numbers-came-from) before quoting it.
+**Status**: Active. Fixes through PR #119 are on `main`, and later fixes through PR #170 and after are
+too. The measurement is real but incomplete — read
+[Where the numbers came from](#where-the-numbers-came-from) before quoting it.
 
 Compare 3 (F12, 2026-08-13) later showed that compile and thinking worked while repair feedback
 reduced a failing suite to `cargo exited 101`. PR #170 fixed the excerpt selection. The controlled

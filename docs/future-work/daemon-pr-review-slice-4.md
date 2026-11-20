@@ -155,7 +155,9 @@ Acceptance:
 - The smoke fails on a write request, leaked forge credential, changed checkout, wrong SHA,
   malformed result, pager, or unbounded wait.
 - A failed OpenCode smoke cannot alter route policy or publish a review.
-- The configured provider and model satisfy `zero_only`.
+- The configured provider and model satisfy the configured price policy. (Updated 2026-11-20:
+  Forrest's 2026-09-10 lock replaced `zero_only` with `pricing_policy = "named"` and the
+  `openrouter/deepseek/deepseek-v4-flash` pin. The validator accepts `named` or `zero_only`.)
 
 ## Phase 4c — opt-in OpenCode
 
@@ -199,8 +201,10 @@ all gates pass.
 
 OpenCode and Grok Build are harnesses: each owns a process protocol, tool loop, permission model,
 and result framing. OpenRouter is a provider, not a harness. A later free-router worker can use
-OpenRouter through provider HTTP policy, but it does not replace `OpenCodeReviewPort` or
-`GrokBuildReviewPort`.
+OpenRouter through provider HTTP policy, but it does not replace `OpenCodeReviewPort` or the
+print/headless review ports for Cursor and Grok Build. (Updated 2026-11-20: there is no
+`GrokBuildReviewPort` type. `PromptReviewPort::grok` and `PromptReviewPort::cursor` are the two
+constructors of the print-adapter port, in `crates/server/src/pr_review_dispatch.rs`.)
 
 Free-router remains deferred past the first multi-harness ship. If it returns later, only proved
 zero-price candidates are eligible unless Forrest names a paid policy. HTTP 402 belongs to that

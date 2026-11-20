@@ -1,8 +1,8 @@
 # liberado-common — shared types (the vocabulary)
 
-The foundation crate: pure data types and their invariants, **no logic, no I/O, no async**. Every
-other crate speaks in these types, so they are the system's shared vocabulary. If a type is used by
-two or more crates, it lives here.
+The foundation crate: shared data types and their invariants, **no I/O and no async runtime work**.
+Every other crate speaks in these types, so they are the system's shared vocabulary. If a type is
+used by two or more crates, it lives here.
 
 ## Modules
 
@@ -49,7 +49,8 @@ vocabulary every crate compiles against regardless of whether it touches config.
 
 ## Dependencies
 
-- Depends on: only `serde`, `chrono`, `chrono-tz`, `thiserror` (no internal crates).
+- Depends on: no internal crates. External: `async-trait`, `serde`, `serde_json`, `serde_norway`,
+  `chrono`, `chrono-tz`, `thiserror`, `tokio`, `toml`, `hmac`, `sha2`, `rand`.
 - Depended on by: essentially everything (`vault`, `dispatcher`, `executor`, `mcp`, `orchestrator`,
   `daemon`, `provider-*` indirectly).
 
