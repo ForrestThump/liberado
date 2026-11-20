@@ -1,7 +1,7 @@
 # Liberado — homelab topology (headless daemon, in-container).
 #
 # Provider: OpenRouter → DeepSeek v4 Pro. MCPs: HTTP peers on the `homelab` bridge
-# (Compose already runs them; we only connect). See docs/roadmap/mcp-homelab-wire-plan.md.
+# (Compose already runs them; we only connect). See docs/future-work/archive/mcp-homelab-wire-plan.md.
 #
 # TOML: all root keys MUST appear before any [table] header.
 
@@ -257,7 +257,7 @@ visualize           = ["output"]
 
 # --- Search ------------------------------------------------------------------
 # turbomcp: multi-provider routing + failover + AI reranking. searxng-mcp was dropped once this was
-# proven in production (see docs/roadmap/mcp-suite-standardization.md).
+# proven in production (see docs/future-work/mcp-suite-standardization.md).
 [[mcps]]
 name = "liberado-search-orchestrator-mcp"
 description = "Web and news search: multi-provider routing, failover, AI reranking"
