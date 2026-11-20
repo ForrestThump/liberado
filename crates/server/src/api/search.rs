@@ -23,13 +23,18 @@ pub struct SearchQuery {
     pub regex: bool,
     #[serde(default = "default_search_limit")]
     pub limit: usize,
+    /// Topology project name or user project id. Absent searches every chat.
+    #[serde(default)]
+    pub project: Option<String>,
 }
 
 fn default_search_limit() -> usize {
     20
 }
 
-/// `GET /api/conversations/search?q=...&regex=false&limit=20`
+/// `GET /api/conversations/search?q=...&regex=false&limit=20&project=`
+///
+/// `project`, when set, keeps only chats stored on that topology name or user project id.
 ///
 /// Searches conversation history for messages matching `q`. In literal mode (default), `q` is
 /// split on whitespace; `"quoted phrases"` are treated as single terms; ALL terms must appear in
@@ -64,7 +69,12 @@ pub async fn search_conversations(
     };
 
     let limit = query.limit.clamp(1, 200);
-    match liberado_chat_search::search(&state.sessions_root, &parsed, limit).await {
+    let project = query
+        .project
+        .as_deref()
+        .map(str::trim)
+        .filter(|name| !name.is_empty());
+    match liberado_chat_search::search_in(&state.sessions_root, &parsed, limit, project).await {
         Ok(sr) => {
             let total_found = sr.total_found;
             let results = sr

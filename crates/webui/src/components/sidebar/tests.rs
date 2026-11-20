@@ -3,9 +3,10 @@
 //! Split from `sidebar.rs` for module-health boundaries.
 
 use super::agents::{pinned, row_dot_color, truncate_title};
+use super::rail::nav_row_active;
 use super::{
-    delete_accepted, deleted_the_open_conversation, page_from_list, relative_time, rename_accepted,
-    rename_body,
+    Route, delete_accepted, deleted_the_open_conversation, page_from_list, relative_time,
+    rename_accepted, rename_body,
 };
 
 fn ago(dur: chrono::Duration) -> String {
@@ -215,14 +216,75 @@ fn short_titles_pass_through() {
 }
 
 /// The projects `+` used to open a Create dialog that only closed. Projects are
-/// declared in topology.toml, so the sidebar must not offer that action.
+/// a primary-nav button. The sidebar must not offer that action, and the chat
+/// list is the only region that scrolls.
 #[test]
 fn the_projects_section_does_not_offer_create() {
     let sidebar = include_str!("mod.rs");
     assert!(!sidebar.contains("Create project"));
     assert!(!sidebar.contains("ProjectsDialog"));
     assert!(!sidebar.contains("on_create"));
-    assert!(sidebar.contains("sidebar-section-label\", \"Projects\""));
+    assert!(!sidebar.contains("Manage plugins"));
+    assert!(!sidebar.contains("sidebar-section-label\", \"Projects\""));
+    assert!(!sidebar.contains("sidebar-section-label\", \"Plugins\""));
+    assert!(sidebar.contains("class: \"sidebar-history-label\", \"Recents\""));
+    let projects_at = sidebar
+        .find("target: Route::Projects")
+        .expect("Projects nav row");
+    let plugins_at = sidebar
+        .find("target: Route::Plugins")
+        .expect("Plugins nav row");
+    let history_at = sidebar
+        .find("class: \"sidebar-history\"")
+        .expect("history block");
+    let shelves_at = sidebar
+        .find("class: \"sidebar-shelves\"")
+        .expect("Chats and Agents toggle");
+    let scroll_at = sidebar
+        .find("class: \"sidebar-scroll\"")
+        .expect("history list");
+    assert!(projects_at < plugins_at);
+    assert!(plugins_at < history_at);
+    assert!(history_at < shelves_at);
+    assert!(shelves_at < scroll_at);
+
+    assert!(nav_row_active(Route::Projects, Route::Projects));
+    assert!(nav_row_active(Route::Projects, Route::ProjectDetail));
+    assert!(!nav_row_active(Route::Projects, Route::Chat));
+    assert!(nav_row_active(Route::Chat, Route::ChatSession));
+    assert!(nav_row_active(Route::Plugins, Route::Plugins));
+    assert!(!nav_row_active(Route::Plugins, Route::Projects));
+    assert!(nav_row_active(Route::Notifications, Route::Notifications));
+    assert!(!nav_row_active(
+        Route::Notifications,
+        Route::NotificationDetail(1)
+    ));
+
+    let css = include_str!("../../styles/main.css");
+    let history = css_block(css, ".sidebar-history");
+    assert!(history.contains("flex: 1 1 auto"), "{history}");
+    assert!(history.contains("min-height: 0"), "{history}");
+    assert!(history.contains("display: flex"), "{history}");
+    assert!(history.contains("flex-direction: column"), "{history}");
+    assert!(
+        history.contains("border-top:"),
+        "the history block needs a divider under the nav: {history}"
+    );
+    let scroll = css_block(css, ".sidebar-scroll");
+    assert!(scroll.contains("flex: 1 1 auto"), "{scroll}");
+    assert!(scroll.contains("min-height: 0"), "{scroll}");
+    assert!(scroll.contains("overflow-y: auto"), "{scroll}");
+    let phone = css
+        .split("/* phone-sidebar-drawer */")
+        .nth(1)
+        .expect("phone drawer styles")
+        .split("/* phone-sidebar-drawer-end */")
+        .next()
+        .expect("phone drawer end");
+    let drawer = css_block(phone, ".grok-layout.drawer-open .sidebar");
+    assert!(drawer.contains("height: 100dvh"), "{drawer}");
+    assert!(drawer.contains("min-height: 0"), "{drawer}");
+    assert!(drawer.contains("overflow: hidden"), "{drawer}");
 }
 
 #[test]
@@ -253,38 +315,37 @@ fn show_more_label_stays_on_the_chevron_row() {
     assert!(show.contains("Show more ({count})"));
 }
 
-/// Chat, Manage plugins, and the other view links must close the phone drawer.
+/// Chat, Plugins, Projects, and the other view links must close the phone drawer.
 /// A project row already does this through `collapsed_after_pick`.
 #[test]
 fn nav_that_opens_a_view_closes_the_phone_drawer() {
     let sidebar = include_str!("mod.rs");
     let rail = include_str!("rail.rs");
-    let projects = include_str!("projects.rs");
     let primary = rail
         .split("fn PrimaryNavRow")
         .nth(1)
         .expect("PrimaryNavRow");
-    let primary = primary.split("fn ChatBubble").next().unwrap_or(primary);
+    let primary = primary.split("fn nav_row_active").next().unwrap_or(primary);
     assert!(
         primary.contains("close_phone_drawer"),
-        "Chat, Library, and Automations share PrimaryNavRow: {primary}"
+        "the primary nav rows share PrimaryNavRow: {primary}"
     );
-    for target in ["Route::Chat", "Route::Library", "Route::Automations"] {
+    for target in [
+        "Route::Chat",
+        "Route::Library",
+        "Route::Automations",
+        "Route::Notifications",
+        "Route::Projects",
+        "Route::Plugins",
+    ] {
         assert!(
             sidebar.contains(&format!("collapsed: collapsed, target: {target}")),
             "{target} nav must receive the drawer signal"
         );
     }
-    let plugins = projects.split("fn PluginList").nth(1).expect("PluginList");
-    assert!(
-        plugins.contains("close_phone_drawer"),
-        "Manage plugins must close the drawer: {plugins}"
-    );
     for marker in [
         "\"aria-label\": \"Liberado home\"",
         "sidebar-section-label\", \"Agents\"",
-        "sidebar-section-label\", \"Projects\"",
-        "sidebar-section-label\", \"Plugins\"",
     ] {
         assert!(
             window_around(sidebar, marker, 500).contains("close_phone_drawer"),
@@ -406,18 +467,23 @@ fn theme_picker_paints_above_the_chat_and_is_not_clipped() {
     );
 
     let src = include_str!("mod.rs");
-    let scroll_at = src
-        .find("class: \"sidebar-scroll\"")
-        .expect("sidebar scroll");
-    let div_at = src[..scroll_at].rfind("div {").expect("scroll div");
-    let scroll_end = element_end(src, div_at);
     let swatch_at = src
         .rfind("ThemeSwatch { theme_epoch: theme_epoch }")
         .expect("expanded theme swatch");
-    assert!(
-        swatch_at > scroll_end,
-        "ThemeSwatch must be outside .sidebar-scroll or the list clips the picker"
-    );
+    let mut search_from = 0;
+    let mut scrolls = 0;
+    while let Some(rel) = src[search_from..].find("class: \"sidebar-scroll\"") {
+        let scroll_at = search_from + rel;
+        let div_at = src[..scroll_at].rfind("div {").expect("scroll div");
+        let scroll_end = element_end(src, div_at);
+        assert!(
+            swatch_at > scroll_end,
+            "ThemeSwatch must be outside .sidebar-scroll or the list clips the picker"
+        );
+        scrolls += 1;
+        search_from = scroll_at + 1;
+    }
+    assert!(scrolls >= 2, "search and history each need a scroll list");
 
     let rail = include_str!("rail.rs");
     let swatch = rail.split("fn ThemeSwatch").nth(1).expect("ThemeSwatch");

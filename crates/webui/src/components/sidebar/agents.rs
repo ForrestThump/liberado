@@ -171,6 +171,7 @@ fn SidebarRowCompact(
 #[component]
 fn SidebarRowChat(
     conv: ConvHeader,
+    labels: HashMap<String, String>,
     active: Signal<Option<String>>,
     menu_for: Signal<Option<String>>,
     action_error: Signal<Option<String>>,
@@ -188,6 +189,10 @@ fn SidebarRowChat(
     let display = conv_display_title(&conv);
     let seed = conv.title.clone().unwrap_or_default();
     let time = relative_time(&conv.created_at);
+    let badge = conv
+        .project
+        .as_deref()
+        .and_then(|key| labels.get(key).cloned());
     let id_for_pick = id.clone();
     let row_dom_id = conversation_row_dom_id(&id);
     let delete_block = delete_block_for(&id, &[]);
@@ -201,6 +206,9 @@ fn SidebarRowChat(
                 title: "{display}",
                 onclick: move |_| on_pick.call(id_for_pick.clone()),
                 span { class: "grok-row-title", "{display}" }
+                if let Some(badge) = badge {
+                    span { class: "project-badge", "{badge}" }
+                }
                 if !time.is_empty() {
                     span { class: "grok-row-time", "{time}" }
                 }
@@ -349,6 +357,7 @@ pub(super) fn AgentTailList(
 #[component]
 pub(super) fn ChatList(
     items: Vec<ConvHeader>,
+    labels: HashMap<String, String>,
     active: Signal<Option<String>>,
     menu_for: Signal<Option<String>>,
     on_pick: EventHandler<String>,
@@ -362,6 +371,7 @@ pub(super) fn ChatList(
             for conv in items.iter() {
                 SidebarRowChat {
                     conv: conv.clone(),
+                    labels: labels.clone(),
                     active: active,
                     menu_for: menu_for,
                     action_error: action_error,

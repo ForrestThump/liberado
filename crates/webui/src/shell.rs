@@ -117,7 +117,8 @@ pub(crate) fn shell_route_title(route: Route) -> &'static str {
         Route::Projects => "Projects",
         Route::Plugins => "Plugins",
         Route::Imagine => "Imagine",
-        Route::Chat | Route::ChatSession | Route::AgentSession | Route::ProjectDetail => "Liberado",
+        Route::Chat | Route::ChatSession | Route::AgentSession => "Liberado",
+        Route::ProjectDetail => "Projects",
     }
 }
 
@@ -322,7 +323,7 @@ mod tests {
         assert_eq!(shell_route_title(Route::Chat), "Liberado");
         assert_eq!(shell_route_title(Route::ChatSession), "Liberado");
         assert_eq!(shell_route_title(Route::AgentSession), "Liberado");
-        assert_eq!(shell_route_title(Route::ProjectDetail), "Liberado");
+        assert_eq!(shell_route_title(Route::ProjectDetail), "Projects");
     }
 
     /// The phone bar has to be the first child of the element that actually scrolls.

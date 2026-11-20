@@ -4,7 +4,7 @@
     "proven_invariant": 65,
     "local_failure": 0,
     "process_fatal": 45,
-    "files_scanned": 794,
+    "files_scanned": 801,
     "files_with_unwraps": 49
   },
   "files": {
@@ -1402,7 +1402,7 @@
       "occurrences": [
         {
           "file": "crates/session-store/src/jsonl.rs",
-          "line": 115,
+          "line": 123,
           "column": 9,
           "method": "expect",
           "snippet": "self.ids\n            .lock()\n            .expect(\"id generator mutex poisoned\")",
@@ -1413,7 +1413,7 @@
         },
         {
           "file": "crates/session-store/src/jsonl.rs",
-          "line": 260,
+          "line": 271,
           "column": 9,
           "method": "expect",
           "snippet": "self.write_locks\n            .lock()\n            .expect(\"write-lock registry poisoned\")",
@@ -1424,7 +1424,7 @@
         },
         {
           "file": "crates/session-store/src/jsonl.rs",
-          "line": 446,
+          "line": 457,
           "column": 26,
           "method": "expect",
           "snippet": "prefix.last().expect(\"non-empty\")",

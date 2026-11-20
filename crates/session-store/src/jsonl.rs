@@ -37,6 +37,12 @@ use ulid::Ulid;
 
 use crate::types::{NewSession, SessionHeader};
 
+#[path = "user_projects.rs"]
+mod user_projects;
+pub use user_projects::{
+    ProjectChat, ProjectWriteError, USER_PROJECTS_SCHEMA, UserProject, migrate_catalog_json,
+};
+
 #[path = "jsonl_chat_meta.rs"]
 mod chat_meta;
 use liberado_session::Visibility;
@@ -105,6 +111,8 @@ pub struct SessionStore {
     /// [`with_agent_profiles`](Self::with_agent_profiles). Spec:
     /// `docs/spec/architecture/chat-agent-surface-mode.md`.
     agent_profiles: AgentProfiles,
+    /// User-created chat projects. Not a coding root.
+    projects: Arc<tokio::sync::Mutex<user_projects::UserCatalog>>,
 }
 
 impl SessionStore {
@@ -136,6 +144,7 @@ impl SessionStore {
             write_locks: Arc::new(std::sync::Mutex::new(HashMap::new())),
             ephemeral: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
             agent_profiles: AgentProfiles::default(),
+            projects: Arc::new(tokio::sync::Mutex::new(user_projects::UserCatalog::empty())),
         }
     }
 
@@ -157,6 +166,7 @@ impl SessionStore {
         }
 
         let map = Self::rehydrate(&dir);
+        let projects = user_projects::load_at(&dir);
         tracing::info!(sessions = map.len(), dir = %dir.display(), "session store rehydrated");
 
         Self {
@@ -166,6 +176,7 @@ impl SessionStore {
             write_locks: Arc::new(std::sync::Mutex::new(HashMap::new())),
             ephemeral: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
             agent_profiles: AgentProfiles::default(),
+            projects: Arc::new(tokio::sync::Mutex::new(projects)),
         }
     }
 

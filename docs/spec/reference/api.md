@@ -171,7 +171,8 @@ conversation header (`[{id,title,created_at,project?,pending_model?}]`, newest f
 **`PATCH /api/conversations/{id}`** updates a conversation (`200` on success, `404` if it doesn't
 exist, `400` for an unknown project or an empty body, `503` if chat is disabled). The body may
 include any of `title`, `project`, and `pending_model`. A missing field is left unchanged. `null`
-clears `project` or `pending_model`. `project` must be an enabled name from `GET /api/projects`.
+clears `project` or `pending_model`. `project` must be an enabled name from `GET /api/projects`
+or a user project id from `GET /api/chat-projects`. A user project id does not grant a coding root.
 `pending_model` is the model id for the next turn. That turn stamps the same string on the message
 and clears the field. It does not substitute a different model. `{"title":"..."}` still renames.
 
@@ -235,12 +236,39 @@ Their profile is cleared, so the next turn uses the process default grant. Unkno
 TUI: `/model` opens a full-screen searchable browser over `GET /api/models`; Enter calls
 `POST /api/models/select`.
 
-## Projects (read-only)
+## Projects
 
 `GET /api/projects` returns the enabled `[[projects]]` rows from `topology.toml`:
-`{ "projects": [{ "name", "root", "write_class" }] }`. There is no create, update, or delete
-route. A project is declared in that file. The WebUI lists the rows and can remember a choice
-in the browser. It does not write the topology.
+`{ "projects": [{ "name", "root", "write_class" }] }`. That list is the coding picker.
+It does not include projects a person created in the WebUI, and it has no write route.
+
+`GET /api/chat-projects` returns both kinds:
+`{ "projects": [{ "id", "name", "source", "root"?, "write_class"?, "instructions"? }] }`.
+`source` is `topology` or `user`. Topology rows keep `root` and `write_class`. User rows
+have neither, so they cannot authorize `/goal`.
+
+`POST /api/chat-projects` body `{"name","instructions"?}` creates a user project (`201`).
+The name is required, at most 80 characters, and unique among user projects without regard
+to case. `/` and `\` are rejected. Blank instructions are stored as absent.
+
+`PATCH /api/chat-projects/{id}` renames a user project or replaces its instructions (`200`).
+`name` is optional. `instructions: null` clears the text. A topology id is `400`.
+
+`DELETE /api/chat-projects/{id}` removes a user project (`204`) and clears `project` on its
+chats. The chats stay in the chat list. A topology id is `400`. An unknown id is `404`.
+
+`GET /api/chat-projects/{id}/chats` returns `{ "chats": [{ "id", "title"?, "updated_at" }] }`,
+newest first. Unknown id is `404`.
+
+`GET /projects` and `GET /projects/{id}` return the WebUI `index.html`, the same shell as
+`GET /notifications`. A refresh on a project page stays in the app.
+
+`POST /api/conversations` may include `project`. A standard chat stores it. The agent
+creator and the automation editor ignore the field. An unknown project is `400` and creates
+no chat.
+
+`GET /api/conversations/search` accepts optional `project`. When set, only chats stored on
+that topology name or user project id are returned. Omitting it searches every chat.
 
 ## Library (vault files, v1)
 

@@ -294,25 +294,31 @@ impl ChatSessions {
         settings: &super::TurnSettings,
     ) -> Box<dyn ToolRuntime> {
         if settings.automation_editor {
-            return Box::new(crate::face::EditorRuntime::new(
-                session.to_string(),
-                self.schedule_editor_ops(),
-            ));
+            return super::search_scope::wrap(
+                session,
+                Box::new(crate::face::EditorRuntime::new(
+                    session.to_string(),
+                    self.schedule_editor_ops(),
+                )),
+            );
         }
         let caller_capabilities = capabilities.clone();
         let extras =
             self.scoped_extras_runtime(user, session, capabilities, settings.profile.as_deref());
         let agent_spawner = self.agent_spawner_for_profile(settings.profile.as_deref());
-        self.attach_workspace(
+        super::search_scope::wrap(
             session,
-            Box::new(FaceRuntime::new(
-                self.face_bridge.clone(),
-                extras,
-                Some(session.to_string()),
-                turn_deferral,
-                agent_spawner,
-                caller_capabilities,
-            )),
+            self.attach_workspace(
+                session,
+                Box::new(FaceRuntime::new(
+                    self.face_bridge.clone(),
+                    extras,
+                    Some(session.to_string()),
+                    turn_deferral,
+                    agent_spawner,
+                    caller_capabilities,
+                )),
+            ),
         )
     }
 }

@@ -33,7 +33,10 @@
 mod jsonl;
 mod types;
 
-pub use jsonl::{Record, SessionStore};
+pub use jsonl::{
+    ProjectChat, ProjectWriteError, Record, SessionStore, USER_PROJECTS_SCHEMA, UserProject,
+    migrate_catalog_json,
+};
 pub use liberado_conversation_store::AgentProfiles;
 pub use liberado_conversation_store::{is_agent_creator_profile, is_agent_profile};
 pub use types::{NewSession, SessionHeader};

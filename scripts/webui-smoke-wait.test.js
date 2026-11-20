@@ -5,6 +5,7 @@ const {
   waitForDebugTargets,
   chromeLaunchArgs,
   retryChromeStartup,
+  clientShellPath,
 } = require('./webui-smoke.js');
 
 test('a late Chrome answer is accepted', async () => {
@@ -90,4 +91,13 @@ test('a scenario failure is not launched again', async () => {
     /missing click target/,
   );
   assert.equal(calls, 1);
+});
+
+test('a project or notification path is the app shell', () => {
+  assert.equal(clientShellPath('/projects'), true);
+  assert.equal(clientShellPath('/projects/proj-trip'), true);
+  assert.equal(clientShellPath('/notifications'), true);
+  assert.equal(clientShellPath('/notifications/7'), true);
+  assert.equal(clientShellPath('/wasm/liberado-webui_bg.wasm'), false);
+  assert.equal(clientShellPath('/index.html'), false);
 });

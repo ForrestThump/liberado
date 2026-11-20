@@ -60,7 +60,7 @@ pub async fn patch_conversation(
         )
             .into_response();
     }
-    let project = match checked_project(&state, req.project) {
+    let project = match checked_project(&state, req.project).await {
         Ok(project) => project,
         Err(error) => {
             return (StatusCode::BAD_REQUEST, Json(ApiError { error })).into_response();
@@ -81,8 +81,11 @@ pub async fn patch_conversation(
     StatusCode::OK.into_response()
 }
 
-/// `None` leaves the project. `Some(None)` clears it. A name must be an enabled project.
-fn checked_project(
+/// `None` leaves the project. `Some(None)` clears it.
+///
+/// A key must be an enabled topology project or a user project id. A user
+/// project id does not become a coding root.
+async fn checked_project(
     state: &AppState,
     project: Option<Option<String>>,
 ) -> Result<Option<Option<String>>, String> {
@@ -92,14 +95,10 @@ fn checked_project(
     let Some(name) = project else {
         return Ok(Some(None));
     };
-    let name = name.trim();
-    if name.is_empty() {
-        return Ok(Some(None));
+    match super::super::chat_projects::accepted_project(state, Some(&name)).await? {
+        Some(name) => Ok(Some(Some(name))),
+        None => Ok(Some(None)),
     }
-    if state.config.project_by_name(name).is_none() {
-        return Err(format!("unknown project: {name}"));
-    }
-    Ok(Some(Some(name.to_string())))
 }
 
 /// `None` leaves the pick. Blank text clears it. Any other string is stored unchanged.
