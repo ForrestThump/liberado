@@ -1,6 +1,6 @@
 # Liberado — Architecture
 
-Liberado is a **Rust-native personal AI Liberado**: a daemon that watches your Obsidian vault, reasons
+Liberado is a **Rust-native personal AI system**: a daemon that watches your Obsidian vault, reasons
 about changes with an LLM, and acts on your behalf through tools — safely, and without reacting to its
 own work. This document is the cold-start map. Each crate has its own zoomed-in
 `crates/<name>/ARCHITECTURE.md`.
