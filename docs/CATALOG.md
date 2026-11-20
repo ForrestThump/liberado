@@ -40,6 +40,7 @@ Authority model: [doc-authority.md](spec/reference/doc-authority.md).
 | [docs/direction.md](direction.md) | plan | active | advisory | product | product-direction |
 | [docs/future-work/2026-10-11-vault-write-gate-audit.md](future-work/2026-10-11-vault-write-gate-audit.md) | finding | active | evidence | security | vault-write-gate-audit |
 | [docs/future-work/2026-10-11-vault-write-gate-deploy.md](future-work/2026-10-11-vault-write-gate-deploy.md) | runbook | draft | advisory | security | — |
+| [docs/future-work/2026-11-20-architecture-direction-mcp-handoff-brief.md](future-work/2026-11-20-architecture-direction-mcp-handoff-brief.md) | plan | draft | advisory | product | architecture-direction-mcp-handoff-brief |
 | [docs/future-work/README.md](future-work/README.md) | index | active | advisory | — | — |
 | [docs/future-work/archive/acp-bridge-completion-roadmap.md](future-work/archive/acp-bridge-completion-roadmap.md) | plan | superseded | advisory | acp | acp-bridge-completion |
 | [docs/future-work/archive/chat-search-plan.md](future-work/archive/chat-search-plan.md) | plan | implemented | advisory | chat | chat-search |

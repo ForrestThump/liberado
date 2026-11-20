@@ -37,6 +37,7 @@ archive/ only after its useful facts live in spec, Rustdoc, or an ADR.
 | Doc | Status | Kind |
 |-----|--------|------|
 | [2026-10-11-vault-write-gate-deploy.md](2026-10-11-vault-write-gate-deploy.md) | draft | runbook |
+| [2026-11-20-architecture-direction-mcp-handoff-brief.md](2026-11-20-architecture-direction-mcp-handoff-brief.md) | draft | plan |
 | [cadence-triggered-maintenance-agents.md](cadence-triggered-maintenance-agents.md) | draft | plan |
 | [coder-eval-curriculum.md](coder-eval-curriculum.md) | draft | plan |
 | [coding-tui-plan.md](coding-tui-plan.md) | draft | plan |
