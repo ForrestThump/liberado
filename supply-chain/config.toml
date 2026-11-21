@@ -64,10 +64,16 @@ audit-as-crates-io = true
 [policy.turbovault-parser]
 audit-as-crates-io = true
 
+[policy.turbovault-plugin-api]
+audit-as-crates-io = true
+
 [policy.turbovault-tools]
 audit-as-crates-io = true
 
 [policy.turbovault-vault]
+audit-as-crates-io = true
+
+[policy.turbovault-vector]
 audit-as-crates-io = true
 
 [[exemptions.ab_glyph]]
@@ -724,10 +730,6 @@ criteria = "safe-to-deploy"
 
 [[exemptions.crc32fast]]
 version = "1.5.0"
-criteria = "safe-to-deploy"
-
-[[exemptions.cron]]
-version = "0.12.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.crossbeam]]
@@ -3665,94 +3667,104 @@ version = "0.28.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.turbomcp]]
-version = "3.1.5"
+version = "3.1.5@git:ae2c28113935b3705955978d54f78c087a957256"
 criteria = "safe-to-deploy"
-notes = "Path copy of ForrestThump tag liberado-2026-08-27 under third_party/turbomcp. The copy drops chrono and uses jiff. Same review debt as the previous git SHA exemption."
+notes = "Git pin at the turbomcp `feat/jiff-migration` pull-request head. The fork drops chrono and uses jiff. Same review debt as the previous git SHA exemption; the crates.io release is not the code Liberado builds."
 
 [[exemptions.turbomcp-client]]
-version = "3.1.5"
+version = "3.1.5@git:ae2c28113935b3705955978d54f78c087a957256"
 criteria = "safe-to-deploy"
 
 [[exemptions.turbomcp-core]]
-version = "3.1.5"
+version = "3.1.5@git:ae2c28113935b3705955978d54f78c087a957256"
 criteria = "safe-to-deploy"
 
 [[exemptions.turbomcp-http]]
-version = "3.1.5"
+version = "3.1.5@git:ae2c28113935b3705955978d54f78c087a957256"
 criteria = "safe-to-deploy"
 
 [[exemptions.turbomcp-macros]]
-version = "3.1.5"
+version = "3.1.5@git:ae2c28113935b3705955978d54f78c087a957256"
 criteria = "safe-to-deploy"
 
 [[exemptions.turbomcp-protocol]]
-version = "3.1.5"
+version = "3.1.5@git:ae2c28113935b3705955978d54f78c087a957256"
 criteria = "safe-to-deploy"
 
 [[exemptions.turbomcp-server]]
-version = "3.1.5"
+version = "3.1.5@git:ae2c28113935b3705955978d54f78c087a957256"
 criteria = "safe-to-deploy"
 
 [[exemptions.turbomcp-stdio]]
-version = "3.1.5"
+version = "3.1.5@git:ae2c28113935b3705955978d54f78c087a957256"
 criteria = "safe-to-deploy"
 
 [[exemptions.turbomcp-telemetry]]
-version = "3.1.5"
+version = "3.1.5@git:ae2c28113935b3705955978d54f78c087a957256"
 criteria = "safe-to-deploy"
 
 [[exemptions.turbomcp-transport]]
-version = "3.1.5"
+version = "3.1.5@git:ae2c28113935b3705955978d54f78c087a957256"
 criteria = "safe-to-deploy"
 
 [[exemptions.turbomcp-transport-traits]]
-version = "3.1.5"
+version = "3.1.5@git:ae2c28113935b3705955978d54f78c087a957256"
 criteria = "safe-to-deploy"
 
 [[exemptions.turbomcp-types]]
-version = "3.1.5"
+version = "3.1.5@git:ae2c28113935b3705955978d54f78c087a957256"
 criteria = "safe-to-deploy"
 
 [[exemptions.turbovault]]
-version = "1.6.0"
+version = "1.6.0@git:713201fcda752385a54e397da0eaa26c65acbbbc"
 criteria = "safe-to-deploy"
-notes = "Path copy of ForrestThump tag liberado-2026-11-10 under third_party/turbovault. Task dates and audit stamps use jiff. Same review debt as the previous git SHA exemption."
+notes = "Git pin at the turbovault `feat/jiff-migration` pull-request head. The fork drops chrono and uses jiff for task dates and audit stamps. Same review debt as the previous git SHA exemption; the crates.io release is not the code Liberado builds."
 
 [[exemptions.turbovault-audit]]
-version = "1.6.0"
+version = "1.6.0@git:713201fcda752385a54e397da0eaa26c65acbbbc"
 criteria = "safe-to-deploy"
 
 [[exemptions.turbovault-batch]]
-version = "1.6.0"
+version = "1.6.0@git:713201fcda752385a54e397da0eaa26c65acbbbc"
 criteria = "safe-to-deploy"
 
 [[exemptions.turbovault-core]]
-version = "1.6.0"
+version = "1.6.0@git:713201fcda752385a54e397da0eaa26c65acbbbc"
 criteria = "safe-to-deploy"
 
 [[exemptions.turbovault-export]]
-version = "1.6.0"
+version = "1.6.0@git:713201fcda752385a54e397da0eaa26c65acbbbc"
 criteria = "safe-to-deploy"
 
 [[exemptions.turbovault-git]]
-version = "1.6.0"
+version = "1.6.0@git:713201fcda752385a54e397da0eaa26c65acbbbc"
 criteria = "safe-to-deploy"
 
 [[exemptions.turbovault-graph]]
-version = "1.6.0"
+version = "1.6.0@git:713201fcda752385a54e397da0eaa26c65acbbbc"
 criteria = "safe-to-deploy"
 
 [[exemptions.turbovault-parser]]
-version = "1.6.0"
+version = "1.6.0@git:713201fcda752385a54e397da0eaa26c65acbbbc"
 criteria = "safe-to-deploy"
 
+[[exemptions.turbovault-plugin-api]]
+version = "1.6.0@git:713201fcda752385a54e397da0eaa26c65acbbbc"
+criteria = "safe-to-deploy"
+notes = "Git pin at the turbovault `feat/jiff-migration` pull-request head. Also published on crates.io, so the policy entry above is required. Same review debt as the other fork exemptions."
+
 [[exemptions.turbovault-tools]]
-version = "1.6.0"
+version = "1.6.0@git:713201fcda752385a54e397da0eaa26c65acbbbc"
 criteria = "safe-to-deploy"
 
 [[exemptions.turbovault-vault]]
-version = "1.6.0"
+version = "1.6.0@git:713201fcda752385a54e397da0eaa26c65acbbbc"
 criteria = "safe-to-deploy"
+
+[[exemptions.turbovault-vector]]
+version = "1.6.0@git:713201fcda752385a54e397da0eaa26c65acbbbc"
+criteria = "safe-to-deploy"
+notes = "Git pin at the turbovault `feat/jiff-migration` pull-request head. Also published on crates.io, so the policy entry above is required. Same review debt as the other fork exemptions."
 
 [[exemptions.type-map]]
 version = "0.5.1"
