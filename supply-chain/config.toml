@@ -3667,104 +3667,104 @@ version = "0.28.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.turbomcp]]
-version = "3.1.5@git:ae2c28113935b3705955978d54f78c087a957256"
+version = "3.1.5@git:b7774c963adaf31999b2e6db7d7715c59b724646"
 criteria = "safe-to-deploy"
-notes = "Git pin at the turbomcp `feat/jiff-migration` pull-request head. The fork drops chrono and uses jiff. Same review debt as the previous git SHA exemption; the crates.io release is not the code Liberado builds."
+notes = "Git pin at the turbomcp merge commit that landed the jiff migration (pull request #4, merged into `develop`). The fork drops chrono and uses jiff. Same review debt as the previous git SHA exemption; the crates.io release is not the code Liberado builds."
 
 [[exemptions.turbomcp-client]]
-version = "3.1.5@git:ae2c28113935b3705955978d54f78c087a957256"
+version = "3.1.5@git:b7774c963adaf31999b2e6db7d7715c59b724646"
 criteria = "safe-to-deploy"
 
 [[exemptions.turbomcp-core]]
-version = "3.1.5@git:ae2c28113935b3705955978d54f78c087a957256"
+version = "3.1.5@git:b7774c963adaf31999b2e6db7d7715c59b724646"
 criteria = "safe-to-deploy"
 
 [[exemptions.turbomcp-http]]
-version = "3.1.5@git:ae2c28113935b3705955978d54f78c087a957256"
+version = "3.1.5@git:b7774c963adaf31999b2e6db7d7715c59b724646"
 criteria = "safe-to-deploy"
 
 [[exemptions.turbomcp-macros]]
-version = "3.1.5@git:ae2c28113935b3705955978d54f78c087a957256"
+version = "3.1.5@git:b7774c963adaf31999b2e6db7d7715c59b724646"
 criteria = "safe-to-deploy"
 
 [[exemptions.turbomcp-protocol]]
-version = "3.1.5@git:ae2c28113935b3705955978d54f78c087a957256"
+version = "3.1.5@git:b7774c963adaf31999b2e6db7d7715c59b724646"
 criteria = "safe-to-deploy"
 
 [[exemptions.turbomcp-server]]
-version = "3.1.5@git:ae2c28113935b3705955978d54f78c087a957256"
+version = "3.1.5@git:b7774c963adaf31999b2e6db7d7715c59b724646"
 criteria = "safe-to-deploy"
 
 [[exemptions.turbomcp-stdio]]
-version = "3.1.5@git:ae2c28113935b3705955978d54f78c087a957256"
+version = "3.1.5@git:b7774c963adaf31999b2e6db7d7715c59b724646"
 criteria = "safe-to-deploy"
 
 [[exemptions.turbomcp-telemetry]]
-version = "3.1.5@git:ae2c28113935b3705955978d54f78c087a957256"
+version = "3.1.5@git:b7774c963adaf31999b2e6db7d7715c59b724646"
 criteria = "safe-to-deploy"
 
 [[exemptions.turbomcp-transport]]
-version = "3.1.5@git:ae2c28113935b3705955978d54f78c087a957256"
+version = "3.1.5@git:b7774c963adaf31999b2e6db7d7715c59b724646"
 criteria = "safe-to-deploy"
 
 [[exemptions.turbomcp-transport-traits]]
-version = "3.1.5@git:ae2c28113935b3705955978d54f78c087a957256"
+version = "3.1.5@git:b7774c963adaf31999b2e6db7d7715c59b724646"
 criteria = "safe-to-deploy"
 
 [[exemptions.turbomcp-types]]
-version = "3.1.5@git:ae2c28113935b3705955978d54f78c087a957256"
+version = "3.1.5@git:b7774c963adaf31999b2e6db7d7715c59b724646"
 criteria = "safe-to-deploy"
 
 [[exemptions.turbovault]]
-version = "1.6.0@git:713201fcda752385a54e397da0eaa26c65acbbbc"
+version = "1.6.0@git:179ded6003e05071b6609bbc8a5edbef04dc5fa9"
 criteria = "safe-to-deploy"
-notes = "Git pin at the turbovault `feat/jiff-migration` pull-request head. The fork drops chrono and uses jiff for task dates and audit stamps. Same review debt as the previous git SHA exemption; the crates.io release is not the code Liberado builds."
+notes = "Git pin at the turbovault merge commit that landed the jiff migration (pull request #6, merged into `main`). The fork drops chrono and uses jiff for task dates and audit stamps. Same review debt as the previous git SHA exemption; the crates.io release is not the code Liberado builds."
 
 [[exemptions.turbovault-audit]]
-version = "1.6.0@git:713201fcda752385a54e397da0eaa26c65acbbbc"
+version = "1.6.0@git:179ded6003e05071b6609bbc8a5edbef04dc5fa9"
 criteria = "safe-to-deploy"
 
 [[exemptions.turbovault-batch]]
-version = "1.6.0@git:713201fcda752385a54e397da0eaa26c65acbbbc"
+version = "1.6.0@git:179ded6003e05071b6609bbc8a5edbef04dc5fa9"
 criteria = "safe-to-deploy"
 
 [[exemptions.turbovault-core]]
-version = "1.6.0@git:713201fcda752385a54e397da0eaa26c65acbbbc"
+version = "1.6.0@git:179ded6003e05071b6609bbc8a5edbef04dc5fa9"
 criteria = "safe-to-deploy"
 
 [[exemptions.turbovault-export]]
-version = "1.6.0@git:713201fcda752385a54e397da0eaa26c65acbbbc"
+version = "1.6.0@git:179ded6003e05071b6609bbc8a5edbef04dc5fa9"
 criteria = "safe-to-deploy"
 
 [[exemptions.turbovault-git]]
-version = "1.6.0@git:713201fcda752385a54e397da0eaa26c65acbbbc"
+version = "1.6.0@git:179ded6003e05071b6609bbc8a5edbef04dc5fa9"
 criteria = "safe-to-deploy"
 
 [[exemptions.turbovault-graph]]
-version = "1.6.0@git:713201fcda752385a54e397da0eaa26c65acbbbc"
+version = "1.6.0@git:179ded6003e05071b6609bbc8a5edbef04dc5fa9"
 criteria = "safe-to-deploy"
 
 [[exemptions.turbovault-parser]]
-version = "1.6.0@git:713201fcda752385a54e397da0eaa26c65acbbbc"
+version = "1.6.0@git:179ded6003e05071b6609bbc8a5edbef04dc5fa9"
 criteria = "safe-to-deploy"
 
 [[exemptions.turbovault-plugin-api]]
-version = "1.6.0@git:713201fcda752385a54e397da0eaa26c65acbbbc"
+version = "1.6.0@git:179ded6003e05071b6609bbc8a5edbef04dc5fa9"
 criteria = "safe-to-deploy"
-notes = "Git pin at the turbovault `feat/jiff-migration` pull-request head. Also published on crates.io, so the policy entry above is required. Same review debt as the other fork exemptions."
+notes = "Git pin at the turbovault merge commit that landed the jiff migration (pull request #6, merged into `main`). Also published on crates.io, so the policy entry above is required. Same review debt as the other fork exemptions."
 
 [[exemptions.turbovault-tools]]
-version = "1.6.0@git:713201fcda752385a54e397da0eaa26c65acbbbc"
+version = "1.6.0@git:179ded6003e05071b6609bbc8a5edbef04dc5fa9"
 criteria = "safe-to-deploy"
 
 [[exemptions.turbovault-vault]]
-version = "1.6.0@git:713201fcda752385a54e397da0eaa26c65acbbbc"
+version = "1.6.0@git:179ded6003e05071b6609bbc8a5edbef04dc5fa9"
 criteria = "safe-to-deploy"
 
 [[exemptions.turbovault-vector]]
-version = "1.6.0@git:713201fcda752385a54e397da0eaa26c65acbbbc"
+version = "1.6.0@git:179ded6003e05071b6609bbc8a5edbef04dc5fa9"
 criteria = "safe-to-deploy"
-notes = "Git pin at the turbovault `feat/jiff-migration` pull-request head. Also published on crates.io, so the policy entry above is required. Same review debt as the other fork exemptions."
+notes = "Git pin at the turbovault merge commit that landed the jiff migration (pull request #6, merged into `main`). Also published on crates.io, so the policy entry above is required. Same review debt as the other fork exemptions."
 
 [[exemptions.type-map]]
 version = "0.5.1"
