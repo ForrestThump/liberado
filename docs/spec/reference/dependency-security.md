@@ -73,23 +73,26 @@ stays in the graph for other crates, so 0.12.2 is an added exemption with
 the same `safe-to-deploy` criteria. `hashbrown` 0.17.1, which 0.12.2 uses,
 was already exempt. This exemption is debt, not an audit.
 
-`turbovault*` is pinned to tag `liberado-2026-11-10`
-(`260dc271735b8db206788296fdca6f15f1fc5430`). That tag's
+`turbovault*` is pinned to commit `713201fcda752385a54e397da0eaa26c65acbbbc`,
+the head of the fork's `feat/jiff-migration` pull request. That commit's
 `turbovault-vector` requires `rusqlite` 0.41.1 with the `bundled` feature,
-so the graph has one `libsqlite3-sys`, 0.39.1. The previous tag,
-`liberado-2026-10-15`, required `rusqlite` ^0.39 and kept `libsqlite3-sys`
-0.37.0 in the graph. The git-SHA vet exemptions for the TurboVault crates
-moved from `69a217a5` to `260dc271`. The criteria stay `safe-to-deploy`.
-The exemptions are still debt, not audits. TurboVault's own lockfile on
-this commit also bumps its transitive crates. Liberado resolves those
-crates from the published requirements, and this bump did not add a new
+so the graph has one `libsqlite3-sys`, 0.39.1. The previous pin, tag
+`liberado-2026-11-10` (`260dc271`), required `rusqlite` ^0.39 and kept
+`libsqlite3-sys` 0.37.0 in the graph. The git-SHA vet exemptions for the
+TurboVault crates moved from `260dc271` to `713201fc`. The criteria stay
+`safe-to-deploy`. The exemptions are still debt, not audits. TurboVault's own
+lockfile on this commit also bumps its transitive crates. Liberado resolves
+those crates from the published requirements, and this bump did not add a new
 crates.io version to Liberado's graph.
 
 GitHub Actions use full commit SHAs. Dependabot proposes Action SHA changes.
-`turbovault*` and `turbomcp*` are the tagged ForrestThump forks, copied under
-`third_party/` at `liberado-2026-11-10` and `liberado-2026-08-27`, with `chrono`
-replaced by `jiff`. The workspace depends on those paths. The git SHA is no
-longer in `Cargo.lock`.
+`turbovault*` and `turbomcp*` are the ForrestThump forks, pinned by commit SHA
+at the head of their `feat/jiff-migration` pull requests: `713201fc` for
+turbovault and `d867578` for turbomcp. Those heads carry the same change this
+branch carries: `chrono` and `chrono-tz` are gone and `jiff` replaces them.
+Every pin is one `rev` per fork in the root manifest, so a bump is one
+search-and-replace per SHA. Swap each `rev` for the fork's `liberado-*` tag
+once the pull requests merge.
 
 The cargo-vet exemption set is the accepted graph at the time this gate was
 introduced. It is debt, not an audit claim. New exemptions may not be added

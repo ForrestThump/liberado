@@ -19,11 +19,85 @@ external = { path = "../outside/thing" }
     );
 }
 
-/// The forks are path copies under `third_party/`, taken from the tagged
-/// checkouts. A sibling `turbovault/` or `turbomcp/` path is the junction that
-/// `git worktree remove` can delete.
+/// The fork a dependency name belongs to: `turbovault*` or `turbomcp*`.
+fn fork_of(name: &str) -> Option<&'static str> {
+    if name.starts_with("turbomcp") {
+        Some("turbomcp")
+    } else if name.starts_with("turbovault") {
+        Some("turbovault")
+    } else {
+        None
+    }
+}
+
+/// The revision one fork pin names, after checking the pin's shape.
+///
+/// A tag that moves under a lockfile is a different build than the reviewed one, and a branch
+/// is worse. A full commit SHA is the only stable pin.
+fn pin_revision(fork: &str, name: &str, spec: &toml::Value) -> String {
+    let git = spec.get("git").and_then(|g| g.as_str()).unwrap_or_default();
+    let rev = spec.get("rev").and_then(|r| r.as_str()).unwrap_or_default();
+    assert!(
+        !git.is_empty() && !rev.is_empty(),
+        "{name} must be pinned by git and rev; got {spec:?}"
+    );
+    assert!(
+        spec.get("tag").is_none() && spec.get("branch").is_none(),
+        "{name} must not be pinned by a moving ref; got {spec:?}"
+    );
+    assert!(
+        rev.len() == 40 && rev.chars().all(|c| c.is_ascii_hexdigit()),
+        "{name} must be pinned by a full commit SHA; got {rev:?}"
+    );
+    assert!(
+        git.contains(fork),
+        "{name} must come from the {fork} fork; got {git:?}"
+    );
+    rev.to_string()
+}
+
+/// Every fork pin in the manifest, grouped by fork.
+///
+/// Both `[workspace.dependencies]` and `[patch.crates-io]` count: the patch list is how the
+/// git-pinned turbovault is kept on one turbomcp, so a pin there is a pin like any other.
+fn fork_pins(manifest: &str) -> std::collections::BTreeMap<String, std::collections::BTreeSet<String>> {
+    let value: toml::Value = toml::from_str(manifest).expect("parse root Cargo.toml");
+    let mut revisions: std::collections::BTreeMap<String, std::collections::BTreeSet<String>> =
+        Default::default();
+    for table in [
+        value.get("workspace").and_then(|w| w.get("dependencies")),
+        value.get("patch").and_then(|p| p.get("crates-io")),
+    ] {
+        let Some(deps) = table.and_then(|t| t.as_table()) else {
+            continue;
+        };
+        for (name, spec) in deps {
+            let Some(fork) = fork_of(name) else {
+                continue;
+            };
+            let rev = pin_revision(fork, name, spec);
+            revisions
+                .entry(fork.to_string())
+                .or_default()
+                .insert(rev);
+        }
+    }
+    revisions
+}
+
+/// The real manifest is the case that matters — a parser that handles the fixture but not
+/// the file it exists for is worth nothing.
+///
+/// The forks are git+rev pins, not path deps. A sibling `turbovault/` or `turbomcp/` path is
+/// the junction that `git worktree remove` can delete, and a `third_party/` copy is a vendored
+/// tree that drifts from the fork it came from.
+///
+/// The revision check is what makes a bump safe: every pin for one fork must name the *same*
+/// revision, and it must be a commit SHA rather than a tag or a branch. One SHA per fork also
+/// means the pin can be bumped with a single search-and-replace, and this test fails if a
+/// future edit leaves one entry behind.
 #[test]
-fn the_real_root_manifest_vendors_forks_under_third_party() {
+fn the_real_root_manifest_pins_forks_by_git_rev_not_path() {
     let manifest = std::fs::read_to_string(
         Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("..")
@@ -33,22 +107,21 @@ fn the_real_root_manifest_vendors_forks_under_third_party() {
     .expect("read root Cargo.toml");
     let roots = declared_path_dep_roots(&manifest);
     assert!(
-        roots.iter().any(|root| root == "third_party"),
-        "forks must be path deps under third_party; got {roots:?}"
-    );
-    assert!(
         !roots
             .iter()
-            .any(|root| root == "turbovault" || root == "turbomcp"),
-        "do not path-depend on the gitignored sibling checkouts; got {roots:?}"
+            .any(|r| r == "turbovault" || r == "turbomcp" || r == "third_party"),
+        "turbovault/turbomcp must be git+rev, not path deps; got {roots:?}"
     );
-    assert!(
-        manifest.contains("third_party/turbovault/")
-            && manifest.contains("third_party/turbomcp/")
-            && manifest.contains("liberado-2026-11-10")
-            && manifest.contains("liberado-2026-08-27"),
-        "root manifest must name the vendored trees and the tags they were copied from"
-    );
+
+    let pins = fork_pins(&manifest);
+    assert_eq!(pins.len(), 2, "both forks must be pinned; got {pins:?}");
+    for (fork, revs) in &pins {
+        assert_eq!(
+            revs.len(),
+            1,
+            "every {fork} pin must name the same revision, so one edit bumps them all; got {revs:?}"
+        );
+    }
 }
 
 #[tokio::test]

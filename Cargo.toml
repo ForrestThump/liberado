@@ -1,15 +1,15 @@
 # Liberado — Rust-native personal AI system.
 #
-# One Cargo workspace for the Liberado system (Decision 7). The ForrestThump
-# forks live under `third_party/` (excluded) and are path dependencies. They
-# are not workspace members.
+# One Cargo workspace for the Liberado system (Decision 7). External dependencies
+# (turbovault, turbomcp) are NOT members — they are consumed as git+rev pins on the
+# ForrestThump forks. Leftover `turbovault/` and `turbomcp/` directories are gitignored
+# and are not required to build.
 [workspace]
 resolver = "3"
 members = ["crates/*"]
 exclude = [
     "liberado-tool-helper-mcp", # superseded by crates/memory-store + crates/memory-mcp (Decision 7)
     "mcps",
-    "third_party",
 ]
 
 [workspace.package]
@@ -131,34 +131,48 @@ liberado-sysmap = { path = "crates/sysmap" }
 liberado-sysmap-gui = { path = "crates/sysmap-gui" }
 sysmap-core = { path = "crates/sysmap-core" }
 
-# Forks live in `third_party/` so the workspace can drop `chrono`. They are the
-# tagged checkouts (`turbovault` `liberado-2026-11-10`, `turbomcp`
-# `liberado-2026-08-27`) with time types moved to `jiff`. Path deps replace the
-# git pins until those forks publish the same change.
-turbovault-core = { path = "third_party/turbovault/crates/turbovault-core" }
-turbovault-vault = { path = "third_party/turbovault/crates/turbovault-vault" }
-turbovault-audit = { path = "third_party/turbovault/crates/turbovault-audit" }
-turbovault = { path = "third_party/turbovault/crates/turbovault" } # umbrella (ObsidianMcpServer) — test-only
+# --- co-developed git+rev pins (Decision 7) ---
+# ForrestThump forks, pinned at the head of their `feat/jiff-migration` pull
+# requests. Those PRs carry the same time-code change this branch carries:
+# `chrono` and `chrono-tz` are gone and `jiff` replaces them. Once both PRs
+# merge, swap each `rev` below for the fork's `liberado-*` tag.
+#
+# Every pin in this file uses the same form, `git = "<url>", rev = "<sha>"`, and
+# there are only two SHAs: one per fork. turbovault's SHA appears only on the
+# `turbovault*` lines; turbomcp's only on the `turbomcp*` lines and in the
+# `[patch.crates-io]` list below. A bump is therefore one search-and-replace per
+# SHA in this file.
+turbovault-core = { git = "https://github.com/ForrestThump/turbovault", rev = "713201fcda752385a54e397da0eaa26c65acbbbc" }
+turbovault-vault = { git = "https://github.com/ForrestThump/turbovault", rev = "713201fcda752385a54e397da0eaa26c65acbbbc" }
+turbovault-audit = { git = "https://github.com/ForrestThump/turbovault", rev = "713201fcda752385a54e397da0eaa26c65acbbbc" }
+turbovault = { git = "https://github.com/ForrestThump/turbovault", rev = "713201fcda752385a54e397da0eaa26c65acbbbc" } # umbrella (ObsidianMcpServer) — test-only
 # liberado-memory-store's semantic recall.
-turbovault-vector = { path = "third_party/turbovault/crates/turbovault-vector" }
+turbovault-vector = { git = "https://github.com/ForrestThump/turbovault", rev = "713201fcda752385a54e397da0eaa26c65acbbbc" }
 # Obsidian Tasks lines and the Tasks plugin global filter. Used by task-ping.
-turbovault-parser = { path = "third_party/turbovault/crates/turbovault-parser" }
-turbovault-plugin-tasks = { path = "third_party/turbovault/crates/plugins/turbovault-plugin-tasks" }
-turbomcp = { path = "third_party/turbomcp/crates/turbomcp" }
-turbomcp-client = { path = "third_party/turbomcp/crates/turbomcp-client" }
-turbomcp-transport = { path = "third_party/turbomcp/crates/turbomcp-transport" } # ChildProcessTransport (stdio connector)
-turbomcp-server = { path = "third_party/turbomcp/crates/turbomcp-server" } # test-only (in-process channel server)
-turbomcp-core = { path = "third_party/turbomcp/crates/turbomcp-core" }     # test-only (McpHandler)
-turbomcp-types = { path = "third_party/turbomcp/crates/turbomcp-types" }   # test-only (handler types)
+turbovault-parser = { git = "https://github.com/ForrestThump/turbovault", rev = "713201fcda752385a54e397da0eaa26c65acbbbc" }
+turbovault-plugin-tasks = { git = "https://github.com/ForrestThump/turbovault", rev = "713201fcda752385a54e397da0eaa26c65acbbbc" }
+turbomcp = { git = "https://github.com/ForrestThump/turbomcp", rev = "ae2c28113935b3705955978d54f78c087a957256" }
+turbomcp-client = { git = "https://github.com/ForrestThump/turbomcp", rev = "ae2c28113935b3705955978d54f78c087a957256" }
+turbomcp-transport = { git = "https://github.com/ForrestThump/turbomcp", rev = "ae2c28113935b3705955978d54f78c087a957256" } # ChildProcessTransport (stdio connector)
+turbomcp-server = { git = "https://github.com/ForrestThump/turbomcp", rev = "ae2c28113935b3705955978d54f78c087a957256" } # test-only (in-process channel server)
+turbomcp-core = { git = "https://github.com/ForrestThump/turbomcp", rev = "ae2c28113935b3705955978d54f78c087a957256" }     # test-only (McpHandler)
+turbomcp-types = { git = "https://github.com/ForrestThump/turbomcp", rev = "ae2c28113935b3705955978d54f78c087a957256" }   # test-only (handler types)
 
-# turbovault still names `turbomcp*` as crates.io 3.1.5. Redirect those names at
-# the same path copies. Every crate turbovault names must be listed, or Cargo
-# links two copies and identical-looking types stop unifying.
+# The git-pinned turbovault still declares the `turbomcp*` crates as "3.1.5" from crates.io.
+# Redirect them to the same ForrestThump fork so the whole tree builds against ONE turbomcp — the
+# jiff fork head that also carries the request `_meta` pass-through. Swap these `rev` pins for
+# the `liberado-*` tag once the turbomcp pull request merges.
+#
+# Every turbomcp-* crate turbovault names must be listed, not just the umbrella. Patching `turbomcp`
+# alone linked the fork's `turbomcp-core` (via the umbrella) alongside the registry's (via
+# turbovault's direct dep) — two crates of the same name in one graph, so identical-looking types
+# stopped unifying: "expected `ResourceTemplate`, found `turbomcp_core::ResourceTemplate`". That is
+# what kept the `e2e` provenance capstone unbuildable and switched off.
 [patch.crates-io]
-turbomcp = { path = "third_party/turbomcp/crates/turbomcp" }
-turbomcp-core = { path = "third_party/turbomcp/crates/turbomcp-core" }
-turbomcp-server = { path = "third_party/turbomcp/crates/turbomcp-server" }
-turbomcp-types = { path = "third_party/turbomcp/crates/turbomcp-types" }
+turbomcp = { git = "https://github.com/ForrestThump/turbomcp", rev = "ae2c28113935b3705955978d54f78c087a957256" }
+turbomcp-core = { git = "https://github.com/ForrestThump/turbomcp", rev = "ae2c28113935b3705955978d54f78c087a957256" }
+turbomcp-server = { git = "https://github.com/ForrestThump/turbomcp", rev = "ae2c28113935b3705955978d54f78c087a957256" }
+turbomcp-types = { git = "https://github.com/ForrestThump/turbomcp", rev = "ae2c28113935b3705955978d54f78c087a957256" }
 
 [profile.release]
 lto = true

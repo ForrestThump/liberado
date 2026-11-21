@@ -9266,6 +9266,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a2b42f36aa1cd011945615b92222f6bf73c599a102a300334cd7f8dbeec726cc"
 dependencies = [
  "dyn-clone",
+ "jiff",
  "ref-cast",
  "schemars_derive",
  "serde",
@@ -10927,6 +10928,7 @@ dependencies = [
 [[package]]
 name = "turbomcp"
 version = "3.1.5"
+source = "git+https://github.com/ForrestThump/turbomcp?rev=ae2c28113935b3705955978d54f78c087a957256#ae2c28113935b3705955978d54f78c087a957256"
 dependencies = [
  "schemars",
  "serde",
@@ -10947,10 +10949,10 @@ dependencies = [
 [[package]]
 name = "turbomcp-client"
 version = "3.1.5"
+source = "git+https://github.com/ForrestThump/turbomcp?rev=ae2c28113935b3705955978d54f78c087a957256#ae2c28113935b3705955978d54f78c087a957256"
 dependencies = [
  "futures",
  "futures-util",
- "jiff",
  "parking_lot",
  "reqwest 0.13.4",
  "serde",
@@ -10969,6 +10971,7 @@ dependencies = [
 [[package]]
 name = "turbomcp-core"
 version = "3.1.5"
+source = "git+https://github.com/ForrestThump/turbomcp?rev=ae2c28113935b3705955978d54f78c087a957256#ae2c28113935b3705955978d54f78c087a957256"
 dependencies = [
  "base64 0.22.1",
  "hashbrown 0.17.1",
@@ -10984,6 +10987,7 @@ dependencies = [
 [[package]]
 name = "turbomcp-http"
 version = "3.1.5"
+source = "git+https://github.com/ForrestThump/turbomcp?rev=ae2c28113935b3705955978d54f78c087a957256#ae2c28113935b3705955978d54f78c087a957256"
 dependencies = [
  "bytes",
  "fastrand",
@@ -11001,6 +11005,7 @@ dependencies = [
 [[package]]
 name = "turbomcp-macros"
 version = "3.1.5"
+source = "git+https://github.com/ForrestThump/turbomcp?rev=ae2c28113935b3705955978d54f78c087a957256#ae2c28113935b3705955978d54f78c087a957256"
 dependencies = [
  "proc-macro-crate",
  "proc-macro2",
@@ -11015,6 +11020,7 @@ dependencies = [
 [[package]]
 name = "turbomcp-protocol"
 version = "3.1.5"
+source = "git+https://github.com/ForrestThump/turbomcp?rev=ae2c28113935b3705955978d54f78c087a957256#ae2c28113935b3705955978d54f78c087a957256"
 dependencies = [
  "arc-swap",
  "bytes",
@@ -11049,6 +11055,7 @@ dependencies = [
 [[package]]
 name = "turbomcp-server"
 version = "3.1.5"
+source = "git+https://github.com/ForrestThump/turbomcp?rev=ae2c28113935b3705955978d54f78c087a957256#ae2c28113935b3705955978d54f78c087a957256"
 dependencies = [
  "async-trait",
  "bytes",
@@ -11073,6 +11080,7 @@ dependencies = [
 [[package]]
 name = "turbomcp-stdio"
 version = "3.1.5"
+source = "git+https://github.com/ForrestThump/turbomcp?rev=ae2c28113935b3705955978d54f78c087a957256#ae2c28113935b3705955978d54f78c087a957256"
 dependencies = [
  "bytes",
  "futures",
@@ -11089,6 +11097,7 @@ dependencies = [
 [[package]]
 name = "turbomcp-telemetry"
 version = "3.1.5"
+source = "git+https://github.com/ForrestThump/turbomcp?rev=ae2c28113935b3705955978d54f78c087a957256#ae2c28113935b3705955978d54f78c087a957256"
 dependencies = [
  "futures-util",
  "http",
@@ -11113,6 +11122,7 @@ dependencies = [
 [[package]]
 name = "turbomcp-transport"
 version = "3.1.5"
+source = "git+https://github.com/ForrestThump/turbomcp?rev=ae2c28113935b3705955978d54f78c087a957256#ae2c28113935b3705955978d54f78c087a957256"
 dependencies = [
  "ahash",
  "anyhow",
@@ -11145,6 +11155,7 @@ dependencies = [
 [[package]]
 name = "turbomcp-transport-traits"
 version = "3.1.5"
+source = "git+https://github.com/ForrestThump/turbomcp?rev=ae2c28113935b3705955978d54f78c087a957256#ae2c28113935b3705955978d54f78c087a957256"
 dependencies = [
  "bytes",
  "serde",
@@ -11157,6 +11168,7 @@ dependencies = [
 [[package]]
 name = "turbomcp-types"
 version = "3.1.5"
+source = "git+https://github.com/ForrestThump/turbomcp?rev=ae2c28113935b3705955978d54f78c087a957256#ae2c28113935b3705955978d54f78c087a957256"
 dependencies = [
  "serde",
  "serde_json",
@@ -11165,6 +11177,7 @@ dependencies = [
 [[package]]
 name = "turbovault"
 version = "1.6.0"
+source = "git+https://github.com/ForrestThump/turbovault?rev=713201fcda752385a54e397da0eaa26c65acbbbc#713201fcda752385a54e397da0eaa26c65acbbbc"
 dependencies = [
  "anyhow",
  "clap",
@@ -11193,6 +11206,7 @@ dependencies = [
 [[package]]
 name = "turbovault-audit"
 version = "1.6.0"
+source = "git+https://github.com/ForrestThump/turbovault?rev=713201fcda752385a54e397da0eaa26c65acbbbc#713201fcda752385a54e397da0eaa26c65acbbbc"
 dependencies = [
  "jiff",
  "log",
@@ -11209,8 +11223,8 @@ dependencies = [
 [[package]]
 name = "turbovault-batch"
 version = "1.6.0"
+source = "git+https://github.com/ForrestThump/turbovault?rev=713201fcda752385a54e397da0eaa26c65acbbbc#713201fcda752385a54e397da0eaa26c65acbbbc"
 dependencies = [
- "jiff",
  "schemars",
  "serde",
  "serde_json",
@@ -11223,6 +11237,7 @@ dependencies = [
 [[package]]
 name = "turbovault-core"
 version = "1.6.0"
+source = "git+https://github.com/ForrestThump/turbovault?rev=713201fcda752385a54e397da0eaa26c65acbbbc#713201fcda752385a54e397da0eaa26c65acbbbc"
 dependencies = [
  "jiff",
  "log",
@@ -11241,6 +11256,7 @@ dependencies = [
 [[package]]
 name = "turbovault-export"
 version = "1.6.0"
+source = "git+https://github.com/ForrestThump/turbovault?rev=713201fcda752385a54e397da0eaa26c65acbbbc#713201fcda752385a54e397da0eaa26c65acbbbc"
 dependencies = [
  "jiff",
  "serde",
@@ -11251,6 +11267,7 @@ dependencies = [
 [[package]]
 name = "turbovault-git"
 version = "1.6.0"
+source = "git+https://github.com/ForrestThump/turbovault?rev=713201fcda752385a54e397da0eaa26c65acbbbc#713201fcda752385a54e397da0eaa26c65acbbbc"
 dependencies = [
  "fs4",
  "git2",
@@ -11264,6 +11281,7 @@ dependencies = [
 [[package]]
 name = "turbovault-graph"
 version = "1.6.0"
+source = "git+https://github.com/ForrestThump/turbovault?rev=713201fcda752385a54e397da0eaa26c65acbbbc#713201fcda752385a54e397da0eaa26c65acbbbc"
 dependencies = [
  "anyhow",
  "dashmap",
@@ -11278,6 +11296,7 @@ dependencies = [
 [[package]]
 name = "turbovault-parser"
 version = "1.6.0"
+source = "git+https://github.com/ForrestThump/turbovault?rev=713201fcda752385a54e397da0eaa26c65acbbbc#713201fcda752385a54e397da0eaa26c65acbbbc"
 dependencies = [
  "log",
  "pulldown-cmark",
@@ -11291,6 +11310,7 @@ dependencies = [
 [[package]]
 name = "turbovault-plugin-api"
 version = "1.6.0"
+source = "git+https://github.com/ForrestThump/turbovault?rev=713201fcda752385a54e397da0eaa26c65acbbbc#713201fcda752385a54e397da0eaa26c65acbbbc"
 dependencies = [
  "async-trait",
  "serde",
@@ -11303,6 +11323,7 @@ dependencies = [
 [[package]]
 name = "turbovault-plugin-tasks"
 version = "1.6.0"
+source = "git+https://github.com/ForrestThump/turbovault?rev=713201fcda752385a54e397da0eaa26c65acbbbc#713201fcda752385a54e397da0eaa26c65acbbbc"
 dependencies = [
  "async-trait",
  "jiff",
@@ -11318,6 +11339,7 @@ dependencies = [
 [[package]]
 name = "turbovault-tools"
 version = "1.6.0"
+source = "git+https://github.com/ForrestThump/turbovault?rev=713201fcda752385a54e397da0eaa26c65acbbbc#713201fcda752385a54e397da0eaa26c65acbbbc"
 dependencies = [
  "anyhow",
  "futures",
@@ -11349,6 +11371,7 @@ dependencies = [
 [[package]]
 name = "turbovault-vault"
 version = "1.6.0"
+source = "git+https://github.com/ForrestThump/turbovault?rev=713201fcda752385a54e397da0eaa26c65acbbbc#713201fcda752385a54e397da0eaa26c65acbbbc"
 dependencies = [
  "anyhow",
  "dashmap",
@@ -11377,11 +11400,11 @@ dependencies = [
 [[package]]
 name = "turbovault-vector"
 version = "1.6.0"
+source = "git+https://github.com/ForrestThump/turbovault?rev=713201fcda752385a54e397da0eaa26c65acbbbc#713201fcda752385a54e397da0eaa26c65acbbbc"
 dependencies = [
  "anyhow",
  "async-trait",
  "fastembed",
- "jiff",
  "rusqlite",
  "serde",
  "serde_json",
