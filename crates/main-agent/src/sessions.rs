@@ -62,7 +62,7 @@ use std::sync::{Arc, Mutex};
 use liberado_agent_workspace::WorkspaceSettings;
 use liberado_common::{
     Capability, CapabilityCatalog, CapabilitySet, Consequence, DispatchAction, McpDescriptor,
-    ProposalSigner, RiskWaiverSet, UserTimezone, WriteClass, mcp_of,
+    ProposalSigner, RiskWaiverSet, UserTimezone, UtcStamp, WriteClass, mcp_of,
 };
 use liberado_conversation_store::{
     AgentProfiles, Author, ConversationHeader, ConversationStore, MessageNode, NewNode, StoreError,
@@ -808,7 +808,7 @@ impl ChatSessions {
             // transform, not a new piece of context. `None` `user_timezone` is the explicit no-op
             // path: every existing test asserts on the raw text reaching the model and that path
             // must keep working.
-            let now = chrono::Utc::now();
+            let now = UtcStamp::now();
             let framed_user = self.frame_user_message(now, prev_user, user);
 
             let reply = if face_agent {
@@ -929,7 +929,7 @@ impl ChatSessions {
             // Render-time framing for the model-visible copy of the user's message. The raw text
             // is what was persisted, titled, dispatched, and stamped; the framing is ephemeral and
             // only reaches the model. See `turn` for the matching call and the same reasoning.
-            let now = chrono::Utc::now();
+            let now = UtcStamp::now();
             let framed_user = self.frame_user_message(now, prev_user, user);
 
             if face_agent {

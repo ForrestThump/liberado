@@ -1,9 +1,9 @@
 //! Versioned wire and disk contracts for harness-comparison jobs.
 
+use liberado_common::UtcStamp;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use ulid::Ulid;
@@ -179,7 +179,7 @@ pub struct Experiment {
 pub struct JobSpec {
     pub version: u32,
     pub job_id: JobId,
-    pub submitted_at: DateTime<Utc>,
+    pub submitted_at: UtcStamp,
     pub repository: PathBuf,
     pub base_revision: String,
     pub task: TaskBundle,
@@ -408,7 +408,7 @@ pub struct JobState {
     pub status: JobStatus,
     pub phase: String,
     pub revision: u64,
-    pub updated_at: DateTime<Utc>,
+    pub updated_at: UtcStamp,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub failure_class: Option<FailureClass>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -422,7 +422,7 @@ impl JobState {
             status: JobStatus::Accepted,
             phase: "accepted".to_string(),
             revision: 0,
-            updated_at: Utc::now(),
+            updated_at: UtcStamp::now(),
             failure_class: None,
             message: None,
         }
@@ -432,7 +432,7 @@ impl JobState {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JobEvent {
     pub sequence: u64,
-    pub at: DateTime<Utc>,
+    pub at: UtcStamp,
     pub status: JobStatus,
     pub phase: String,
     pub message: String,
@@ -451,10 +451,10 @@ pub struct HarnessResult {
     /// Wall-clock start of the harness run, parsed from its `run-status.txt`. `None` when the
     /// adapter produced no run-status (e.g. a launch failure before the process spawned).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub started_at: Option<DateTime<Utc>>,
+    pub started_at: Option<UtcStamp>,
     /// Wall-clock end of the harness run, parsed from its `run-status.txt`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub finished_at: Option<DateTime<Utc>>,
+    pub finished_at: Option<UtcStamp>,
     /// Run duration in seconds, derived from `started_at`/`finished_at`. Kept as a first-class field
     /// so scoreboards never have to recompute it by hand (the source of historical analysis errors).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -480,8 +480,8 @@ pub struct ComparisonReport {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub failure_class: Option<FailureClass>,
     pub base_commit: Option<String>,
-    pub started_at: DateTime<Utc>,
-    pub finished_at: DateTime<Utc>,
+    pub started_at: UtcStamp,
+    pub finished_at: UtcStamp,
     pub harnesses: BTreeMap<String, HarnessResult>,
     #[serde(default)]
     pub run_order: Vec<String>,

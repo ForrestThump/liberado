@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use async_trait::async_trait;
-use chrono::{NaiveDate, NaiveDateTime};
+use jiff::civil::DateTime;
 use liberado_common::{Event, EventPayload, UserTimezone};
 use liberado_config::VaultRemindersConfig;
 use liberado_notify::{Notifier, NotifyError};
@@ -12,11 +12,17 @@ use super::super::remind::remind_opt_in;
 use super::{ReminderTick, reminder_message};
 use crate::types::{Daemon, ReactionOutcome};
 
-fn at(hour: u32, minute: u32) -> NaiveDateTime {
-    NaiveDate::from_ymd_opt(2026, 9, 29)
-        .expect("date")
-        .and_hms_opt(hour, minute, 0)
-        .expect("time")
+fn at(hour: u32, minute: u32) -> DateTime {
+    DateTime::new(
+        2026,
+        9,
+        29,
+        i8::try_from(hour).expect("hour"),
+        i8::try_from(minute).expect("minute"),
+        0,
+        0,
+    )
+    .expect("time")
 }
 
 fn enabled() -> VaultRemindersConfig {
@@ -26,12 +32,7 @@ fn enabled() -> VaultRemindersConfig {
     }
 }
 
-fn run(
-    root: &Path,
-    now: NaiveDateTime,
-    settings: VaultRemindersConfig,
-    state: &Path,
-) -> Option<String> {
+fn run(root: &Path, now: DateTime, settings: VaultRemindersConfig, state: &Path) -> Option<String> {
     reminder_message(
         root,
         &ReminderTick {
@@ -352,7 +353,7 @@ async fn the_tick_uses_the_reminder_channel_and_not_the_sticky_chat() {
         format!(
             "- [ ] trash #remind 📅 {} {}\n",
             now.date(),
-            now.format("%H:%M")
+            now.strftime("%H:%M")
         ),
     )
     .unwrap();
@@ -405,7 +406,7 @@ async fn a_disabled_tick_does_not_ping_the_reminder_channel() {
         format!(
             "- [ ] trash #remind 📅 {} {}\n",
             now.date(),
-            now.format("%H:%M")
+            now.strftime("%H:%M")
         ),
     )
     .unwrap();

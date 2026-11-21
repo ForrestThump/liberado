@@ -133,7 +133,7 @@ fn a_trace_that_already_recorded_its_ending_is_not_re_stamped() {
         &log,
         CoderEvent::SessionFinished {
             outcome: Outcome::Succeeded,
-            at: Utc::now(),
+            at: UtcStamp::now(),
         },
     );
     assert!(ended_in_trace(&log));
@@ -153,7 +153,7 @@ async fn trace_reading_round_trips_events_and_fails_soft() {
         tool_calls: vec![],
         prompt_tokens: 0,
         completion_tokens: 0,
-        at: Utc::now(),
+        at: UtcStamp::now(),
     }];
     let path = dir.path().join("t.json");
     let doc = CoderTrace {
@@ -405,7 +405,7 @@ async fn run_review_after(
         tool_calls: vec![],
         prompt_tokens: 0,
         completion_tokens: 0,
-        at: Utc::now(),
+        at: UtcStamp::now(),
     }];
     let trace_path = dir.path().join("attempt.json");
     let doc = CoderTrace {

@@ -1,5 +1,6 @@
 //! Authenticated read and owner actions for a single outbox reminder row.
 
+use liberado_common::UtcStamp;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -9,7 +10,6 @@ use axum::{
     http::StatusCode,
     response::{IntoResponse, Response},
 };
-use chrono::Utc;
 use liberado_outbox::{OpenRow, OutboxRecord, OutboxSource, RES_SNOOZED};
 use serde::Deserialize;
 use serde::Serialize;
@@ -58,7 +58,7 @@ pub async fn get_outbox_detail(
         return fail(StatusCode::NOT_FOUND, "outbox row not found");
     };
     let zone = operator_zone(&state);
-    let now = Utc::now();
+    let now = UtcStamp::now();
     let open = open_row_from_record(&record);
     let (title, body, late) = liberado_outbox::copy::present_row(&open, now, &zone);
     Json(detail_json(
@@ -97,7 +97,7 @@ pub async fn snooze_outbox(
 pub(crate) fn done_notice(state: &AppState, record: &OutboxRecord) -> String {
     let zone = operator_zone(state);
     let open = open_row_from_record(record);
-    let (title, _, _) = liberado_outbox::copy::present_row(&open, Utc::now(), &zone);
+    let (title, _, _) = liberado_outbox::copy::present_row(&open, UtcStamp::now(), &zone);
     format!("Done: {title}")
 }
 

@@ -9,6 +9,7 @@ authors.workspace = true
 repository.workspace = true
 
 [dependencies]
+jiff = { workspace = true }
 chat-client-contract = { workspace = true }
 liberado-bootstrap = { workspace = true }
 liberado-chat-search = { workspace = true }
@@ -47,7 +48,6 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 toml = { workspace = true }
 reqwest = { workspace = true, features = ["blocking"] }
-chrono = { workspace = true }
 # Session ids and CSRF tokens come from the OS CSPRNG, not from a counter or a hash of the clock.
 rand = { workspace = true }
 axum = { version = "0.8", features = ["json"] }

@@ -1,5 +1,6 @@
 //! Read the task-completion log. Owner only. Nothing here writes a row.
 
+use liberado_common::UtcStamp;
 use std::sync::Arc;
 
 use axum::{
@@ -8,7 +9,6 @@ use axum::{
     http::StatusCode,
     response::{IntoResponse, Response},
 };
-use chrono::{DateTime, Utc};
 use serde::Deserialize;
 
 use crate::state::AppState;
@@ -49,10 +49,10 @@ fn since_stamp(since: Option<&str>) -> Result<Option<String>, &'static str> {
     let Some(text) = since.map(str::trim).filter(|text| !text.is_empty()) else {
         return Ok(None);
     };
-    let parsed = DateTime::parse_from_rfc3339(text).map_err(|_| "since must be RFC3339")?;
-    Ok(Some(liberado_outbox::completion_stamp(
-        parsed.with_timezone(&Utc),
-    )))
+    let parsed = text
+        .parse::<UtcStamp>()
+        .map_err(|_| "since must be RFC3339")?;
+    Ok(Some(liberado_outbox::completion_stamp(parsed)))
 }
 
 fn checked_limit(limit: Option<u32>) -> Result<u32, &'static str> {

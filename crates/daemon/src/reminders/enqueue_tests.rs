@@ -1,8 +1,8 @@
 //! Tests for mechanical reminder enqueue fan-out.
 
+use liberado_common::UtcStamp;
 use std::sync::Arc;
 
-use chrono::{TimeZone, Utc};
 use liberado_config::RemindersConfig;
 use liberado_notify::log_capture::Capture;
 use liberado_outbox::{EnqueueOutcome, NewReminder, Outbox, OutboxSource, key_hash_suffix};
@@ -32,7 +32,7 @@ fn enqueue_mechanical_writes_telegram_row_in_fallback_mode() {
     let delivery = OutboxDelivery::new(Arc::clone(&outbox), None, None);
     let mut config = RemindersConfig::default();
     config.channels.telegram.mode = "fallback".into();
-    let now = Utc::now();
+    let now = UtcStamp::now();
     let item = MechanicalReminder {
         idempotency_key: "job/task-ping/2026-01-01T00:00:00Z".into(),
         title: "tasks".into(),
@@ -55,7 +55,7 @@ fn enqueue_mechanical_writes_telegram_row_in_fallback_mode() {
     assert_eq!(counts.pending, 1);
 }
 
-fn secret_row(due_at: chrono::DateTime<Utc>) -> NewReminder {
+fn secret_row(due_at: UtcStamp) -> NewReminder {
     NewReminder {
         idempotency_key: "remind/task/Life/SECRETPATH.md/due/2026-11-08T10:00/abc/webpush/sub:7"
             .into(),
@@ -76,7 +76,7 @@ fn secret_row(due_at: chrono::DateTime<Utc>) -> NewReminder {
 
 #[test]
 fn enqueue_log_records_ids_and_hides_the_reminder() {
-    let due = Utc.with_ymd_and_hms(2026, 11, 8, 10, 0, 0).unwrap();
+    let due = UtcStamp::from_civil_utc(2026, 11, 8, 10, 0, 0).unwrap();
     let row = secret_row(due);
     let hash = key_hash_suffix(&row.idempotency_key);
     let inserted = capture(|| log_reminder_enqueue(&row, EnqueueOutcome::Inserted(42)));
@@ -107,7 +107,7 @@ fn enqueue_mechanical_logs_insert_and_duplicate_without_reminder_text() {
     let delivery = OutboxDelivery::new(Arc::clone(&outbox), None, None);
     let mut config = RemindersConfig::default();
     config.channels.telegram.mode = "fallback".into();
-    let now = Utc.with_ymd_and_hms(2026, 11, 8, 10, 0, 0).unwrap();
+    let now = UtcStamp::from_civil_utc(2026, 11, 8, 10, 0, 0).unwrap();
     let item = MechanicalReminder {
         idempotency_key: "remind/task/Life/SECRETPATH.md/due/2026-11-08T10:00/abc".into(),
         title: "SECRET_TITLE_DO_NOT_LOG".into(),
@@ -151,7 +151,8 @@ fn enqueue_mechanical_with_no_rows_does_not_log_enqueue() {
     let delivery = OutboxDelivery::new(Arc::clone(&outbox), None, None);
     let config = RemindersConfig::default();
     let text = capture(|| {
-        enqueue_mechanical(&outbox, &config, &delivery, false, &[], Utc::now()).expect("empty");
+        enqueue_mechanical(&outbox, &config, &delivery, false, &[], UtcStamp::now())
+            .expect("empty");
     });
     assert!(!text.contains("reminder_enqueued"), "{text}");
     assert!(!text.contains("reminder_enqueue_skipped"), "{text}");

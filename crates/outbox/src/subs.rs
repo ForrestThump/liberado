@@ -1,6 +1,6 @@
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use chrono::{DateTime, Utc};
+use liberado_common::UtcStamp;
 use rusqlite::{OptionalExtension, params};
 use serde::Serialize;
 
@@ -49,7 +49,7 @@ pub struct WeekTarget {
 }
 
 impl Outbox {
-    pub fn upsert_subscription(&self, sub: &NewSubscription, now: DateTime<Utc>) -> Result<i64> {
+    pub fn upsert_subscription(&self, sub: &NewSubscription, now: UtcStamp) -> Result<i64> {
         check_subscription(sub)?;
         let label = label_of(&sub.label);
         let conn = self.lock();

@@ -1,8 +1,10 @@
 //! Tests for daemon background tasks, proposal expiry reaper, and persistent grants.
 
 use super::test_fixtures::*;
-use chrono::{Duration as ChronoDuration, Utc};
-use liberado_common::{Proposal, ProposalSigner, ProposalStatus, ProposedAction, ToolCall};
+use jiff::SignedDuration;
+use liberado_common::{
+    Proposal, ProposalSigner, ProposalStatus, ProposedAction, ToolCall, UtcStamp,
+};
 use std::path::Path;
 use std::time::Duration as StdDuration;
 
@@ -154,7 +156,7 @@ async fn proposal_reap_loop_archives_expired_approved_proposal() {
     let mut signed = ProposalSigner::random().sign(proposal);
     signed.set_status(ProposalStatus::Approved);
     let mut proposal = signed.into_proposal();
-    proposal.expires = Some(Utc::now() - ChronoDuration::hours(2));
+    proposal.expires = Some(UtcStamp::now() - SignedDuration::from_hours(2));
     std::fs::write(root.join("proposals/reap-loop-1.md"), proposal.to_note()).unwrap();
 
     let loop_vault = vault.clone();
@@ -230,7 +232,7 @@ async fn spawn_reaper_starts_the_expiry_reaper() {
     let mut signed = ProposalSigner::random().sign(proposal);
     signed.set_status(ProposalStatus::Approved);
     let mut proposal = signed.into_proposal();
-    proposal.expires = Some(Utc::now() - ChronoDuration::hours(2));
+    proposal.expires = Some(UtcStamp::now() - SignedDuration::from_hours(2));
     std::fs::write(root.join("proposals/spawn-reap-1.md"), proposal.to_note()).unwrap();
 
     daemon.spawn_reaper();

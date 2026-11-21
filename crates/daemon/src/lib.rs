@@ -165,7 +165,7 @@ impl Daemon {
 
     /// The timezone attached via [`with_user_timezone`](Self::with_user_timezone), if any.
     pub fn user_timezone(&self) -> Option<UserTimezone> {
-        self.user_timezone
+        self.user_timezone.clone()
     }
 
     /// Route every reaction through the **goal session hub** as a hosted background session
@@ -274,7 +274,7 @@ impl Daemon {
     /// daemon reads the same minute.
     #[cfg(test)]
     #[must_use]
-    pub fn with_fixed_now(mut self, now: chrono::NaiveDateTime) -> Self {
+    pub fn with_fixed_now(mut self, now: jiff::civil::DateTime) -> Self {
         self.fixed_now = Some(now);
         self
     }
@@ -536,7 +536,7 @@ mod accessor_tests {
         use liberado_common::UserTimezone;
         let (daemon, _dir) = fresh_daemon().await;
         let tz = UserTimezone::parse("America/New_York").expect("valid timezone");
-        let daemon = daemon.with_user_timezone(tz);
+        let daemon = daemon.with_user_timezone(tz.clone());
         assert_eq!(
             daemon.user_timezone(),
             Some(tz),

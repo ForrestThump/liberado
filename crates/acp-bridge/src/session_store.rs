@@ -5,6 +5,7 @@
 //! rename). Session ids are treated as untrusted and sanitized before use as
 //! filenames.
 
+use liberado_common::UtcStamp;
 use serde::{Deserialize, Serialize};
 use std::io;
 use std::path::PathBuf;
@@ -236,7 +237,7 @@ pub fn update_model(id: &str, model: &str) -> io::Result<()> {
 // ── Internal helpers ────────────────────────────────────────────────────────
 
 pub(crate) fn new_timestamp() -> String {
-    chrono::Utc::now().to_rfc3339()
+    UtcStamp::now().to_rfc3339()
 }
 
 // ── Tests ───────────────────────────────────────────────────────────────────

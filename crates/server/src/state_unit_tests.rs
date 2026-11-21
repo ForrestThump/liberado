@@ -1,13 +1,14 @@
 //! Split from `state.rs` for module-health boundaries.
 
 use super::*;
+use liberado_common::UtcStamp;
 use liberado_test_support::InvocationRecordingRuntime;
 
 fn reaction(n: usize) -> Reaction {
     Reaction {
         event: Event {
             event_type: format!("TestEvent{n}"),
-            timestamp: chrono::Utc::now(),
+            timestamp: UtcStamp::now(),
             source: "test".into(),
             correlation_id: format!("corr-{n}"),
             payload: Default::default(),

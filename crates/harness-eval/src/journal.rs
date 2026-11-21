@@ -1,5 +1,6 @@
 //! Crash-safe, append-only job storage.
 
+use liberado_common::UtcStamp;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
@@ -184,7 +185,7 @@ impl JobStore {
             Err(error) => return Err(error),
         };
         writeln!(file, "pid={}", std::process::id())?;
-        writeln!(file, "started={}", chrono::Utc::now().to_rfc3339())?;
+        writeln!(file, "started={}", UtcStamp::now().to_rfc3339())?;
         file.sync_all()?;
         Ok(JobLease { path })
     }
@@ -246,7 +247,7 @@ impl JobStore {
         state.revision += 1;
         state.status = JobStatus::Failed;
         state.phase = "host_failure".to_string();
-        state.updated_at = chrono::Utc::now();
+        state.updated_at = UtcStamp::now();
         state.failure_class = Some(FailureClass::HostInfrastructureFailure);
         state.message = Some(message.clone());
         self.write_state(&state)?;
@@ -269,7 +270,7 @@ impl JobStore {
             failure_class: Some(FailureClass::HostInfrastructureFailure),
             base_commit: None,
             started_at: state.updated_at,
-            finished_at: chrono::Utc::now(),
+            finished_at: UtcStamp::now(),
             harnesses: Default::default(),
             run_order: spec.run_order.clone(),
             diagnostics: vec![message],
@@ -360,7 +361,7 @@ impl RunnerLock {
         match OpenOptions::new().write(true).create_new(true).open(&path) {
             Ok(mut file) => {
                 writeln!(file, "pid={}", std::process::id())?;
-                writeln!(file, "started={}", chrono::Utc::now().to_rfc3339())?;
+                writeln!(file, "started={}", UtcStamp::now().to_rfc3339())?;
                 file.sync_all()?;
                 Ok(Self { path })
             }
@@ -494,13 +495,12 @@ mod lease_tests;
 mod tests {
     use super::*;
     use crate::contract::*;
-    use chrono::Utc;
 
     pub(crate) fn spec() -> JobSpec {
         JobSpec {
             version: JOB_SPEC_VERSION,
             job_id: JobId::new(),
-            submitted_at: Utc::now(),
+            submitted_at: UtcStamp::now(),
             repository: PathBuf::from("C:/repo"),
             base_revision: "main".to_string(),
             task: TaskBundle::new("task.txt", "test task".to_string()).unwrap(),
@@ -561,7 +561,7 @@ mod tests {
         store.create(&spec).unwrap();
         let valid = serde_json::to_string(&JobEvent {
             sequence: 0,
-            at: Utc::now(),
+            at: UtcStamp::now(),
             status: JobStatus::Accepted,
             phase: "accepted".to_string(),
             message: "ok".to_string(),

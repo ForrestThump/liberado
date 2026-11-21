@@ -20,8 +20,10 @@
 //! do this automatically in the daemon). Use [`UserTimezone::context_line`] / [`with_context`]
 //! anywhere else (face chat, wake-up body, a tool description) when local wall-clock helps.
 
-use chrono::{DateTime, Utc};
-use chrono_tz::Tz;
+use jiff::Zoned;
+use jiff::tz::TimeZone;
+
+use crate::UtcStamp;
 
 /// Default IANA zone for this Liberado installation (Texas / US Central).
 ///
@@ -30,9 +32,9 @@ use chrono_tz::Tz;
 pub const DEFAULT_TIMEZONE: &str = "America/Chicago";
 
 /// A validated IANA timezone used to format local wall-clock for agent context.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UserTimezone {
-    tz: Tz,
+    tz: TimeZone,
 }
 
 /// Failed to resolve an IANA timezone name.
@@ -47,9 +49,7 @@ impl UserTimezone {
         if name.is_empty() {
             return Err(UnknownTimezone(iana.to_string()));
         }
-        let tz: Tz = name
-            .parse()
-            .map_err(|_| UnknownTimezone(name.to_string()))?;
+        let tz = TimeZone::get(name).map_err(|_| UnknownTimezone(name.to_string()))?;
         Ok(Self { tz })
     }
 
@@ -60,17 +60,17 @@ impl UserTimezone {
 
     /// IANA name as stored in config (e.g. `"America/Chicago"`).
     pub fn iana_name(&self) -> &str {
-        self.tz.name()
+        self.tz.iana_name().unwrap_or("UTC")
     }
 
     /// Current wall-clock in this zone.
-    pub fn now(&self) -> DateTime<Tz> {
-        Utc::now().with_timezone(&self.tz)
+    pub fn now(&self) -> Zoned {
+        UtcStamp::now().timestamp().to_zoned(self.tz.clone())
     }
 
     /// Convert a UTC instant into this zone.
-    pub fn at(&self, utc: DateTime<Utc>) -> DateTime<Tz> {
-        utc.with_timezone(&self.tz)
+    pub fn at(&self, utc: UtcStamp) -> Zoned {
+        utc.timestamp().to_zoned(self.tz.clone())
     }
 
     /// One short line for agent context, stamped **now**.
@@ -79,19 +79,19 @@ impl UserTimezone {
     /// The leading weekday is part of the contract: see the module docs for the bug that made
     /// it part of the line.
     pub fn context_line(&self) -> String {
-        self.context_line_at(Utc::now())
+        self.context_line_at(UtcStamp::now())
     }
 
     /// Same as [`context_line`](Self::context_line) for a specific UTC instant (tests / event time).
-    pub fn context_line_at(&self, utc: DateTime<Utc>) -> String {
+    pub fn context_line_at(&self, utc: UtcStamp) -> String {
         let local = self.at(utc);
         // `%A` is the full weekday (Sunday), `%Z` the abbreviated zone (CDT/CST); the IANA name
         // in parens is unambiguous year-round and is the human-readable anchor for ops staff.
         format!(
             "Local time: {} {} {} ({}).",
-            local.format("%A"),
-            local.format("%Y-%m-%d %H:%M"),
-            local.format("%Z"),
+            local.strftime("%A"),
+            local.strftime("%Y-%m-%d %H:%M"),
+            local.strftime("%Z"),
             self.iana_name()
         )
     }
@@ -100,11 +100,11 @@ impl UserTimezone {
     ///
     /// Empty body → just the line. Non-empty → line, blank line, body.
     pub fn with_context(&self, body: &str) -> String {
-        self.with_context_at(Utc::now(), body)
+        self.with_context_at(UtcStamp::now(), body)
     }
 
     /// [`with_context`](Self::with_context) at a fixed UTC instant.
-    pub fn with_context_at(&self, utc: DateTime<Utc>, body: &str) -> String {
+    pub fn with_context_at(&self, utc: UtcStamp, body: &str) -> String {
         let line = self.context_line_at(utc);
         let body = body.trim();
         if body.is_empty() {
@@ -142,7 +142,10 @@ pub fn with_context(iana: &str, body: &str) -> Result<String, UnknownTimezone> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::TimeZone;
+
+    fn utc(year: i16, month: i8, day: i8, hour: i8, minute: i8, second: i8) -> UtcStamp {
+        UtcStamp::from_civil_utc(year, month, day, hour, minute, second).unwrap()
+    }
 
     #[test]
     fn default_zone_parses() {
@@ -162,7 +165,7 @@ mod tests {
         // Fixed UTC: 2026-07-20 02:32 UTC = 2026-07-19 21:32 CDT (America/Chicago, UTC-5 in July).
         // 2026-07-19 is a Sunday — assert the full weekday on the front of the line, not just
         // the date, so a mutation that drops the weekday gets caught here.
-        let utc = Utc.with_ymd_and_hms(2026, 7, 20, 2, 32, 0).unwrap();
+        let utc = utc(2026, 7, 20, 2, 32, 0);
         let tz = UserTimezone::parse("America/Chicago").unwrap();
         let line = tz.context_line_at(utc);
         assert_eq!(
@@ -173,7 +176,7 @@ mod tests {
 
     #[test]
     fn with_context_prefixes_body() {
-        let utc = Utc.with_ymd_and_hms(2026, 7, 20, 2, 32, 0).unwrap();
+        let utc = utc(2026, 7, 20, 2, 32, 0);
         let tz = UserTimezone::parse("America/Chicago").unwrap();
         let out = tz.with_context_at(utc, "Summarize today's calendar.");
         assert!(out.starts_with("Local time: Sunday 2026-07-19 21:32 CDT (America/Chicago)."));
@@ -211,7 +214,6 @@ mod tests {
 #[cfg(test)]
 mod proptest_tests {
     use super::*;
-    use chrono::TimeZone;
     use proptest::prelude::*;
     use std::str::FromStr;
 
@@ -246,7 +248,7 @@ mod proptest_tests {
             utc_secs in -2000000000i64..2000000000i64,
         ) {
             let tz = UserTimezone::default_zone();
-            let Some(dt) = chrono::Utc.timestamp_opt(utc_secs, 0).single() else {
+            let Some(dt) = UtcStamp::from_unix_seconds(utc_secs) else {
                 return Ok(());
             };
             prop_assert_eq!(tz.context_line_at(dt), tz.context_line_at(dt));

@@ -7,9 +7,9 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
+use jiff::civil::{Date, DateTime};
 use liberado_common::process::std_command;
-use liberado_common::{Event, UserTimezone};
+use liberado_common::{Event, UserTimezone, UtcStamp};
 
 use crate::types::{Daemon, ReactionOutcome};
 
@@ -113,7 +113,7 @@ pub enum JobEffect {
 pub(crate) fn execute_on(
     root: &Path,
     job: &JobRequest,
-    today: NaiveDate,
+    today: Date,
     zone: &str,
     tick: &crate::vault_pings::ReminderTick,
     outbox: bool,
@@ -216,16 +216,20 @@ impl Daemon {
         }
     }
 
-    fn mechanical_clock(&self) -> (NaiveDate, String) {
+    fn mechanical_clock(&self) -> (Date, String) {
         let zone = self
             .user_timezone
+            .as_ref()
+            .cloned()
             .unwrap_or_else(UserTimezone::default_zone);
-        (zone.now().date_naive(), zone.iana_name().to_string())
+        (zone.now().date(), zone.iana_name().to_string())
     }
 
     fn reminder_tick(&self) -> crate::vault_pings::ReminderTick {
         let zone = self
             .user_timezone
+            .as_ref()
+            .cloned()
             .unwrap_or_else(UserTimezone::default_zone);
         crate::vault_pings::ReminderTick {
             now: self.reminder_now(&zone),
@@ -235,10 +239,10 @@ impl Daemon {
         }
     }
 
-    fn reminder_now(&self, zone: &UserTimezone) -> NaiveDateTime {
+    fn reminder_now(&self, zone: &UserTimezone) -> DateTime {
         match self.fixed_now {
             Some(now) => now,
-            None => zone.now().naive_local(),
+            None => zone.now().datetime(),
         }
     }
 
@@ -247,7 +251,7 @@ impl Daemon {
         text: &str,
         job: &JobRequest,
         catch_up: bool,
-        fire_at: DateTime<Utc>,
+        fire_at: UtcStamp,
     ) {
         let zone = self
             .user_timezone
@@ -263,7 +267,7 @@ impl Daemon {
         items: &[crate::reminders::MechanicalReminder],
         job: &JobRequest,
         _catch_up: bool,
-        fire_at: chrono::DateTime<chrono::Utc>,
+        fire_at: UtcStamp,
     ) {
         if let (Some(outbox), Some(delivery)) = (&self.outbox, &self.outbox_delivery) {
             let telegram_ready = self.reminder.is_some()
@@ -274,7 +278,7 @@ impl Daemon {
                 delivery,
                 telegram_ready,
                 items,
-                chrono::Utc::now(),
+                UtcStamp::now(),
             ) {
                 tracing::warn!(error = %err, "outbox enqueue failed");
             } else {
@@ -322,7 +326,13 @@ fn git_snapshot(root: &Path, job: &JobRequest) -> JobEffect {
     if let Err(error) = git_ok(root, job, &["add", "-A"]) {
         return JobEffect::Remind(format!("{}: {error}", job.name));
     }
-    let message = format!("vault snapshot {}", chrono::Utc::now().format("%Y-%m-%d"));
+    let message = format!(
+        "vault snapshot {}",
+        UtcStamp::now()
+            .timestamp()
+            .to_zoned(jiff::tz::TimeZone::UTC)
+            .date()
+    );
     if let Err(error) = git_ok(root, job, &["commit", "-m", &message]) {
         return JobEffect::Remind(format!("{}: {error}", job.name));
     }

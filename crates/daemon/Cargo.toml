@@ -26,8 +26,7 @@ liberado-session = { workspace = true }
 # For `latency::with_correlation` only: the approval path executes inference and must attribute it
 # to the proposal's originating correlation, or the cost journal records `"-"`.
 liberado-provider = { workspace = true }
-chrono-tz = { workspace = true }
-chrono = { workspace = true }
+jiff = { workspace = true }
 reqwest = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }

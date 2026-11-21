@@ -5,8 +5,7 @@
 //! Once, Session, and Everywhere are the same as Approve: one edit, no standing
 //! grant, and no write to `grants.overlay.toml`.
 
-use chrono::Utc;
-use liberado_common::{DecisionVia, Proposal, ProposalStatus, recorded_action};
+use liberado_common::{DecisionVia, Proposal, ProposalStatus, UtcStamp, recorded_action};
 
 use super::{PermissionResolver, ResolveOutcome};
 
@@ -58,7 +57,7 @@ impl PermissionResolver {
         if proposal.requested_grant.is_none() {
             return ResolveOutcome::NotAPermissionRequest;
         }
-        let now = Utc::now();
+        let now = UtcStamp::now();
         if proposal.status != ProposalStatus::Pending || proposal.is_expired_at(now) {
             return super::already(recorded_action(&proposal, now));
         }

@@ -1,4 +1,6 @@
-use chrono::{DateTime, Duration, NaiveDate, Utc};
+use jiff::SignedDuration;
+use jiff::civil::Date;
+use liberado_common::{UtcStamp, duration_days};
 
 use crate::completion_diff::TaskCounts;
 use crate::completion_time::{PRECISION_TAP, SOURCE_LIBERADO};
@@ -8,10 +10,8 @@ use crate::rows::{EnqueueOutcome, NewReminder};
 use crate::source::OutboxSource;
 use crate::store::Outbox;
 
-fn at(text: &str) -> DateTime<Utc> {
-    DateTime::parse_from_rfc3339(text)
-        .expect("stamp")
-        .with_timezone(&Utc)
+fn at(text: &str) -> UtcStamp {
+    text.parse::<UtcStamp>().expect("stamp")
 }
 
 fn db() -> (tempfile::TempDir, Outbox) {
@@ -20,13 +20,13 @@ fn db() -> (tempfile::TempDir, Outbox) {
     (dir, outbox)
 }
 
-fn tap(id: Option<i64>, when: DateTime<Utc>) -> NewCompletion {
+fn tap(id: Option<i64>, when: UtcStamp) -> NewCompletion {
     let mut row = liberado_tap_completion("Home.md", "Call dentist", id.unwrap_or(1), when, "UTC");
     row.outbox_id = id;
     row
 }
 
-fn reminder(key: &str, path: &str, text: &str, when: DateTime<Utc>) -> NewReminder {
+fn reminder(key: &str, path: &str, text: &str, when: UtcStamp) -> NewReminder {
     NewReminder {
         idempotency_key: key.into(),
         channel: "webpush".into(),
@@ -44,7 +44,7 @@ fn reminder(key: &str, path: &str, text: &str, when: DateTime<Utc>) -> NewRemind
     }
 }
 
-fn resolve(outbox: &Outbox, key: &str, path: &str, text: &str, when: DateTime<Utc>) -> i64 {
+fn resolve(outbox: &Outbox, key: &str, path: &str, text: &str, when: UtcStamp) -> i64 {
     let EnqueueOutcome::Inserted(id) = outbox
         .enqueue(&reminder(key, path, text, when), when)
         .expect("enqueue")
@@ -77,8 +77,8 @@ fn a_repeated_outbox_id_inserts_one_row_and_null_ids_do_not_collide() {
 fn a_hint_inside_fifteen_minutes_matches_and_an_older_one_does_not() {
     let (_dir, outbox) = db();
     let detected = at("2026-11-10T15:00:00Z");
-    let recent = detected - Duration::minutes(15);
-    let stale = detected - Duration::minutes(15) - Duration::seconds(1);
+    let recent = detected - SignedDuration::from_mins(15);
+    let stale = detected - SignedDuration::from_mins(15) - SignedDuration::from_secs(1);
     let recent_id = resolve(&outbox, "recent", "Home.md", "Call dentist", recent);
     resolve(&outbox, "stale", "Other.md", "Call dentist", stale);
     let hint = outbox
@@ -121,7 +121,7 @@ fn prune_deletes_old_outbox_rows_and_leaves_completions() {
         panic!("duplicate");
     };
     outbox
-        .mark_accepted(&[id], when - Duration::days(31))
+        .mark_accepted(&[id], when - duration_days(31))
         .expect("accept");
     assert!(outbox.insert_completion(&tap(None, when)).expect("log"));
     assert_eq!(outbox.prune(when).expect("prune"), 1);
@@ -153,7 +153,7 @@ fn apply_note_writes_the_snapshot_and_a_later_void_marks_the_row() {
         count: 1,
         prior_closed: 0,
         hint_text: None,
-        done_date: Some(NaiveDate::from_ymd_opt(2026, 11, 9).expect("date")),
+        done_date: Some(Date::new(2026, 11, 9).expect("date")),
     };
     outbox
         .apply_completion_note(&crate::completions::NoteApply {

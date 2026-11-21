@@ -3,7 +3,7 @@
 //! The expression's fields are civil time in a named IANA zone. The cron crate
 //! evaluates them in that zone. This module does not walk fire times.
 
-use chrono::Weekday;
+use jiff::civil::Weekday;
 
 /// Named weekdays at one clock time. `days` is unique and Monday-first.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -23,14 +23,14 @@ pub fn parse_civil(days: &[String], at: &str) -> Result<CivilSchedule, String> {
     let mut parsed = Vec::with_capacity(days.len());
     for raw in days {
         let day = parse_day(raw)?;
-        let index = day.num_days_from_monday() as usize;
+        let index = day.to_monday_zero_offset() as usize;
         if seen[index] {
             return Err(format!("duplicate day '{}'", raw.trim()));
         }
         seen[index] = true;
         parsed.push(day);
     }
-    parsed.sort_by_key(|day| day.num_days_from_monday());
+    parsed.sort_by_key(|day| day.to_monday_zero_offset());
     let (hour, minute, second) = parse_at(at)?;
     Ok(CivilSchedule {
         days: parsed,
@@ -45,7 +45,7 @@ pub fn compile_cron(spec: &CivilSchedule) -> String {
     let mut dows: Vec<u32> = spec
         .days
         .iter()
-        .map(|day| day.number_from_sunday())
+        .map(|day| day.to_sunday_one_offset() as u32)
         .collect();
     dows.sort_unstable();
     let list = join_numbers(&dows);
@@ -95,13 +95,13 @@ pub fn civil_english(spec: &CivilSchedule, timezone: &str) -> String {
 
 fn parse_day(raw: &str) -> Result<Weekday, String> {
     match raw.trim().to_ascii_lowercase().as_str() {
-        "mon" | "monday" => Ok(Weekday::Mon),
-        "tue" | "tues" | "tuesday" => Ok(Weekday::Tue),
-        "wed" | "wednesday" => Ok(Weekday::Wed),
-        "thu" | "thur" | "thurs" | "thursday" => Ok(Weekday::Thu),
-        "fri" | "friday" => Ok(Weekday::Fri),
-        "sat" | "saturday" => Ok(Weekday::Sat),
-        "sun" | "sunday" => Ok(Weekday::Sun),
+        "mon" | "monday" => Ok(Weekday::Monday),
+        "tue" | "tues" | "tuesday" => Ok(Weekday::Tuesday),
+        "wed" | "wednesday" => Ok(Weekday::Wednesday),
+        "thu" | "thur" | "thurs" | "thursday" => Ok(Weekday::Thursday),
+        "fri" | "friday" => Ok(Weekday::Friday),
+        "sat" | "saturday" => Ok(Weekday::Saturday),
+        "sun" | "sunday" => Ok(Weekday::Sunday),
         other => Err(format!("unknown day '{other}'")),
     }
 }
@@ -163,32 +163,32 @@ fn parse_dow(token: &str) -> Option<Vec<Weekday>> {
     if days.is_empty() {
         return None;
     }
-    days.sort_by_key(|day| day.num_days_from_monday());
+    days.sort_by_key(|day| day.to_monday_zero_offset());
     Some(days)
 }
 
 fn weekday_from_cron(number: u32) -> Option<Weekday> {
     match number {
-        1 => Some(Weekday::Sun),
-        2 => Some(Weekday::Mon),
-        3 => Some(Weekday::Tue),
-        4 => Some(Weekday::Wed),
-        5 => Some(Weekday::Thu),
-        6 => Some(Weekday::Fri),
-        7 => Some(Weekday::Sat),
+        1 => Some(Weekday::Sunday),
+        2 => Some(Weekday::Monday),
+        3 => Some(Weekday::Tuesday),
+        4 => Some(Weekday::Wednesday),
+        5 => Some(Weekday::Thursday),
+        6 => Some(Weekday::Friday),
+        7 => Some(Weekday::Saturday),
         _ => None,
     }
 }
 
 fn all_days() -> Vec<Weekday> {
     vec![
-        Weekday::Mon,
-        Weekday::Tue,
-        Weekday::Wed,
-        Weekday::Thu,
-        Weekday::Fri,
-        Weekday::Sat,
-        Weekday::Sun,
+        Weekday::Monday,
+        Weekday::Tuesday,
+        Weekday::Wednesday,
+        Weekday::Thursday,
+        Weekday::Friday,
+        Weekday::Saturday,
+        Weekday::Sunday,
     ]
 }
 
@@ -209,11 +209,11 @@ fn day_phrase(days: &[Weekday]) -> String {
     }
     if days
         == [
-            Weekday::Mon,
-            Weekday::Tue,
-            Weekday::Wed,
-            Weekday::Thu,
-            Weekday::Fri,
+            Weekday::Monday,
+            Weekday::Tuesday,
+            Weekday::Wednesday,
+            Weekday::Thursday,
+            Weekday::Friday,
         ]
     {
         return "Weekdays".to_string();
@@ -235,13 +235,13 @@ fn join_oxford(names: &[&str]) -> String {
 
 fn weekday_name(day: Weekday) -> &'static str {
     match day {
-        Weekday::Mon => "Monday",
-        Weekday::Tue => "Tuesday",
-        Weekday::Wed => "Wednesday",
-        Weekday::Thu => "Thursday",
-        Weekday::Fri => "Friday",
-        Weekday::Sat => "Saturday",
-        Weekday::Sun => "Sunday",
+        Weekday::Monday => "Monday",
+        Weekday::Tuesday => "Tuesday",
+        Weekday::Wednesday => "Wednesday",
+        Weekday::Thursday => "Thursday",
+        Weekday::Friday => "Friday",
+        Weekday::Saturday => "Saturday",
+        Weekday::Sunday => "Sunday",
     }
 }
 

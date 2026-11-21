@@ -5,6 +5,7 @@
 //! permission auto-approvals, tool turn collection, and git artifact inspection.
 
 use super::{ControlPlaneError, TaskEvent, WorkerRunResult, WorkerStatus};
+use liberado_common::UtcStamp;
 use liberado_common::process::std_command;
 use serde_json::{Value, json};
 use std::collections::BTreeSet;
@@ -96,7 +97,7 @@ fn failed_worker_result(message: &str, session_id: Option<String>) -> WorkerRunR
 
 fn next_run_id() -> String {
     let sequence = RUN_SEQUENCE.fetch_add(1, Ordering::Relaxed);
-    format!("run-{}-{sequence}", chrono::Utc::now().timestamp_millis())
+    format!("run-{}-{sequence}", UtcStamp::now().unix_millis())
 }
 
 pub(crate) fn take_stdio(

@@ -4,7 +4,7 @@
     "proven_invariant": 65,
     "local_failure": 0,
     "process_fatal": 45,
-    "files_scanned": 801,
+    "files_scanned": 802,
     "files_with_unwraps": 49
   },
   "files": {
@@ -16,7 +16,7 @@
       "occurrences": [
         {
           "file": "crates/acp-bridge/src/session_store.rs",
-          "line": 92,
+          "line": 93,
           "column": 6,
           "method": "expect",
           "snippet": "TEST_SESSIONS_DIR.lock().expect(\"lock\")",
@@ -256,7 +256,7 @@
       "occurrences": [
         {
           "file": "crates/coder-agent/src/lib.rs",
-          "line": 616,
+          "line": 615,
           "column": 26,
           "method": "expect",
           "snippet": "progress\n        .lock()\n        .expect(\"progress mutex poisoned\")",
@@ -354,7 +354,7 @@
       "occurrences": [
         {
           "file": "crates/coder-agent/src/trace.rs",
-          "line": 19,
+          "line": 20,
           "column": 5,
           "method": "expect",
           "snippet": "events\n        .lock()\n        .expect(\"coder event mutex poisoned\")",
@@ -365,7 +365,7 @@
         },
         {
           "file": "crates/coder-agent/src/trace.rs",
-          "line": 26,
+          "line": 27,
           "column": 5,
           "method": "expect",
           "snippet": "events.lock().expect(\"coder event mutex poisoned\")",

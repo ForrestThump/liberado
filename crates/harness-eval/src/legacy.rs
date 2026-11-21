@@ -3,6 +3,7 @@
 //! The comparison owns its worktrees, build caches, logs, sessions, traces, and saved Git refs.
 //! This keeps orchestration policy in compiled code. Shell wrappers only need to pass arguments.
 
+use liberado_common::UtcStamp;
 use std::collections::BTreeMap;
 use std::error::Error;
 use std::ffi::OsStr;
@@ -12,7 +13,6 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
-use chrono::Utc;
 use liberado_common::path::child_process_path;
 use liberado_common::process::{command, output_within, std_command};
 use serde::{Deserialize, Serialize};
@@ -1323,7 +1323,7 @@ fn verify_harness(
             eprint!("{message}");
             let _ = fs::write(layout.artifacts.join("verifier.stdout.log"), b"");
             let _ = fs::write(layout.artifacts.join("verifier.stderr.log"), &message);
-            let now = Utc::now();
+            let now = UtcStamp::now();
             let _ = fs::write(
                 layout.artifacts.join("verifier-status.txt"),
                 format!(
@@ -1339,13 +1339,13 @@ fn verify_harness(
     cmd.args(["test", "--workspace", "--no-fail-fast"])
         .current_dir(&layout.worktree)
         .env("CARGO_TARGET_DIR", &layout.target_dir);
-    let started = Utc::now();
+    let started = UtcStamp::now();
     let result = run_async_command(
         &mut cmd,
         "cargo test --workspace --no-fail-fast",
         Duration::from_secs(manifest.compile_timeout_secs),
     );
-    let finished = Utc::now();
+    let finished = UtcStamp::now();
     let (exit, stdout, stderr) = match result {
         Ok(output) => (
             output.status.code().unwrap_or(1),
@@ -1692,7 +1692,7 @@ fn execute_logged(
     command
         .stdout(Stdio::from(File::create(&stdout_path)?))
         .stderr(Stdio::from(File::create(&stderr_path)?));
-    let started = Utc::now();
+    let started = UtcStamp::now();
     let mut child = command.spawn()?;
     #[cfg(windows)]
     let _process_tree = match WindowsProcessTree::assign(&child) {
@@ -1723,7 +1723,7 @@ fn execute_logged(
         }
         std::thread::sleep(Duration::from_millis(250));
     };
-    let finished = Utc::now();
+    let finished = UtcStamp::now();
     let exit = status.code().unwrap_or(1);
     fs::write(
         layout.artifacts.join("run-status.txt"),
@@ -1884,7 +1884,7 @@ fn write_result_json(
             "exit_code": exit_code,
             "verifier_exit_code": verifier_exit_code,
             "session_id": session_id,
-            "saved_at": Utc::now(),
+            "saved_at": UtcStamp::now(),
             "had_uncommitted_changes": !status_before.trim().is_empty(),
         }),
     )

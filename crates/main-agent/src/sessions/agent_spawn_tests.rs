@@ -1,3 +1,4 @@
+use liberado_common::UtcStamp;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use super::*;
@@ -75,12 +76,8 @@ fn header_match_requires_projected_agent_and_skips_the_creator() {
 
 #[test]
 fn pick_oldest_breaks_ties_on_id_after_created_at() {
-    let early = chrono::DateTime::parse_from_rfc3339("2026-01-01T00:00:00Z")
-        .unwrap()
-        .with_timezone(&chrono::Utc);
-    let late = chrono::DateTime::parse_from_rfc3339("2026-06-01T00:00:00Z")
-        .unwrap()
-        .with_timezone(&chrono::Utc);
+    let early = "2026-01-01T00:00:00Z".parse::<UtcStamp>().unwrap();
+    let late = "2026-06-01T00:00:00Z".parse::<UtcStamp>().unwrap();
     let mut first = ConversationHeader {
         id: Ulid::from(1u128),
         created_at: late,

@@ -1,7 +1,6 @@
-use chrono::{DateTime, Utc};
-
 use crate::copy::DigestItem;
 use crate::source::OutboxSource;
+use liberado_common::UtcStamp;
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct DeliveryRow {
@@ -19,7 +18,7 @@ pub struct DeliveryBatch {
     pub rows: Vec<DeliveryRow>,
     pub kind: String,
     pub outbox_id: Option<i64>,
-    pub due_at: Option<DateTime<Utc>>,
+    pub due_at: Option<UtcStamp>,
     pub late: bool,
     pub source: Option<OutboxSource>,
     pub items: Vec<DigestItem>,

@@ -70,8 +70,7 @@ pub use verify::{
 };
 
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
-use liberado_common::{Outcome, Report};
+use liberado_common::{Outcome, Report, UtcStamp};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -1189,21 +1188,21 @@ pub enum CoderEvent {
         session_id: String,
         backend: String,
         task_id: String,
-        at: DateTime<Utc>,
+        at: UtcStamp,
     },
     RoleStarted {
         role: String,
         model: String,
-        at: DateTime<Utc>,
+        at: UtcStamp,
     },
     RoleFinished {
         role: String,
-        at: DateTime<Utc>,
+        at: UtcStamp,
     },
     ModelTurnStarted {
         role: String,
         turn: u32,
-        at: DateTime<Utc>,
+        at: UtcStamp,
     },
     /// What the model was sent, recorded **before** the call.
     ///
@@ -1228,7 +1227,7 @@ pub enum CoderEvent {
         /// still that text.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         system_prompt: Option<String>,
-        at: DateTime<Utc>,
+        at: UtcStamp,
     },
     ModelTurnFinished {
         role: String,
@@ -1261,45 +1260,45 @@ pub enum CoderEvent {
         prompt_tokens: u32,
         #[serde(default)]
         completion_tokens: u32,
-        at: DateTime<Utc>,
+        at: UtcStamp,
     },
     ToolStarted {
         name: String,
         args_preview: String,
-        at: DateTime<Utc>,
+        at: UtcStamp,
     },
     ToolFinished {
         name: String,
         ok: bool,
         result_preview: String,
-        at: DateTime<Utc>,
+        at: UtcStamp,
     },
     FileChanged {
         path: String,
-        at: DateTime<Utc>,
+        at: UtcStamp,
     },
     ValidationFinished {
         ok: bool,
         summary: String,
-        at: DateTime<Utc>,
+        at: UtcStamp,
     },
     LoopGuardTriggered {
         guard: String,
         action: String,
-        at: DateTime<Utc>,
+        at: UtcStamp,
     },
     CriticVerdict {
         verdict: CriticVerdict,
-        at: DateTime<Utc>,
+        at: UtcStamp,
     },
     ReportFiled {
         outcome: Outcome,
         summary: String,
-        at: DateTime<Utc>,
+        at: UtcStamp,
     },
     SessionFinished {
         outcome: Outcome,
-        at: DateTime<Utc>,
+        at: UtcStamp,
     },
     /// The attempt ended on an error nothing along the way expected.
     ///
@@ -1312,7 +1311,7 @@ pub enum CoderEvent {
     /// that made four consecutive failures cost a day each.
     SessionAborted {
         error: String,
-        at: DateTime<Utc>,
+        at: UtcStamp,
     },
 }
 

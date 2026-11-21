@@ -4,8 +4,7 @@ use super::*;
 use crate::{
     CoderRunConfig, CoderRunRequest, CoderRunResult, CoderTask, LIBERADO_LOOP_BACKEND, WorkspaceRef,
 };
-use chrono::Utc;
-use liberado_common::Outcome;
+use liberado_common::{Outcome, UtcStamp};
 use std::io::Write;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -58,7 +57,7 @@ fn turn(n: u32, content: Option<&str>, offered: &[&str], calls: &[&str]) -> Code
         tool_calls: calls.iter().map(|s| s.to_string()).collect(),
         prompt_tokens: 10,
         completion_tokens: 2,
-        at: Utc::now(),
+        at: UtcStamp::now(),
     }
 }
 
@@ -67,7 +66,7 @@ fn tool(name: &str, ok: bool, preview: &str) -> CoderEvent {
         name: name.into(),
         ok,
         result_preview: preview.into(),
-        at: Utc::now(),
+        at: UtcStamp::now(),
     }
 }
 
@@ -100,7 +99,7 @@ fn render_includes_offered_tools_model_text_calls_results_and_guards() {
             CoderEvent::LoopGuardTriggered {
                 guard: "read_only_stall".into(),
                 action: "withdraw write_file".into(),
-                at: Utc::now(),
+                at: UtcStamp::now(),
             },
             turn(
                 2,
@@ -256,7 +255,7 @@ fn compare_reports_turns_offers_refusals_mutation_and_terminal() {
                 tool("write_file", true, "wrote"),
                 CoderEvent::SessionFinished {
                     outcome: Outcome::Succeeded,
-                    at: Utc::now(),
+                    at: UtcStamp::now(),
                 },
             ],
         );
@@ -289,7 +288,7 @@ fn compare_reports_turns_offers_refusals_mutation_and_terminal() {
                 turn(3, Some("give up"), &["read_file"], &[]),
                 CoderEvent::SessionFinished {
                     outcome: Outcome::Failed,
-                    at: Utc::now(),
+                    at: UtcStamp::now(),
                 },
             ],
         );
@@ -395,15 +394,15 @@ fn teardown_file_changed_batch_does_not_date_the_first_mutation() {
             // Emitted only at teardown — after the last turn, for every file the run touched.
             CoderEvent::FileChanged {
                 path: "crates/daemon/src/lib.rs".into(),
-                at: Utc::now(),
+                at: UtcStamp::now(),
             },
             CoderEvent::FileChanged {
                 path: "crates/daemon/src/react.rs".into(),
-                at: Utc::now(),
+                at: UtcStamp::now(),
             },
             CoderEvent::SessionFinished {
                 outcome: Outcome::Succeeded,
-                at: Utc::now(),
+                at: UtcStamp::now(),
             },
         ],
     );
@@ -572,7 +571,7 @@ fn divergence_aligns_by_call_sequence_across_harnesses() {
             CoderEvent::LoopGuardTriggered {
                 guard: "read_only_stall".into(),
                 action: "withdraw write_file".into(),
-                at: Utc::now(),
+                at: UtcStamp::now(),
             },
         ],
     ));

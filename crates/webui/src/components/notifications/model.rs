@@ -1,5 +1,7 @@
 //! Push notification view models and display helpers.
 
+#[cfg(not(target_arch = "wasm32"))]
+use jiff::Timestamp;
 use serde::Deserialize;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize)]
@@ -244,9 +246,9 @@ pub(crate) fn format_added_date(iso: &str) -> String {
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
-        chrono::DateTime::parse_from_rfc3339(iso)
+        iso.parse::<Timestamp>()
             .ok()
-            .map(|dt| dt.format("%b %d, %Y").to_string())
+            .map(|dt| dt.strftime("%b %d, %Y").to_string())
             .unwrap_or_else(|| iso.to_string())
     }
 }

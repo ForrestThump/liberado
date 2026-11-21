@@ -14,8 +14,8 @@
 //! then resume. Model schedules and non-reminder mechanical jobs keep ordinary cron semantics.
 
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
-use liberado_common::{Event, EventPayload, EventSource, event_source};
+use jiff::tz::TimeZone;
+use liberado_common::{Event, EventPayload, EventSource, UtcStamp, event_source};
 use std::cmp::Reverse;
 use std::collections::{BinaryHeap, HashSet};
 use std::str::FromStr;
@@ -35,7 +35,7 @@ pub use next_fires::{FireInstant, next_fires, next_fires_after};
 pub use zoned::{next_fires_zoned, next_fires_zoned_after};
 
 /// A configured cron schedule: fire on `cron_expr` and dispatch `goal` when it does. `cron_expr`
-/// uses the `cron` crate's 6/7-field syntax (**seconds first** — not standard 5-field cron), e.g.
+/// uses jiff-cron's 6/7-field syntax (**seconds first** — not standard 5-field cron), e.g.
 /// `"0 0 9 * * * *"` for "every day at 09:00:00".
 ///
 /// `eval_timezone` is `None` when those fields are UTC. When it is an IANA name, the fields
@@ -98,12 +98,11 @@ pub struct MechanicalJob {
 /// spirit), never discovered only once a schedule was due to fire.
 #[derive(Debug, thiserror::Error)]
 pub enum CronError {
-    #[error("schedule '{name}' has an invalid cron expression '{expr}': {source}")]
+    #[error("schedule '{name}' has an invalid cron expression '{expr}': {message}")]
     InvalidExpression {
         name: String,
         expr: String,
-        #[source]
-        source: cron::error::Error,
+        message: String,
     },
     #[error("duplicate schedule name '{0}'")]
     DuplicateName(String),
@@ -124,8 +123,8 @@ struct ParsedSchedule {
     max_turns: Option<u32>,
     job: Option<MechanicalJob>,
     direct: Option<bool>,
-    zone: Option<chrono_tz::Tz>,
-    parsed: cron::Schedule,
+    zone: Option<TimeZone>,
+    parsed: jiff_cron::Schedule,
 }
 
 /// The cron [`EventSource`]: wakes for whichever attached schedule fires next, produces an
@@ -164,9 +163,9 @@ impl CronEventSource {
     fn resolve_fire(
         &self,
         schedule: &ParsedSchedule,
-        scheduled: DateTime<Utc>,
-        now: DateTime<Utc>,
-    ) -> (DateTime<Utc>, bool) {
+        scheduled: UtcStamp,
+        now: UtcStamp,
+    ) -> (UtcStamp, bool) {
         let Some(cu) = &self.catch_up else {
             return (scheduled, false);
         };
@@ -176,7 +175,7 @@ impl CronEventSource {
         let cursor = cu.store.ensure(&schedule.name, now);
         let missed = catch_up::missed_fires_in_window(
             &schedule.parsed,
-            schedule.zone,
+            schedule.zone.as_ref(),
             cursor,
             now,
             cu.window,
@@ -184,7 +183,7 @@ impl CronEventSource {
         catch_up::pick_emit_fire(scheduled, &missed, now)
     }
 
-    fn should_skip_emit(&self, schedule: &ParsedSchedule, emit_at: DateTime<Utc>) -> bool {
+    fn should_skip_emit(&self, schedule: &ParsedSchedule, emit_at: UtcStamp) -> bool {
         let Some(cu) = &self.catch_up else {
             return false;
         };
@@ -196,11 +195,11 @@ impl CronEventSource {
 }
 
 fn parse_schedule(schedule: Schedule) -> Result<ParsedSchedule, CronError> {
-    let expr = cron::Schedule::from_str(&schedule.cron_expr).map_err(|source| {
+    let expr = jiff_cron::Schedule::from_str(&schedule.cron_expr).map_err(|err| {
         CronError::InvalidExpression {
             name: schedule.name.clone(),
             expr: schedule.cron_expr.clone(),
-            source,
+            message: err.to_string(),
         }
     })?;
     let zone = fire_at::eval_zone(schedule.eval_timezone.as_deref()).map_err(|timezone| {
@@ -235,17 +234,17 @@ impl EventSource for CronEventSource {
             return;
         }
 
-        let now = Utc::now();
+        let now = UtcStamp::now();
         self.seed_mechanical_cursors(now);
 
         // One next-fire time per schedule, kept in a min-heap (via `Reverse`) so the loop always
         // sleeps exactly until the earliest one, regardless of how many schedules are attached.
-        let heap: BinaryHeap<Reverse<(DateTime<Utc>, usize)>> = self
+        let heap: BinaryHeap<Reverse<(UtcStamp, usize)>> = self
             .schedules
             .iter()
             .enumerate()
             .filter_map(|(i, s)| {
-                fire_at::next_utc(&s.parsed, s.zone, now).map(|next| Reverse((next, i)))
+                fire_at::next_utc(&s.parsed, s.zone.as_ref(), now).map(|next| Reverse((next, i)))
             })
             .collect();
 
@@ -299,7 +298,7 @@ fn insert_job(map: &mut serde_json::Map<String, serde_json::Value>, job: &Mechan
 /// Build the standardized event for a cron firing. `correlation_id` is unique per firing (name +
 /// fire time), the idempotency key Decision 6 requires; `source` is `"cron:{name}"` so a consumer
 /// can tell which schedule fired without inspecting the payload.
-fn build_event(schedule: &ParsedSchedule, fire_at: DateTime<Utc>, catch_up: bool) -> Event {
+fn build_event(schedule: &ParsedSchedule, fire_at: UtcStamp, catch_up: bool) -> Event {
     let correlation_id = format!("cron:{}:{}", schedule.name, fire_at.to_rfc3339());
     Event::trigger(
         "CronFired",
@@ -374,7 +373,7 @@ mod tests {
             ..MechanicalJob::default()
         });
         let parsed = CronEventSource::new(vec![s]).unwrap().schedules;
-        let event = build_event(&parsed[0], Utc::now(), false);
+        let event = build_event(&parsed[0], UtcStamp::now(), false);
         assert_eq!(
             event.payload.data.get("job").and_then(|v| v.as_str()),
             Some("git-snapshot")
@@ -403,7 +402,7 @@ mod tests {
         let parsed = CronEventSource::new(vec![schedule("plain", "0 0 * * * * *", "tidy")])
             .unwrap()
             .schedules;
-        let event = build_event(&parsed[0], Utc::now(), false);
+        let event = build_event(&parsed[0], UtcStamp::now(), false);
         assert!(event.payload.data.get("job").is_none());
     }
 
@@ -414,7 +413,7 @@ mod tests {
         let mut s = schedule("bigjob", "0 0 * * * * *", "process everything");
         s.max_turns = Some(20);
         let parsed = CronEventSource::new(vec![s]).unwrap().schedules;
-        let event = build_event(&parsed[0], Utc::now(), false);
+        let event = build_event(&parsed[0], UtcStamp::now(), false);
         assert_eq!(
             event.payload.data.get("max_turns").and_then(|v| v.as_u64()),
             Some(20)
@@ -427,7 +426,7 @@ mod tests {
         let parsed = CronEventSource::new(vec![schedule("plain", "0 0 * * * * *", "tidy")])
             .unwrap()
             .schedules;
-        let event = build_event(&parsed[0], Utc::now(), false);
+        let event = build_event(&parsed[0], UtcStamp::now(), false);
         assert!(event.payload.data.get("max_turns").is_none());
     }
 
@@ -438,7 +437,7 @@ mod tests {
         let mut s = schedule("quiet", "0 0 * * * * *", "sweep");
         s.deliver = Some(false);
         let parsed = CronEventSource::new(vec![s]).unwrap().schedules;
-        let event = build_event(&parsed[0], Utc::now(), false);
+        let event = build_event(&parsed[0], UtcStamp::now(), false);
         assert_eq!(
             event.payload.data.get("deliver").and_then(|v| v.as_bool()),
             Some(false)
@@ -453,7 +452,7 @@ mod tests {
         let mut s = schedule("inbox-filing", "0 0 * * * * *", "file captures");
         s.direct = Some(true);
         let parsed = CronEventSource::new(vec![s]).unwrap().schedules;
-        let event = build_event(&parsed[0], Utc::now(), false);
+        let event = build_event(&parsed[0], UtcStamp::now(), false);
         assert_eq!(
             event.payload.data.get("direct").and_then(|v| v.as_bool()),
             Some(true)
@@ -468,7 +467,7 @@ mod tests {
         let parsed = CronEventSource::new(vec![schedule("plain", "0 0 * * * * *", "tidy")])
             .unwrap()
             .schedules;
-        let event = build_event(&parsed[0], Utc::now(), false);
+        let event = build_event(&parsed[0], UtcStamp::now(), false);
         assert!(event.payload.data.get("direct").is_none());
     }
 
@@ -478,7 +477,7 @@ mod tests {
         let parsed = CronEventSource::new(vec![schedule("loud", "0 0 * * * * *", "report")])
             .unwrap()
             .schedules;
-        let event = build_event(&parsed[0], Utc::now(), false);
+        let event = build_event(&parsed[0], UtcStamp::now(), false);
         assert!(
             event.payload.data.get("deliver").is_none(),
             "{:?}",
@@ -493,7 +492,7 @@ mod tests {
         s.profile = Some("hat".into());
         s.deliver = Some(false);
         let parsed = CronEventSource::new(vec![s]).unwrap().schedules;
-        let event = build_event(&parsed[0], Utc::now(), false);
+        let event = build_event(&parsed[0], UtcStamp::now(), false);
         assert_eq!(
             event.payload.data.get("profile").and_then(|v| v.as_str()),
             Some("hat")
@@ -576,12 +575,12 @@ mod tests {
         let mut row = schedule("trash", "0 0 20 * * 3 *", "bins");
         row.eval_timezone = Some("America/Chicago".into());
         let source = CronEventSource::new(vec![row]).unwrap();
-        let after = chrono::TimeZone::with_ymd_and_hms(&Utc, 2026, 11, 2, 0, 0, 0).unwrap();
+        let after = UtcStamp::from_civil_utc(2026, 11, 2, 0, 0, 0).unwrap();
         let parsed = &source.schedules[0];
-        let fire = fire_at::next_utc(&parsed.parsed, parsed.zone, after).unwrap();
+        let fire = fire_at::next_utc(&parsed.parsed, parsed.zone.as_ref(), after).unwrap();
         assert_eq!(
             fire,
-            chrono::TimeZone::with_ymd_and_hms(&Utc, 2026, 11, 4, 2, 0, 0).unwrap()
+            UtcStamp::from_civil_utc(2026, 11, 4, 2, 0, 0).unwrap()
         );
     }
 

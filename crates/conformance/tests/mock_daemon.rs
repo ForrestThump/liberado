@@ -8,6 +8,8 @@
 //! cancel, P7 restart, P5 delegate child), and hooks write the P1b vault artifact the path reads
 //! back (the run_id arrives via the `X-Liberado-Idempotency-Key` header, exactly as on a real box).
 
+use jiff::SignedDuration;
+use liberado_common::UtcStamp;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -138,7 +140,7 @@ fn sse_response(body: &str) -> Response {
 }
 
 fn now_rfc3339() -> String {
-    chrono::Utc::now().to_rfc3339()
+    UtcStamp::now().to_rfc3339()
 }
 
 fn router(state: Shared) -> Router {
@@ -550,7 +552,7 @@ async fn p1a_fails_on_stale_reaction() {
     let dir = tempfile::tempdir().unwrap();
     let mut state = State::healthy();
     // 3 days old — beyond the 1.5× period gate for a daily schedule.
-    let stale = (chrono::Utc::now() - chrono::Duration::days(3)).to_rfc3339();
+    let stale = (UtcStamp::now() - liberado_common::duration_days(3)).to_rfc3339();
     state
         .reactions
         .push(reaction("cron:daily-planning", &stale));
@@ -641,10 +643,10 @@ cron_expr = "0 0 * * * * *"
 async fn p1a_passes_when_reaction_within_period_gate() {
     let dir = tempfile::tempdir().unwrap();
     let mut state = State::healthy();
-    let age = chrono::Duration::seconds(5_000);
+    let age = SignedDuration::from_secs(5_000);
     state.reactions.push(reaction(
         "cron:hourly-check",
-        &(chrono::Utc::now() - age).to_rfc3339(),
+        &(UtcStamp::now() - age).to_rfc3339(),
     ));
     let (client, base) = spawn(state).await;
     let mut cfg = base_cfg(&base, dir.path());

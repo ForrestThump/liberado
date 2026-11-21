@@ -14,13 +14,13 @@
 //! because the kernel may not know what a provider `Message` is (see `record_store.rs`). One engine,
 //! one id space, two lenses.
 
+use liberado_common::UtcStamp;
 use std::collections::HashMap;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use chrono::Utc;
 use liberado_conversation_store::{
     AgentProfiles, Author, ConversationHeader, ConversationStore, MessageNode, NewConversation,
     NewNode, StoreError, StoreResult,
@@ -64,12 +64,12 @@ pub enum Record {
     Status {
         status: SessionStatus,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        finished_at: Option<chrono::DateTime<Utc>>,
+        finished_at: Option<UtcStamp>,
     },
     Finish {
         status: SessionStatus,
         result: GoalResult,
-        finished_at: chrono::DateTime<Utc>,
+        finished_at: UtcStamp,
     },
 }
 
@@ -299,7 +299,7 @@ impl SessionStore {
             correlation_id: new.correlation_id,
             visibility: new.visibility,
             grant: new.grant,
-            created_at: Utc::now(),
+            created_at: UtcStamp::now(),
             finished_at: None,
             result: None,
             awaiting_input: false,
@@ -362,7 +362,7 @@ impl SessionStore {
     /// already there; a parallel clock would only be a second thing to keep in sync.
     pub async fn sweep_ephemeral(&self, idle: std::time::Duration) -> usize {
         let cutoff_ms =
-            (Utc::now().timestamp_millis() as u64).saturating_sub(idle.as_millis() as u64);
+            (UtcStamp::now().unix_millis() as u64).saturating_sub(idle.as_millis() as u64);
         let stale: Vec<Ulid> = self
             .inner
             .lock()
@@ -588,7 +588,7 @@ fn replay_file(path: &Path) -> Result<Option<Live>, String> {
             header.status = SessionStatus::Failed;
             header.awaiting_input = false;
             if header.finished_at.is_none() {
-                header.finished_at = Some(Utc::now());
+                header.finished_at = Some(UtcStamp::now());
             }
         }
     }
@@ -661,7 +661,7 @@ impl ConversationStore for SessionStore {
             parent_id: node.parent_id,
             conversation_id: conversation,
             author: node.author,
-            created_at: Utc::now(),
+            created_at: UtcStamp::now(),
             message: node.message,
             model: node.model,
             reasoning: node.reasoning,
@@ -1015,7 +1015,7 @@ impl SessionRecordStore for SessionStore {
                 Some(live) => {
                     live.header.status = status;
                     if status.is_terminal() {
-                        live.header.finished_at = Some(Utc::now());
+                        live.header.finished_at = Some(UtcStamp::now());
                     }
                     live.header.finished_at
                 }
@@ -1037,7 +1037,7 @@ impl SessionRecordStore for SessionStore {
             let mut map = self.inner.lock().await;
             match map.get_mut(&ulid) {
                 Some(live) => {
-                    let now = Utc::now();
+                    let now = UtcStamp::now();
                     live.header.status = status;
                     live.header.result = Some(result.clone());
                     live.header.finished_at = Some(now);

@@ -1,5 +1,5 @@
 use crate::error::MemoryError;
-use chrono::{DateTime, Utc};
+use liberado_common::UtcStamp;
 use liberado_common::frontmatter::{body_after_frontmatter, extract_frontmatter, render_note};
 use serde::{Deserialize, Serialize};
 
@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MemoryNote {
     pub id: String,
-    pub created: DateTime<Utc>,
+    pub created: UtcStamp,
     #[serde(default)]
     pub tags: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -27,7 +27,7 @@ impl MemoryNote {
     pub fn general(id: impl Into<String>, content: impl Into<String>, tags: Vec<String>) -> Self {
         Self {
             id: id.into(),
-            created: Utc::now(),
+            created: UtcStamp::now(),
             tags,
             task_type: None,
             tools_used: None,
@@ -46,7 +46,7 @@ impl MemoryNote {
     ) -> Self {
         Self {
             id: id.into(),
-            created: Utc::now(),
+            created: UtcStamp::now(),
             tags,
             task_type,
             tools_used,
@@ -95,9 +95,7 @@ Remember the dark theme.
         assert_eq!(note.success, None);
         assert_eq!(
             note.created,
-            DateTime::parse_from_rfc3339("2026-03-04T05:06:07Z")
-                .unwrap()
-                .with_timezone(&Utc)
+            "2026-03-04T05:06:07Z".parse::<UtcStamp>().unwrap()
         );
     }
 

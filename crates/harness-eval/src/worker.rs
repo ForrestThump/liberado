@@ -139,7 +139,7 @@ mod tests {
         TaskBundle, VerifierProfile,
     };
     use crate::journal::{JobStore, RunnerLock};
-    use chrono::Utc;
+    use liberado_common::UtcStamp;
 
     #[test]
     fn run_command_rejects_unknown_commands() {
@@ -211,7 +211,7 @@ mod tests {
                 &JobSpec {
                     version: JOB_SPEC_VERSION,
                     job_id: job_id.clone(),
-                    submitted_at: Utc::now(),
+                    submitted_at: UtcStamp::now(),
                     repository: repository.clone(),
                     base_revision: "HEAD".to_string(),
                     task: TaskBundle::new("task.txt", "do it".to_string()).unwrap(),

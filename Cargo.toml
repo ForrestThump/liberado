@@ -1,7 +1,7 @@
 # Liberado — Rust-native personal AI system.
 #
 # One Cargo workspace for the Liberado system (Decision 7). External dependencies
-# (turbovault, turbomcp) are NOT members — they are consumed as git+tag pins on the
+# (turbovault, turbomcp) are NOT members — they are consumed as git+rev pins on the
 # ForrestThump forks. Leftover `turbovault/` and `turbomcp/` directories are gitignored
 # and are not required to build.
 [workspace]
@@ -28,8 +28,13 @@ fs4 = "0.13"
 # deprecated and pulls in unmaintained unsafe-libyaml (RUSTSEC-2024-0449).
 # serde_yml is unsound and unmaintained (RUSTSEC-2025-0068).
 serde_norway = "0.9"
-chrono = { version = "0.4", features = ["serde"] }
-chrono-tz = "0.10"
+# Exact pin. 0.2.35 is already in the graph through gix-date and is cargo-vet
+# exempt. A caret range can resolve an unaudited patch. `serde` is the RFC 3339
+# timestamp shape the workspace serializes.
+jiff = { version = "=0.2.35", features = ["serde"] }
+# Maintained cron parser on jiff. Replaces the unmaintained `cron` 0.12 crate
+# (7-field, seconds first). Exact pin so a later patch needs a vet review.
+jiff-cron = "=0.3.0"
 thiserror = "2"
 toml = "0.8"
 # Exact pin: this is the toml_edit already pulled by toml 0.8, and the
@@ -67,7 +72,6 @@ crossterm = "0.28"
 hmac = "0.12"
 sha2 = "0.10"
 rand = "0.8"
-cron = "0.12"
 regex = "1"
 notify = "8"
 proptest = "1"
@@ -127,30 +131,40 @@ liberado-sysmap = { path = "crates/sysmap" }
 liberado-sysmap-gui = { path = "crates/sysmap-gui" }
 sysmap-core = { path = "crates/sysmap-core" }
 
-# --- co-developed git+tag pins (Decision 7) ---
-# ForrestThump forks. `turbovault*` is tag `liberado-2026-11-10` (Obsidian Tasks
-# parsing, the global filter, and rusqlite 0.41.1). `turbomcp*` stays
-# `liberado-2026-08-27`. Cargo fetches them; path siblings are not required.
-# Swap to crates.io versions for release builds once the forks publish.
-turbovault-core = { git = "https://github.com/ForrestThump/turbovault", tag = "liberado-2026-11-10" }
-turbovault-vault = { git = "https://github.com/ForrestThump/turbovault", tag = "liberado-2026-11-10" }
-turbovault-audit = { git = "https://github.com/ForrestThump/turbovault", tag = "liberado-2026-11-10" }
-turbovault = { git = "https://github.com/ForrestThump/turbovault", tag = "liberado-2026-11-10" } # umbrella (ObsidianMcpServer) — test-only
+# --- co-developed git+rev pins (Decision 7) ---
+# ForrestThump forks, pinned at the merge commits that landed the jiff
+# migration: turbovault pull request #6 on `main`, turbomcp pull request #4 on
+# `develop`. Those merges carry the same time-code change this branch carries:
+# `chrono` and `chrono-tz` are gone and `jiff` replaces them. The forks
+# publish no `liberado-*` tag for these merges, so the pins stay on the merge
+# commits. If a tag does appear, swap the `rev` below for it. Do not invent a
+# tag name.
+#
+# Every pin in this file uses the same form, `git = "<url>", rev = "<sha>"`, and
+# there are only two SHAs: one per fork. turbovault's SHA appears only on the
+# `turbovault*` lines; turbomcp's only on the `turbomcp*` lines and in the
+# `[patch.crates-io]` list below. A bump is therefore one search-and-replace per
+# SHA in this file.
+turbovault-core = { git = "https://github.com/ForrestThump/turbovault", rev = "179ded6003e05071b6609bbc8a5edbef04dc5fa9" }
+turbovault-vault = { git = "https://github.com/ForrestThump/turbovault", rev = "179ded6003e05071b6609bbc8a5edbef04dc5fa9" }
+turbovault-audit = { git = "https://github.com/ForrestThump/turbovault", rev = "179ded6003e05071b6609bbc8a5edbef04dc5fa9" }
+turbovault = { git = "https://github.com/ForrestThump/turbovault", rev = "179ded6003e05071b6609bbc8a5edbef04dc5fa9" } # umbrella (ObsidianMcpServer) — test-only
 # liberado-memory-store's semantic recall.
-turbovault-vector = { git = "https://github.com/ForrestThump/turbovault", tag = "liberado-2026-11-10" }
+turbovault-vector = { git = "https://github.com/ForrestThump/turbovault", rev = "179ded6003e05071b6609bbc8a5edbef04dc5fa9" }
 # Obsidian Tasks lines and the Tasks plugin global filter. Used by task-ping.
-turbovault-parser = { git = "https://github.com/ForrestThump/turbovault", tag = "liberado-2026-11-10" }
-turbovault-plugin-tasks = { git = "https://github.com/ForrestThump/turbovault", tag = "liberado-2026-11-10" }
-turbomcp = { git = "https://github.com/ForrestThump/turbomcp", tag = "liberado-2026-08-27" }
-turbomcp-client = { git = "https://github.com/ForrestThump/turbomcp", tag = "liberado-2026-08-27" }
-turbomcp-transport = { git = "https://github.com/ForrestThump/turbomcp", tag = "liberado-2026-08-27" } # ChildProcessTransport (stdio connector)
-turbomcp-server = { git = "https://github.com/ForrestThump/turbomcp", tag = "liberado-2026-08-27" } # test-only (in-process channel server)
-turbomcp-core = { git = "https://github.com/ForrestThump/turbomcp", tag = "liberado-2026-08-27" }     # test-only (McpHandler)
-turbomcp-types = { git = "https://github.com/ForrestThump/turbomcp", tag = "liberado-2026-08-27" }   # test-only (handler types)
+turbovault-parser = { git = "https://github.com/ForrestThump/turbovault", rev = "179ded6003e05071b6609bbc8a5edbef04dc5fa9" }
+turbovault-plugin-tasks = { git = "https://github.com/ForrestThump/turbovault", rev = "179ded6003e05071b6609bbc8a5edbef04dc5fa9" }
+turbomcp = { git = "https://github.com/ForrestThump/turbomcp", rev = "b7774c963adaf31999b2e6db7d7715c59b724646" }
+turbomcp-client = { git = "https://github.com/ForrestThump/turbomcp", rev = "b7774c963adaf31999b2e6db7d7715c59b724646" }
+turbomcp-transport = { git = "https://github.com/ForrestThump/turbomcp", rev = "b7774c963adaf31999b2e6db7d7715c59b724646" } # ChildProcessTransport (stdio connector)
+turbomcp-server = { git = "https://github.com/ForrestThump/turbomcp", rev = "b7774c963adaf31999b2e6db7d7715c59b724646" } # test-only (in-process channel server)
+turbomcp-core = { git = "https://github.com/ForrestThump/turbomcp", rev = "b7774c963adaf31999b2e6db7d7715c59b724646" }     # test-only (McpHandler)
+turbomcp-types = { git = "https://github.com/ForrestThump/turbomcp", rev = "b7774c963adaf31999b2e6db7d7715c59b724646" }   # test-only (handler types)
 
 # The git-pinned turbovault still declares the `turbomcp*` crates as "3.1.5" from crates.io.
-# Redirect them to the same ForrestThump tag so the whole tree builds against ONE turbomcp — the one
-# carrying the request `_meta` pass-through. Remove once turbomcp publishes the change.
+# Redirect them to the same ForrestThump fork so the whole tree builds against ONE turbomcp — the
+# jiff merge that also carries the request `_meta` pass-through. Swap these `rev` pins for a
+# `liberado-*` tag only if the fork publishes one for the merge.
 #
 # Every turbomcp-* crate turbovault names must be listed, not just the umbrella. Patching `turbomcp`
 # alone linked the fork's `turbomcp-core` (via the umbrella) alongside the registry's (via
@@ -158,10 +172,10 @@ turbomcp-types = { git = "https://github.com/ForrestThump/turbomcp", tag = "libe
 # stopped unifying: "expected `ResourceTemplate`, found `turbomcp_core::ResourceTemplate`". That is
 # what kept the `e2e` provenance capstone unbuildable and switched off.
 [patch.crates-io]
-turbomcp = { git = "https://github.com/ForrestThump/turbomcp", tag = "liberado-2026-08-27" }
-turbomcp-core = { git = "https://github.com/ForrestThump/turbomcp", tag = "liberado-2026-08-27" }
-turbomcp-server = { git = "https://github.com/ForrestThump/turbomcp", tag = "liberado-2026-08-27" }
-turbomcp-types = { git = "https://github.com/ForrestThump/turbomcp", tag = "liberado-2026-08-27" }
+turbomcp = { git = "https://github.com/ForrestThump/turbomcp", rev = "b7774c963adaf31999b2e6db7d7715c59b724646" }
+turbomcp-core = { git = "https://github.com/ForrestThump/turbomcp", rev = "b7774c963adaf31999b2e6db7d7715c59b724646" }
+turbomcp-server = { git = "https://github.com/ForrestThump/turbomcp", rev = "b7774c963adaf31999b2e6db7d7715c59b724646" }
+turbomcp-types = { git = "https://github.com/ForrestThump/turbomcp", rev = "b7774c963adaf31999b2e6db7d7715c59b724646" }
 
 [profile.release]
 lto = true

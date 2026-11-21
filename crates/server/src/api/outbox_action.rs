@@ -5,10 +5,10 @@
 //! It authorizes only that row, and only the complete and snooze transitions
 //! the owner routes already perform for a completable vault task.
 
+use liberado_common::UtcStamp;
 use std::sync::Arc;
 
 use axum::{Json, extract::State, http::StatusCode, response::IntoResponse};
-use chrono::{DateTime, Utc};
 use liberado_notify::web_push::DEFAULT_SNOOZE_MINUTES;
 use liberado_outbox::OutboxRecord;
 use serde::Deserialize;
@@ -52,7 +52,7 @@ pub async fn outbox_action_with_state(
 }
 
 async fn dispatch_push_action(state: &AppState, body: ActionBody) -> Result<String, ActionFail> {
-    let received_at = Utc::now();
+    let received_at = UtcStamp::now();
     let action = match parse_action(&body.action) {
         Ok(action) => action,
         Err(err) => {
@@ -67,7 +67,7 @@ async fn run_tray_action(
     state: &AppState,
     body: ActionBody,
     action: TrayAction,
-    received_at: DateTime<Utc>,
+    received_at: UtcStamp,
 ) -> Result<String, ActionFail> {
     if let Err(err) = authorize_row(state, body.id, &body.token) {
         log_tray_stop(action, body.id, body.minutes, received_at, "error");
@@ -113,7 +113,7 @@ fn log_tray_stop(
     action: TrayAction,
     id: i64,
     minutes: Option<i64>,
-    received_at: DateTime<Utc>,
+    received_at: UtcStamp,
     result: &'static str,
 ) {
     match action {

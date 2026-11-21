@@ -5,7 +5,7 @@
 //! how a tap becomes a status. It does no I/O. The Telegram callback and the WebUI `POST` both
 //! call one resolver that applies [`apply_permission_decision`] and then writes the note.
 
-use chrono::{DateTime, Utc};
+use crate::UtcStamp;
 
 use crate::proposal::{GrantScope, Proposal, ProposalStatus};
 
@@ -57,7 +57,7 @@ pub fn apply_permission_decision(
     proposal: &mut Proposal,
     action: &str,
     via: DecisionVia,
-    now: DateTime<Utc>,
+    now: UtcStamp,
 ) -> Result<PermissionDecide, PermissionDecideError> {
     if proposal.requested_grant.is_none() {
         return Err(PermissionDecideError::NotAPermissionRequest);
@@ -90,11 +90,11 @@ fn canonical_action(action: &str) -> &'static str {
     }
 }
 
-fn is_open(proposal: &Proposal, now: DateTime<Utc>) -> bool {
+fn is_open(proposal: &Proposal, now: UtcStamp) -> bool {
     proposal.status == ProposalStatus::Pending && !proposal.is_expired_at(now)
 }
 
-fn stamp(proposal: &mut Proposal, action: &str, via: DecisionVia, now: DateTime<Utc>) {
+fn stamp(proposal: &mut Proposal, action: &str, via: DecisionVia, now: UtcStamp) {
     match action {
         "deny" => {
             proposal.status = ProposalStatus::Rejected;
@@ -115,7 +115,7 @@ fn approve(proposal: &mut Proposal, scope: GrantScope) {
 }
 
 /// The action id already stored on a decided proposal. `pending` only when it is still open.
-pub fn recorded_action(proposal: &Proposal, now: DateTime<Utc>) -> &'static str {
+pub fn recorded_action(proposal: &Proposal, now: UtcStamp) -> &'static str {
     if proposal.status == ProposalStatus::Pending && proposal.is_expired_at(now) {
         return "expired";
     }
@@ -137,6 +137,7 @@ mod tests {
     use super::*;
     use crate::capability::{Capability, Zone};
     use crate::proposal::{Proposal, ProposedAction};
+    use jiff::SignedDuration;
 
     fn open_request() -> Proposal {
         Proposal::pending(
@@ -152,7 +153,7 @@ mod tests {
     #[test]
     fn first_decision_wins_and_a_second_tap_does_not_change_it() {
         let mut proposal = open_request();
-        let now = Utc::now();
+        let now = UtcStamp::now();
         let first =
             apply_permission_decision(&mut proposal, "once", DecisionVia::Webui, now).unwrap();
         assert_eq!(first, PermissionDecide::Applied { action: "once" });
@@ -179,24 +180,25 @@ mod tests {
             &mut proposal,
             "deny",
             DecisionVia::Channel(ChannelKind::Telegram),
-            Utc::now(),
+            UtcStamp::now(),
         )
         .unwrap();
         assert_eq!(proposal.status, ProposalStatus::Rejected);
         assert_eq!(proposal.approved_scope, None);
-        assert_eq!(recorded_action(&proposal, Utc::now()), "deny");
+        assert_eq!(recorded_action(&proposal, UtcStamp::now()), "deny");
     }
 
     #[test]
     fn unknown_action_and_ordinary_proposal_are_refused() {
         let mut proposal = open_request();
         let err =
-            apply_permission_decision(&mut proposal, "revise", DecisionVia::Webui, Utc::now());
+            apply_permission_decision(&mut proposal, "revise", DecisionVia::Webui, UtcStamp::now());
         assert_eq!(err, Err(PermissionDecideError::UnknownAction));
         assert_eq!(proposal.status, ProposalStatus::Pending);
 
         let mut ordinary = Proposal::pending("p", "c", "s", ProposedAction::ToolCalls(vec![]), "r");
-        let err = apply_permission_decision(&mut ordinary, "once", DecisionVia::Webui, Utc::now());
+        let err =
+            apply_permission_decision(&mut ordinary, "once", DecisionVia::Webui, UtcStamp::now());
         assert_eq!(err, Err(PermissionDecideError::NotAPermissionRequest));
     }
 
@@ -205,8 +207,13 @@ mod tests {
         let mut proposal = open_request();
         proposal.session_id = Some("sess-1".into());
         proposal.origin = Some(ApprovalOrigin::Web);
-        apply_permission_decision(&mut proposal, "session", DecisionVia::Webui, Utc::now())
-            .unwrap();
+        apply_permission_decision(
+            &mut proposal,
+            "session",
+            DecisionVia::Webui,
+            UtcStamp::now(),
+        )
+        .unwrap();
         let reloaded = Proposal::from_note(&proposal.to_note()).unwrap();
         assert_eq!(reloaded.session_id.as_deref(), Some("sess-1"));
         assert_eq!(reloaded.origin, Some(ApprovalOrigin::Web));
@@ -216,7 +223,7 @@ mod tests {
             &mut { reloaded.clone() },
             "deny",
             DecisionVia::Channel(ChannelKind::Telegram),
-            Utc::now(),
+            UtcStamp::now(),
         )
         .unwrap();
         assert_eq!(again, PermissionDecide::Already { action: "session" });
@@ -342,16 +349,16 @@ mod tests {
 
     #[test]
     fn recorded_action_names_every_stored_state() {
-        let now = Utc::now();
+        let now = UtcStamp::now();
         let open = open_request();
         assert_eq!(recorded_action(&open, now), "pending");
 
         let mut later = open_request();
-        later.expires = Some(now + chrono::Duration::seconds(60));
+        later.expires = Some(now + SignedDuration::from_secs(60));
         assert_eq!(recorded_action(&later, now), "pending");
 
         let mut elapsed = open_request();
-        elapsed.expires = Some(now - chrono::Duration::seconds(1));
+        elapsed.expires = Some(now - SignedDuration::from_secs(1));
         assert_eq!(recorded_action(&elapsed, now), "expired");
 
         let mut expired = open_request();

@@ -1,12 +1,18 @@
-use chrono::NaiveDate;
+use jiff::Span;
+use jiff::civil::Date;
 
 use super::{EVENT_HORIZON_DAYS, VaultEvent, event_in_window, event_ping_message};
 
-fn day(year: i32, month: u32, date: u32) -> NaiveDate {
-    NaiveDate::from_ymd_opt(year, month, date).expect("valid date")
+fn day(year: i32, month: u32, date: u32) -> Date {
+    Date::new(
+        i16::try_from(year).expect("year"),
+        i8::try_from(month).expect("month"),
+        i8::try_from(date).expect("day"),
+    )
+    .expect("valid date")
 }
 
-fn today() -> NaiveDate {
+fn today() -> Date {
     day(2026, 9, 28)
 }
 
@@ -83,7 +89,7 @@ fn a_calendar_folder_title_is_an_all_day_event_and_the_horizon_is_inclusive() {
     assert!(!message.contains("Past week"), "{message}");
     assert_eq!(
         today()
-            .checked_add_signed(chrono::Duration::days(EVENT_HORIZON_DAYS))
+            .checked_add(Span::new().days(EVENT_HORIZON_DAYS))
             .expect("horizon"),
         day(2026, 10, 5)
     );

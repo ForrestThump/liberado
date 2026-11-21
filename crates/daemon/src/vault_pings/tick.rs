@@ -12,14 +12,15 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use chrono::TimeZone;
-use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
-use chrono_tz::Tz;
+use jiff::SignedDuration;
+use jiff::civil::{Date, DateTime, Time};
+use jiff::tz::TimeZone;
 use turbovault_plugin_tasks::TasksConfig;
 
+use super::date::{format_hhmm, parse_ymd, time_hms};
+use liberado_common::UtcStamp;
 use liberado_outbox::{EVENT_START, OutboxSource, TASK_DUE, content_id, copy, task_key};
 
-use super::date::parse_ymd;
 use super::events::events_in_note;
 use super::local_time;
 use super::remind::remind_opt_in;
@@ -34,7 +35,7 @@ const KEY_SEP: char = '\u{1f}';
 
 /// Clock and switches for one tick. The daemon fills this from topology.
 pub(crate) struct ReminderTick {
-    pub now: NaiveDateTime,
+    pub now: DateTime,
     pub settings: VaultRemindersConfig,
     pub state_path: PathBuf,
     pub zone: String,
@@ -45,7 +46,7 @@ pub(crate) struct DueReminderRow {
     pub idempotency_key: String,
     pub title: String,
     pub body: String,
-    pub due_at: DateTime<Utc>,
+    pub due_at: UtcStamp,
     pub kind: String,
     pub source: OutboxSource,
 }
@@ -54,7 +55,7 @@ struct DueItem {
     idempotency_key: String,
     legacy_key: String,
     line: String,
-    due_at: DateTime<Utc>,
+    due_at: UtcStamp,
     kind: &'static str,
     label: &'static str,
     path: String,
@@ -62,8 +63,8 @@ struct DueItem {
 }
 
 struct Stamp {
-    date: NaiveDate,
-    time: Option<NaiveTime>,
+    date: Date,
+    time: Option<Time>,
     label: &'static str,
 }
 
@@ -72,11 +73,11 @@ pub(crate) fn due_reminder_rows(root: &Path, tick: &ReminderTick) -> Vec<DueRemi
     if !tick.settings.enabled {
         return Vec::new();
     }
-    let zone = parse_zone(&tick.zone);
-    collect(root, tick, zone)
+    let zone = local_time::parse_zone(&tick.zone);
+    collect(root, tick, &zone)
         .into_iter()
         .map(|item| {
-            let zone_tz = parse_zone(&tick.zone);
+            let zone_tz = local_time::parse_zone(&tick.zone);
             let source = OutboxSource::VaultNote {
                 path: item.path.clone(),
                 label: item.label.to_string(),
@@ -110,8 +111,8 @@ pub(crate) fn reminder_message(root: &Path, tick: &ReminderTick) -> Option<Strin
     if !tick.settings.enabled {
         return None;
     }
-    let zone = parse_zone(&tick.zone);
-    let items = collect(root, tick, zone);
+    let zone = local_time::parse_zone(&tick.zone);
+    let items = collect(root, tick, &zone);
     let fired = load_fires(&tick.state_path);
     let fresh: Vec<&DueItem> = items
         .iter()
@@ -128,11 +129,7 @@ pub(crate) fn reminder_message(root: &Path, tick: &ReminderTick) -> Option<Strin
     Some(render(&fresh))
 }
 
-fn parse_zone(name: &str) -> Tz {
-    name.parse().unwrap_or(chrono_tz::UTC)
-}
-
-fn collect(root: &Path, tick: &ReminderTick, zone: Tz) -> Vec<DueItem> {
+fn collect(root: &Path, tick: &ReminderTick, zone: &TimeZone) -> Vec<DueItem> {
     let tasks_config = load_tasks_config(root);
     let mut items = Vec::new();
     for (rel, text) in markdown_notes(root) {
@@ -149,8 +146,8 @@ fn collect(root: &Path, tick: &ReminderTick, zone: Tz) -> Vec<DueItem> {
 fn tasks_due(
     rel: &str,
     text: &str,
-    now: NaiveDateTime,
-    zone: Tz,
+    now: DateTime,
+    zone: &TimeZone,
     config: &TasksConfig,
 ) -> Vec<DueItem> {
     let lines = task_source_lines(text);
@@ -161,7 +158,13 @@ fn tasks_due(
         .collect()
 }
 
-fn task_due(rel: &str, content: &str, line: &str, now: NaiveDateTime, zone: Tz) -> Option<DueItem> {
+fn task_due(
+    rel: &str,
+    content: &str,
+    line: &str,
+    now: DateTime,
+    zone: &TimeZone,
+) -> Option<DueItem> {
     if !remind_opt_in(line) {
         return None;
     }
@@ -193,8 +196,8 @@ fn task_due(rel: &str, content: &str, line: &str, now: NaiveDateTime, zone: Tz) 
 
 fn due_item_for_task(
     rel: &str,
-    now: NaiveDateTime,
-    zone: Tz,
+    now: DateTime,
+    zone: &TimeZone,
     config: &TasksConfig,
     lines: &[&str],
     index: usize,
@@ -260,12 +263,12 @@ fn stamp_after(line: &str, emoji: char, label: &'static str) -> Option<Stamp> {
     Some(Stamp { date, time, label })
 }
 
-fn split_date_time(token: &str) -> Option<(NaiveDate, NaiveTime)> {
+fn split_date_time(token: &str) -> Option<(Date, Time)> {
     let (date, time) = token.split_once('T')?;
     Some((parse_ymd(date)?, parse_clock(time)?))
 }
 
-fn parse_clock(value: &str) -> Option<NaiveTime> {
+fn parse_clock(value: &str) -> Option<Time> {
     let (hour, rest) = value.trim().split_once(':')?;
     if hour.is_empty() || hour.len() > 2 || rest.len() < 2 {
         return None;
@@ -276,27 +279,22 @@ fn parse_clock(value: &str) -> Option<NaiveTime> {
     }
     let hour: u32 = hour.parse().ok()?;
     let minute: u32 = minute.parse().ok()?;
-    NaiveTime::from_hms_opt(hour, minute, 0)
+    time_hms(hour, minute, 0)
 }
 
-fn format_when(date: NaiveDate, time: NaiveTime) -> String {
-    format!("{} {}", date, time.format("%H:%M"))
+fn format_when(date: Date, time: Time) -> String {
+    format!("{date} {}", format_hhmm(time))
 }
 
-fn format_when_iso(date: NaiveDate, time: NaiveTime) -> String {
-    format!("{}T{}", date, time.format("%H:%M"))
+fn format_when_iso(date: Date, time: Time) -> String {
+    format!("{date}T{}", format_hhmm(time))
 }
 
-fn local_to_utc(zone: Tz, date: NaiveDate, time: NaiveTime) -> Option<DateTime<Utc>> {
-    let local = NaiveDateTime::new(date, time);
-    match zone.from_local_datetime(&local) {
-        chrono::LocalResult::Single(value) => Some(value.with_timezone(&Utc)),
-        chrono::LocalResult::Ambiguous(first, _) => Some(first.with_timezone(&Utc)),
-        chrono::LocalResult::None => None,
-    }
+fn local_to_utc(zone: &TimeZone, date: Date, time: Time) -> Option<UtcStamp> {
+    local_time::resolve_local(zone, DateTime::from_parts(date, time))
 }
 
-fn events_due(rel: &str, text: &str, now: NaiveDateTime, zone: Tz) -> Vec<DueItem> {
+fn events_due(rel: &str, text: &str, now: DateTime, zone: &TimeZone) -> Vec<DueItem> {
     if !remind_opt_in(text) {
         return Vec::new();
     }
@@ -311,7 +309,7 @@ fn events_due(rel: &str, text: &str, now: NaiveDateTime, zone: Tz) -> Vec<DueIte
             continue;
         }
         let when = format_when_iso(event.start, clock);
-        let due_at = local_to_utc(zone, event.start, clock).unwrap_or_else(Utc::now);
+        let due_at = local_to_utc(zone, event.start, clock).unwrap_or_else(UtcStamp::now);
         let title = event.title.trim();
         let idempotency_key = task_key("event", rel, "scheduled", &when, title);
         let when_display = format_when(event.start, clock);
@@ -374,18 +372,29 @@ fn save_fires(path: &Path, fires: &BTreeSet<String>) {
     }
 }
 
-fn prune(fires: BTreeSet<String>, now: NaiveDateTime) -> BTreeSet<String> {
+fn prune(fires: BTreeSet<String>, now: DateTime) -> BTreeSet<String> {
     fires.into_iter().filter(|key| keep_key(key, now)).collect()
 }
 
-fn keep_key(key: &str, now: NaiveDateTime) -> bool {
+fn parse_minute_stamp(when: &str) -> Option<DateTime> {
+    let (date_text, clock) = when.split_once(' ')?;
+    if clock.len() != 5 || clock.as_bytes().get(2) != Some(&b':') {
+        return None;
+    }
+    let date: Date = date_text.parse().ok()?;
+    let hour: u32 = clock.get(..2)?.parse().ok()?;
+    let minute: u32 = clock.get(3..)?.parse().ok()?;
+    Some(DateTime::from_parts(date, time_hms(hour, minute, 0)?))
+}
+
+fn keep_key(key: &str, now: DateTime) -> bool {
     let Some(when) = key.split(KEY_SEP).nth(2) else {
         return false;
     };
-    let Some(stamp) = NaiveDateTime::parse_from_str(when, "%Y-%m-%d %H:%M").ok() else {
+    let Some(stamp) = parse_minute_stamp(when) else {
         return false;
     };
-    let Some(cutoff) = now.checked_sub_signed(chrono::Duration::hours(36)) else {
+    let Some(cutoff) = now.checked_sub(SignedDuration::from_hours(36)).ok() else {
         return true;
     };
     stamp >= cutoff

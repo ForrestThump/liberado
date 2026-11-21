@@ -1,8 +1,8 @@
 //! Browser sessions for the owner: persisted in `liberado.db`, hashed at rest.
 
+use liberado_common::UtcStamp;
 use std::sync::Arc;
 
-use chrono::Utc;
 use liberado_outbox::Outbox;
 
 /// Cookie the browser sends back. `HttpOnly`, so page script cannot read it.
@@ -46,13 +46,13 @@ impl SessionStore {
         user_agent: Option<&str>,
     ) -> Result<(String, String), liberado_outbox::Error> {
         self.outbox
-            .create_auth_session(account_id, method, user_agent, Utc::now())
+            .create_auth_session(account_id, method, user_agent, UtcStamp::now())
     }
 
     /// Refresh idle clock and return session metadata. `None` if unknown or expired.
     pub fn touch(&self, raw_id: &str) -> Option<LiveSession> {
         self.outbox
-            .touch_auth_session(raw_id, Utc::now())
+            .touch_auth_session(raw_id, UtcStamp::now())
             .map(|r| LiveSession {
                 csrf: r.csrf,
                 account_id: r.account_id,

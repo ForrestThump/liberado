@@ -21,7 +21,6 @@ turbovault-vector = { workspace = true }
 async-trait = { workspace = true }
 serde = { workspace = true }
 serde_norway = { workspace = true }
-chrono = { workspace = true }
 ulid = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }

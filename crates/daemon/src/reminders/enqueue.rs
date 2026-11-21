@@ -1,11 +1,10 @@
 //! Enqueue mechanical reminders and run the outbox worker loop.
 
+use liberado_common::UtcStamp;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use chrono::SecondsFormat;
-use chrono::{DateTime, Utc};
 use liberado_config::RemindersConfig;
 use liberado_outbox::{
     EnqueueOutcome, FanoutInput, NewReminder, Outbox, PassLimits, TelegramMode, fanout_key,
@@ -20,7 +19,7 @@ pub struct MechanicalReminder {
     pub idempotency_key: String,
     pub title: String,
     pub body: String,
-    pub due_at: DateTime<Utc>,
+    pub due_at: UtcStamp,
     pub catch_up: bool,
     pub kind: String,
     pub source: Option<liberado_outbox::OutboxSource>,
@@ -32,7 +31,7 @@ pub fn enqueue_mechanical(
     delivery: &OutboxDelivery,
     telegram_ready: bool,
     items: &[MechanicalReminder],
-    now: DateTime<Utc>,
+    now: UtcStamp,
 ) -> Result<(), String> {
     let vapid_ok = delivery.vapid_configured();
     let sub_ids = outbox.subscription_ids().map_err(|err| err.to_string())?;
@@ -72,7 +71,9 @@ pub fn enqueue_mechanical(
 /// Ids, kind, due time, and a key hash. The key, path, title, and body stay out.
 pub(crate) fn log_reminder_enqueue(row: &NewReminder, outcome: EnqueueOutcome) {
     let kind = row.kind.as_deref().unwrap_or("");
-    let due_at = row.due_at.to_rfc3339_opts(SecondsFormat::Secs, true);
+    let due_at = row
+        .due_at
+        .to_rfc3339_opts(liberado_common::Rfc3339Seconds::Secs, true);
     let key_hash = key_hash_suffix(&row.idempotency_key);
     let subscription_id = subscription_id(&row.target);
     match outcome {
@@ -136,7 +137,7 @@ pub fn spawn_worker(
         };
         let sink: &dyn liberado_outbox::DeliverySink = delivery.as_ref();
         loop {
-            let now = Utc::now();
+            let now = UtcStamp::now();
             if let Err(err) = run_pass(&outbox, sink, now, limits).await {
                 tracing::warn!(error = %err, "outbox pass failed");
             }
@@ -166,11 +167,7 @@ fn log_fallback_once(reason: &str) {
 }
 
 /// Record the schedule cursor after a mechanical enqueue commits.
-pub fn record_schedule_fire(
-    outbox: &Outbox,
-    schedule: &str,
-    fire: DateTime<Utc>,
-) -> Result<(), String> {
+pub fn record_schedule_fire(outbox: &Outbox, schedule: &str, fire: UtcStamp) -> Result<(), String> {
     outbox
         .record_cursor(schedule, fire)
         .map_err(|err| err.to_string())
@@ -180,8 +177,8 @@ pub fn record_schedule_fire(
 pub fn ensure_schedule_cursor(
     outbox: &Outbox,
     schedule: &str,
-    now: DateTime<Utc>,
-) -> Result<DateTime<Utc>, String> {
+    now: UtcStamp,
+) -> Result<UtcStamp, String> {
     outbox
         .ensure_cursor(schedule, now)
         .map_err(|err| err.to_string())

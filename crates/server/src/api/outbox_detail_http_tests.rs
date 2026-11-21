@@ -1,5 +1,7 @@
 //! Owner-authenticated outbox detail, complete, and snooze routes.
 
+use jiff::SignedDuration;
+use liberado_common::UtcStamp;
 use std::sync::Arc;
 
 use axum::{
@@ -7,7 +9,6 @@ use axum::{
     body::Body,
     http::{Request, StatusCode},
 };
-use chrono::{Duration, SecondsFormat, Utc};
 use liberado_outbox::{EnqueueOutcome, NewReminder, Outbox, OutboxSource, RES_COMPLETED, TASK_DUE};
 use tower::ServiceExt;
 
@@ -94,7 +95,7 @@ async fn get_outbox_detail_returns_row_and_obsidian_url() {
         .keep()
         .unwrap();
     let outbox = Arc::new(Outbox::open(&path).unwrap());
-    let now = Utc::now();
+    let now = UtcStamp::now();
     outbox
         .enqueue(
             &NewReminder {
@@ -142,7 +143,7 @@ async fn complete_outbox_toggles_task_and_acks() {
         .keep()
         .unwrap();
     let outbox = Arc::new(Outbox::open(&path).unwrap());
-    let now = Utc::now();
+    let now = UtcStamp::now();
     outbox
         .enqueue(
             &NewReminder {
@@ -188,7 +189,7 @@ async fn complete_outbox_refuses_ambiguous_task() {
         .keep()
         .unwrap();
     let outbox = Arc::new(Outbox::open(&path).unwrap());
-    let now = Utc::now();
+    let now = UtcStamp::now();
     outbox
         .enqueue(
             &NewReminder {
@@ -233,7 +234,7 @@ async fn snooze_outbox_enqueues_followup_not_due_immediately() {
         .keep()
         .unwrap();
     let outbox = Arc::new(Outbox::open(&path).unwrap());
-    let now = Utc::now();
+    let now = UtcStamp::now();
     outbox
         .enqueue(
             &NewReminder {
@@ -262,15 +263,15 @@ async fn snooze_outbox_enqueues_followup_not_due_immediately() {
         outbox.due_rows(now, 10).unwrap().is_empty(),
         "snoozed follow-up must not deliver before its due_at"
     );
-    let fire = now + chrono::Duration::minutes(15) + chrono::Duration::seconds(1);
+    let fire = now + SignedDuration::from_mins(15) + SignedDuration::from_secs(1);
     let rows = outbox.due_rows(fire, 10).unwrap();
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].title, "Snoozed: Due now: x");
 }
 
-fn enqueue_early(outbox: &Outbox, title: &str) -> (i64, chrono::DateTime<Utc>) {
-    let now = Utc::now();
-    let due = now - Duration::minutes(45);
+fn enqueue_early(outbox: &Outbox, title: &str) -> (i64, UtcStamp) {
+    let now = UtcStamp::now();
+    let due = now - SignedDuration::from_mins(45);
     let EnqueueOutcome::Inserted(id) = outbox
         .enqueue(
             &NewReminder {
@@ -301,23 +302,23 @@ fn enqueue_early(outbox: &Outbox, title: &str) -> (i64, chrono::DateTime<Utc>) {
 fn assert_follow_up_uses_action_clock(
     outbox: &Outbox,
     id: i64,
-    original: chrono::DateTime<Utc>,
-    start: chrono::DateTime<Utc>,
-    end: chrono::DateTime<Utc>,
+    original: UtcStamp,
+    start: UtcStamp,
+    end: UtcStamp,
 ) {
     let due = outbox
         .due_at_by_idempotency(&format!("snooze/{id}"))
         .unwrap()
         .unwrap();
-    let lower = start + Duration::minutes(15) - Duration::seconds(2);
-    let upper = end + Duration::minutes(15) + Duration::seconds(2);
+    let lower = start + SignedDuration::from_mins(15) - SignedDuration::from_secs(2);
+    let upper = end + SignedDuration::from_mins(15) + SignedDuration::from_secs(2);
     assert!(
         due >= lower && due <= upper,
         "follow-up due {due} not in [{lower}, {upper}]"
     );
-    assert!(start.signed_duration_since(original) > Duration::minutes(30));
-    assert_ne!(due, original + Duration::minutes(15));
-    assert!(due > original + Duration::minutes(30));
+    assert!(start.duration_since(original) > SignedDuration::from_mins(30));
+    assert_ne!(due, original + SignedDuration::from_mins(15));
+    assert!(due > original + SignedDuration::from_mins(30));
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -331,7 +332,7 @@ async fn owner_snooze_follow_up_uses_action_time_and_log_hides_the_task() {
     let (id, original) = enqueue_early(&outbox, "SECRET_TITLE_DO_NOT_LOG");
     let app = owner_outbox_app(outbox.clone(), std::path::PathBuf::from("/tmp/v")).await;
     let session = liberado_notify::log_capture::Capture::arm();
-    let start = Utc::now();
+    let start = UtcStamp::now();
     let response = app
         .oneshot(owner_post(
             &format!("/api/outbox/{id}/snooze"),
@@ -339,7 +340,7 @@ async fn owner_snooze_follow_up_uses_action_time_and_log_hides_the_task() {
         ))
         .await
         .unwrap();
-    let end = Utc::now();
+    let end = UtcStamp::now();
     assert_eq!(response.status(), StatusCode::NO_CONTENT);
     assert_follow_up_uses_action_clock(&outbox, id, original, start, end);
     let due = outbox
@@ -347,8 +348,8 @@ async fn owner_snooze_follow_up_uses_action_time_and_log_hides_the_task() {
         .unwrap()
         .unwrap();
     let text = session.text();
-    let prior = original.to_rfc3339_opts(SecondsFormat::Secs, true);
-    let new_due = due.to_rfc3339_opts(SecondsFormat::Secs, true);
+    let prior = original.to_rfc3339_opts(liberado_common::Rfc3339Seconds::Secs, true);
+    let new_due = due.to_rfc3339_opts(liberado_common::Rfc3339Seconds::Secs, true);
     assert!(text.contains("message=outbox_action"), "{text}");
     assert!(text.contains("action=snooze"), "{text}");
     assert!(text.contains("via=detail"), "{text}");
@@ -369,7 +370,7 @@ async fn complete_after_deliver_and_push_ack_succeeds() {
         .keep()
         .unwrap();
     let outbox = Arc::new(Outbox::open(&path).unwrap());
-    let now = Utc::now();
+    let now = UtcStamp::now();
     outbox
         .enqueue(
             &NewReminder {

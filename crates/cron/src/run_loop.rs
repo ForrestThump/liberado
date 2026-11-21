@@ -1,7 +1,6 @@
 //! Cron heap loop: sleep until the next schedule fire, apply catch-up, emit events.
 
-use chrono::{DateTime, Utc};
-use liberado_common::Event;
+use liberado_common::{Event, UtcStamp};
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
 use tokio::sync::mpsc::UnboundedSender;
@@ -12,7 +11,7 @@ use super::catch_up;
 use super::fire_at;
 
 impl CronEventSource {
-    pub(super) fn seed_mechanical_cursors(&self, now: DateTime<Utc>) {
+    pub(super) fn seed_mechanical_cursors(&self, now: UtcStamp) {
         let Some(cu) = &self.catch_up else {
             return;
         };
@@ -25,7 +24,7 @@ impl CronEventSource {
 
     pub(super) async fn drive_heap(
         &self,
-        mut heap: BinaryHeap<Reverse<(DateTime<Utc>, usize)>>,
+        mut heap: BinaryHeap<Reverse<(UtcStamp, usize)>>,
         tx: UnboundedSender<Event>,
     ) {
         loop {
@@ -34,8 +33,7 @@ impl CronEventSource {
                 return;
             };
 
-            let wait = (fire_at - Utc::now())
-                .to_std()
+            let wait = std::time::Duration::try_from(fire_at - UtcStamp::now())
                 .unwrap_or(std::time::Duration::ZERO);
             tokio::time::sleep(wait).await;
 
@@ -48,15 +46,15 @@ impl CronEventSource {
     async fn fire_due_schedule(
         &self,
         idx: usize,
-        fire_at: DateTime<Utc>,
+        fire_at: UtcStamp,
         tx: &UnboundedSender<Event>,
-        heap: &mut BinaryHeap<Reverse<(DateTime<Utc>, usize)>>,
+        heap: &mut BinaryHeap<Reverse<(UtcStamp, usize)>>,
     ) -> bool {
         let schedule = &self.schedules[idx];
-        let now = Utc::now();
+        let now = UtcStamp::now();
         let (emit_at, is_catch_up) = self.resolve_fire(schedule, fire_at, now);
         if self.should_skip_emit(schedule, emit_at) {
-            if let Some(next) = fire_at::next_utc(&schedule.parsed, schedule.zone, now) {
+            if let Some(next) = fire_at::next_utc(&schedule.parsed, schedule.zone.as_ref(), now) {
                 heap.push(Reverse((next, idx)));
             }
             return true;
@@ -77,7 +75,7 @@ impl CronEventSource {
             return false;
         }
 
-        if let Some(next) = fire_at::next_utc(&schedule.parsed, schedule.zone, now) {
+        if let Some(next) = fire_at::next_utc(&schedule.parsed, schedule.zone.as_ref(), now) {
             heap.push(Reverse((next, idx)));
         }
         true

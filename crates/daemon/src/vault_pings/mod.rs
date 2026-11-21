@@ -25,7 +25,7 @@ pub(crate) use tick::{DueReminderRow, ReminderTick, due_reminder_rows, reminder_
 /// `now` is local civil time in `zone`. The fire-key file is not used.
 pub fn record_vault_task_completions(
     root: &std::path::Path,
-    now: chrono::NaiveDateTime,
+    now: jiff::civil::DateTime,
     zone: &str,
     settings: &liberado_config::VaultRemindersConfig,
     outbox: &liberado_outbox::Outbox,

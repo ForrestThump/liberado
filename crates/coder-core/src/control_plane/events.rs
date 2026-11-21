@@ -1,6 +1,6 @@
 //! Append-only task events. Command ids make duplicate observations a no-op.
 
-use chrono::{DateTime, Utc};
+use liberado_common::UtcStamp;
 use serde::{Deserialize, Serialize};
 
 use super::WorkerStatus;
@@ -177,7 +177,7 @@ pub enum TaskEventKind {
 pub struct TaskEvent {
     pub event_id: String,
     pub task_id: String,
-    pub timestamp: DateTime<Utc>,
+    pub timestamp: UtcStamp,
     pub payload: TaskEventKind,
     /// Caller-supplied idempotency key. A second record with the same key is a no-op.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -193,7 +193,7 @@ impl TaskEvent {
         Self {
             event_id: event_id.into(),
             task_id: task_id.into(),
-            timestamp: Utc::now(),
+            timestamp: UtcStamp::now(),
             payload,
             command_id: None,
         }

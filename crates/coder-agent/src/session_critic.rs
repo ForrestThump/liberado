@@ -238,7 +238,7 @@ pub fn parse_session_review(raw: &str) -> Result<SessionReview, CoderError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::Utc;
+    use liberado_common::UtcStamp;
 
     fn turn(n: u32, text: Option<&str>) -> CoderEvent {
         CoderEvent::ModelTurnFinished {
@@ -251,7 +251,7 @@ mod tests {
             tool_calls: Vec::new(),
             prompt_tokens: 0,
             completion_tokens: 0,
-            at: Utc::now(),
+            at: UtcStamp::now(),
         }
     }
 
@@ -259,7 +259,7 @@ mod tests {
         CoderEvent::ToolStarted {
             name: name.to_string(),
             args_preview: args.to_string(),
-            at: Utc::now(),
+            at: UtcStamp::now(),
         }
     }
 
@@ -268,7 +268,7 @@ mod tests {
             name: name.to_string(),
             ok: true,
             result_preview: result.to_string(),
-            at: Utc::now(),
+            at: UtcStamp::now(),
         }
     }
 

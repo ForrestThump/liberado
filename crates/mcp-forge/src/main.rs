@@ -181,6 +181,8 @@ mod tests {
         run(&["init", "-q"]);
         run(&["config", "user.email", "forge-test@example.com"]);
         run(&["config", "user.name", "Forge Test"]);
+        // A host with commit.gpgsign=true looks for a key this temp repo does not have.
+        run(&["config", "commit.gpgsign", "false"]);
         std::fs::write(dir.join("README.md"), "forge test repo\n").unwrap();
         run(&["add", "."]);
         run(&["commit", "-q", "-m", "initial"]);

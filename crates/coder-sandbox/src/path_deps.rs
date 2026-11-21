@@ -1,6 +1,6 @@
 //! Provision leftover gitignored path dependencies into a session worktree.
 //!
-//! The root manifest pins `turbovault*` and `turbomcp*` as git+tag crates, so a clean checkout
+//! The root manifest pins `turbovault*` and `turbomcp*` as git+rev crates, so a clean checkout
 //! does not need nested clones. This module still copies any `path = "…"` roots the parent
 //! manifest declares — leftover local clones, or a future path dep — because `git worktree add`
 //! never brings gitignored directories along.

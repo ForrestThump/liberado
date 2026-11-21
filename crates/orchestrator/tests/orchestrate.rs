@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 use liberado_common::{
     ApprovedGuard, BlockReason, Capability, CapabilitySet, Consequence, Delivery, Depth,
     DispatchAction, DispatchDecision, McpDescriptor, Outcome, Proposal, ProposalSigner,
-    ProposalStatus, ProposedAction, ToolCall, WriteProvenance,
+    ProposalStatus, ProposedAction, ToolCall, UtcStamp, WriteProvenance,
 };
 use liberado_executor::SUBMIT_REPORT_TOOL;
 use liberado_orchestrator::{Disposition, Orchestrator, OrchestratorError, SubDispatch};
@@ -1123,7 +1123,7 @@ async fn execute_approved_tool_calls_all_failed_is_failed_outcome() {
 
 #[tokio::test]
 async fn execute_approved_refuses_past_deadline_without_invoking_tools() {
-    use chrono::{Duration as ChronoDuration, Utc};
+    use jiff::SignedDuration;
 
     let provider = Arc::new(MockProvider::with_script(
         "mock",
@@ -1155,7 +1155,7 @@ async fn execute_approved_refuses_past_deadline_without_invoking_tools() {
         ProposedAction::ToolCalls(vec![call]),
         "too late",
     );
-    proposal.expires = Some(Utc::now() - ChronoDuration::hours(1));
+    proposal.expires = Some(UtcStamp::now() - SignedDuration::from_hours(1));
     let mut proposal = signer.sign(proposal).into_proposal();
     proposal.status = ProposalStatus::Approved;
 
