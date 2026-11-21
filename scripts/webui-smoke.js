@@ -190,6 +190,8 @@ function createStubState() {
     authLoginPosts: [],
     passkeys: [],
     authSessions: [],
+    createdProjects: [],
+    createdChats: [],
   };
 }
 
@@ -266,6 +268,24 @@ async function handleApi(req, res, url, stubState) {
     stubJson(res, 404, { error: 'passkeys are not enabled on this server' }, setCsrf);
     return true;
   }
+  if (url.pathname === '/api/conversations' && req.method === 'POST') {
+    if (requireSession()) return true;
+    const bodyText = await readRequestBody(req);
+    let parsed = {};
+    try {
+      parsed = JSON.parse(bodyText || '{}');
+    } catch {
+      parsed = {};
+    }
+    stubState.createdChats.push(parsed);
+    stubJson(res, 201, { id: 'chat-new' }, setCsrf);
+    return true;
+  }
+  if (url.pathname === '/api/conversations/chat-new' && req.method === 'GET') {
+    if (requireSession()) return true;
+    stubJson(res, 200, { messages: [] }, setCsrf);
+    return true;
+  }
   if (url.pathname === '/api/conversations' && req.method === 'GET') {
     if (stubState.auth.force401) {
       stubState.auth.force401 = false;
@@ -280,7 +300,7 @@ async function handleApi(req, res, url, stubState) {
       stubJson(res, 200, [approvalConversationHeader()], setCsrf);
       return true;
     }
-    stubJson(res, 200, [], setCsrf);
+    stubJson(res, 200, smokeChatHeaders(), setCsrf);
     return true;
   }
   if (url.pathname === '/api/conversations/smoke-approval' && req.method === 'GET') {
@@ -299,7 +319,80 @@ async function handleApi(req, res, url, stubState) {
   }
   if (url.pathname === '/api/projects' && req.method === 'GET') {
     if (requireSession()) return true;
-    stubJson(res, 200, [], setCsrf);
+    stubJson(res, 200, { projects: [] }, setCsrf);
+    return true;
+  }
+  if (url.pathname === '/api/catalog' && req.method === 'GET') {
+    if (requireSession()) return true;
+    stubJson(res, 200, { mcps: [] }, setCsrf);
+    return true;
+  }
+  if (url.pathname === '/api/chat-projects' && req.method === 'GET') {
+    if (requireSession()) return true;
+    const filler = [];
+    for (let i = 1; i <= 24; i += 1) {
+      filler.push({
+        id: `proj-fill-${i}`,
+        name: `Filler ${String(i).padStart(2, '0')}`,
+        source: 'user',
+      });
+    }
+    stubJson(res, 200, {
+      projects: [
+        {
+          id: 'proj-trip',
+          name: 'Trip notes',
+          source: 'user',
+          instructions: 'Pack light',
+        },
+        ...filler,
+        ...stubState.createdProjects,
+      ],
+    }, setCsrf);
+    return true;
+  }
+  if (url.pathname === '/api/chat-projects' && req.method === 'POST') {
+    if (requireSession()) return true;
+    const bodyText = await readRequestBody(req);
+    let parsed = {};
+    try {
+      parsed = JSON.parse(bodyText || '{}');
+    } catch {
+      parsed = {};
+    }
+    const name = typeof parsed.name === 'string' ? parsed.name.trim() : '';
+    const row = {
+      id: 'proj-new',
+      name: name || 'Untitled',
+      source: 'user',
+    };
+    if (typeof parsed.instructions === 'string' && parsed.instructions.trim()) {
+      row.instructions = parsed.instructions.trim();
+    }
+    stubState.createdProjects.push(row);
+    stubJson(res, 201, row, setCsrf);
+    return true;
+  }
+  const projectChats = url.pathname.match(/^\/api\/chat-projects\/([^/]+)\/chats$/);
+  if (projectChats && req.method === 'GET') {
+    if (requireSession()) return true;
+    if (projectChats[1] === 'proj-trip') {
+      const chats = [{
+        id: 'chat-1',
+        title: 'Packing list',
+        updated_at: '2026-11-01T12:00:00Z',
+      }];
+      for (let i = 1; i <= 24; i += 1) {
+        chats.push({
+          id: `chat-fill-${i}`,
+          title: `Filler chat ${String(i).padStart(2, '0')}`,
+          updated_at: '2026-11-01T12:00:00Z',
+        });
+      }
+      stubJson(res, 200, { chats }, setCsrf);
+    } else {
+      stubJson(res, 200, { chats: [] }, setCsrf);
+    }
     return true;
   }
   if (url.pathname === '/api/profiles' && req.method === 'GET') {
@@ -456,6 +549,15 @@ async function handleApi(req, res, url, stubState) {
   return false;
 }
 
+function clientShellPath(rel) {
+  return (
+    rel === '/projects' ||
+    rel.startsWith('/projects/') ||
+    rel === '/notifications' ||
+    rel.startsWith('/notifications/')
+  );
+}
+
 function startStaticServer(stubState) {
   if (!fs.existsSync(path.join(BUNDLE, 'index.html'))) {
     throw new Error(
@@ -468,7 +570,7 @@ function startStaticServer(stubState) {
       return;
     }
     let rel = decodeURIComponent(url.pathname);
-    if (rel === '/' || rel === '') {
+    if (rel === '/' || rel === '' || clientShellPath(rel)) {
       rel = '/index.html';
     }
     if (rel === '/favicon.ico') {
@@ -1322,6 +1424,537 @@ async function runNormalFlow(cdp, stubState, origin) {
   if (!drawerRow) {
     fail('Notifications row not visible in opened menu after push flow');
   }
+
+  await runProjectsPhase(cdp, stubState);
+}
+
+function smokeChatHeaders() {
+  const rows = [];
+  for (let i = 1; i <= 24; i += 1) {
+    rows.push({
+      id: `smoke-chat-${i}`,
+      title: `Smoke chat ${String(i).padStart(2, '0')}`,
+      created_at: '2026-11-01T12:00:00Z',
+      surface_mode: 'chat',
+    });
+  }
+  return rows;
+}
+
+function sidebarLayoutExpr() {
+  return `(function(){
+    const nav = document.querySelector('.sidebar-nav');
+    const history = document.querySelector('.sidebar-history');
+    const scroll = document.querySelector('.sidebar-history > .sidebar-scroll');
+    const projects = document.querySelector('.sidebar-nav button[aria-label="Projects"]');
+    const plugins = document.querySelector('.sidebar-nav button[aria-label="Plugins"]');
+    const recents = document.querySelector('.sidebar-history-label');
+    const labels = [...document.querySelectorAll('.sidebar-nav .sidebar-nav-row')].map((el) => el.getAttribute('aria-label'));
+    const projectsIdx = labels.indexOf('Projects');
+    const pluginsIdx = labels.indexOf('Plugins');
+    const sectionLabels = [...document.querySelectorAll('.sidebar-section-label')].map((el) => (el.textContent || '').trim());
+    const manage = [...document.querySelectorAll('button')].some((el) => (el.textContent || '').includes('Manage plugins'));
+    const scrollStyle = scroll ? getComputedStyle(scroll) : null;
+    const historyStyle = history ? getComputedStyle(history) : null;
+    const sidebar = document.querySelector('#sidebar');
+    const side = sidebar ? sidebar.getBoundingClientRect() : null;
+    const projectsBox = projects ? projects.getBoundingClientRect() : null;
+    const pluginsBox = plugins ? plugins.getBoundingClientRect() : null;
+    const navBox = nav ? nav.getBoundingClientRect() : null;
+    const historyBox = history ? history.getBoundingClientRect() : null;
+    const before = projectsBox ? projectsBox.top : 0;
+    if (scroll) scroll.scrollTop = scroll.scrollHeight;
+    const afterBox = projects ? projects.getBoundingClientRect() : null;
+    const chats = document.querySelector('.sidebar-history .sidebar-shelves button[aria-selected="true"]');
+    return JSON.stringify({
+      projectsRow: !!(projects && projects.classList.contains('sidebar-nav-row') && projects.querySelector('.sidebar-icon')),
+      pluginsRow: !!(plugins && plugins.classList.contains('sidebar-nav-row') && plugins.querySelector('.sidebar-icon')),
+      order: projectsIdx >= 0 && pluginsIdx === projectsIdx + 1,
+      manage,
+      sectionLabels,
+      recents: !!(recents && (recents.textContent || '').trim() === 'Recents'),
+      shelves: !!document.querySelector('.sidebar-history .sidebar-shelves'),
+      chatsShelf: !!(chats && (chats.textContent || '').includes('Chats')),
+      overflowY: scrollStyle ? scrollStyle.overflowY : '',
+      historyMin: historyStyle ? historyStyle.minHeight : '',
+      historyGrow: historyStyle ? historyStyle.flexGrow : '',
+      scrolls: !!(scroll && scroll.scrollHeight > scroll.clientHeight + 8),
+      projectsStay: !!(projectsBox && afterBox && Math.abs(afterBox.top - before) < 1),
+      projectsInView: !!(side && afterBox && afterBox.top >= side.top - 1 && afterBox.bottom <= side.bottom + 1),
+      pluginsUnderProjects: !!(projectsBox && pluginsBox && pluginsBox.top >= projectsBox.bottom - 1),
+      navAboveHistory: !!(navBox && historyBox && navBox.bottom <= historyBox.top + 1),
+    });
+  })()`;
+}
+
+async function assertSidebarLayout(cdp) {
+  await waitFor(
+    cdp,
+    `(function(){
+      return [...document.querySelectorAll('.sidebar-history .grok-row-title')].some((el) => (el.textContent || '').includes('Smoke chat 24'));
+    })()`,
+    'sidebar history rows',
+    10_000,
+  );
+  const raw = await evalString(cdp, sidebarLayoutExpr());
+  let info;
+  try {
+    info = JSON.parse(raw);
+  } catch (err) {
+    fail(`sidebar layout was not JSON: ${raw}`);
+    return;
+  }
+  if (!info.projectsRow || !info.pluginsRow) {
+    fail(`Projects and Plugins must be icon nav rows: ${raw}`);
+  }
+  if (!info.order || !info.pluginsUnderProjects) {
+    fail(`Plugins must sit directly under Projects: ${raw}`);
+  }
+  if (info.manage) {
+    fail('Manage plugins row must be gone');
+  }
+  if (info.sectionLabels.includes('Projects') || info.sectionLabels.includes('Plugins')) {
+    fail(`Projects and Plugins section headers must be gone: ${raw}`);
+  }
+  if (!info.recents || !info.shelves || !info.chatsShelf) {
+    fail(`Recents heading and Chats shelf must delineate history: ${raw}`);
+  }
+  if (info.overflowY !== 'auto' || info.historyMin !== '0px' || info.historyGrow !== '1') {
+    fail(`history list must be the scroller: ${raw}`);
+  }
+  if (!info.scrolls || !info.projectsStay || !info.projectsInView || !info.navAboveHistory) {
+    fail(`scrolling history must leave the nav on screen: ${raw}`);
+  }
+}
+
+async function assertProjectFab(cdp) {
+  await assertCornerFab(cdp, {
+    name: 'New project',
+    item: '.project-card',
+    pad: '.projects-page:not(.project-page) .project-grid',
+    noun: 'card',
+  });
+}
+
+async function assertChatFab(cdp) {
+  await assertCornerFab(cdp, {
+    name: 'New chat',
+    item: '.project-chat-open',
+    pad: '.project-page .project-chat-list',
+    noun: 'chat',
+  });
+}
+
+async function assertCornerFab(cdp, spec) {
+  const phone = await projectFabProbe(cdp, spec);
+  assertFabProbe(phone, `phone ${spec.noun}`, true, spec);
+  await cdp.send('Emulation.setDeviceMetricsOverride', {
+    width: 1280,
+    height: 800,
+    deviceScaleFactor: 1,
+    mobile: false,
+  });
+  await sleep(300);
+  const desktop = await projectFabProbe(cdp, spec);
+  assertFabProbe(desktop, `desktop ${spec.noun}`, true, spec);
+  await cdp.send('Emulation.setDeviceMetricsOverride', {
+    width: 412,
+    height: 915,
+    deviceScaleFactor: 1,
+    mobile: true,
+  });
+  await sleep(200);
+}
+
+async function projectFabProbe(cdp, spec) {
+  const item = JSON.stringify(spec.item);
+  const pad = JSON.stringify(spec.pad);
+  const raw = await evalString(
+    cdp,
+    `(function(){
+      const fabs = [...document.querySelectorAll('button.project-fab')];
+      const fab = fabs[0];
+      if (!fab) return JSON.stringify({ missing: true });
+      const style = getComputedStyle(fab);
+      const before = fab.getBoundingClientRect();
+      const grid = document.querySelector(${pad});
+      const phone = document.querySelector('.grok-main-phone-scroll');
+      const scrollers = [
+        phone,
+        document.querySelector('.projects-page'),
+        document.querySelector('.projects-page .grok-page-body'),
+      ];
+      for (const node of scrollers) {
+        if (!node || getComputedStyle(node).display === 'contents') continue;
+        node.scrollTop = node.scrollHeight;
+      }
+      const after = fab.getBoundingClientRect();
+      const cards = [...document.querySelectorAll(${item})];
+      const last = cards.length ? cards[cards.length - 1].getBoundingClientRect() : null;
+      const scrolled = scrollers.some((node) => node && node.scrollTop > 40);
+      return JSON.stringify({
+        count: fabs.length,
+        text: fab.textContent.trim(),
+        label: fab.getAttribute('aria-label'),
+        position: style.position,
+        radius: parseFloat(style.borderTopLeftRadius),
+        width: before.width,
+        height: before.height,
+        rightGap: window.innerWidth - before.right,
+        bottomGap: window.innerHeight - before.bottom,
+        moved: Math.abs(after.top - before.top) + Math.abs(after.left - before.left),
+        lastAboveFab: !!last && last.bottom <= after.top + 1,
+        lastBottom: last ? Math.round(last.bottom) : null,
+        fabTop: Math.round(after.top),
+        scrollTops: scrollers.map((node) => (node ? Math.round(node.scrollTop) : null)),
+        pad: grid ? parseFloat(getComputedStyle(grid).paddingBottom) : 0,
+        scrolled,
+      });
+    })()`,
+  );
+  return JSON.parse(raw);
+}
+
+function assertFabProbe(info, label, expectScroll, spec) {
+  if (info.missing) {
+    fail(`${label}: ${spec.name} button is missing`);
+    return;
+  }
+  if (info.count !== 1) {
+    fail(`${label}: the page must show one corner button: ${JSON.stringify(info)}`);
+  }
+  if (info.text !== '+' || info.label !== spec.name) {
+    fail(`${label}: button must show only + and be named ${spec.name}: ${JSON.stringify(info)}`);
+  }
+  if (info.position !== 'fixed') {
+    fail(`${label}: button must be fixed to the viewport: ${JSON.stringify(info)}`);
+  }
+  if (!(info.radius >= info.width / 2 - 1) || Math.abs(info.width - info.height) > 1) {
+    fail(`${label}: button must be round: ${JSON.stringify(info)}`);
+  }
+  if (info.width < 48 || info.width > 64) {
+    fail(`${label}: button must be a touch target: ${JSON.stringify(info)}`);
+  }
+  if (info.rightGap < 8 || info.rightGap > 32 || info.bottomGap < 8 || info.bottomGap > 32) {
+    fail(`${label}: button must sit in the lower-right corner: ${JSON.stringify(info)}`);
+  }
+  if (info.moved > 2) {
+    fail(`${label}: button must stay put while the list scrolls: ${JSON.stringify(info)}`);
+  }
+  if (info.pad < 48) {
+    fail(`${label}: the list needs bottom padding so the last ${spec.noun} clears the button: ${JSON.stringify(info)}`);
+  }
+  if (expectScroll && (!info.scrolled || !info.lastAboveFab)) {
+    fail(`${label}: the last ${spec.noun} must scroll clear of the button: ${JSON.stringify(info)}`);
+  }
+}
+
+async function exerciseProjectDialog(cdp) {
+  const absent = await evalBool(cdp, `!document.querySelector('button.project-fab')`);
+  if (absent) {
+    fail('projects page lost the New project button before the dialog');
+    return;
+  }
+  await clickAssert(
+    cdp,
+    `(function(){
+      const fab = document.querySelector('button.project-fab');
+      if (!fab) return false;
+      fab.click();
+      return true;
+    })()`,
+    'New project button',
+  );
+  await waitFor(
+    cdp,
+    `(function(){
+      const name = document.getElementById('new-project-name');
+      return !!document.querySelector('.project-dialog') && document.activeElement === name;
+    })()`,
+    'new project dialog focuses the name',
+    10_000,
+  );
+  await clickAssert(
+    cdp,
+    `(function(){
+      const create = [...document.querySelectorAll('.project-dialog button')].find((el) => el.textContent.trim() === 'Create');
+      if (!create) return false;
+      create.click();
+      return true;
+    })()`,
+    'Create with an empty name',
+  );
+  await waitFor(
+    cdp,
+    `(function(){
+      const alert = document.querySelector('.project-dialog [role="alert"]');
+      return !!document.querySelector('.project-dialog') && !!alert && alert.textContent.includes('A project needs a name.');
+    })()`,
+    'name validation inside the dialog',
+    10_000,
+  );
+  await clickAssert(
+    cdp,
+    `(function(){
+      const cancel = [...document.querySelectorAll('.project-dialog button')].find((el) => el.textContent.trim() === 'Cancel');
+      if (!cancel) return false;
+      cancel.click();
+      return true;
+    })()`,
+    'Cancel new project',
+  );
+  await waitFor(
+    cdp,
+    `(function(){
+      return !document.querySelector('.project-dialog') && document.activeElement && document.activeElement.id === 'new-project-fab';
+    })()`,
+    'Cancel returns focus to the New project button',
+    10_000,
+  );
+  await clickAssert(
+    cdp,
+    `(function(){
+      const fab = document.querySelector('button.project-fab');
+      if (!fab) return false;
+      fab.click();
+      return true;
+    })()`,
+    'New project button again',
+  );
+  await waitFor(
+    cdp,
+    `!!document.querySelector('.project-dialog') && document.activeElement && document.activeElement.id === 'new-project-name'`,
+    'dialog open for Escape',
+    10_000,
+  );
+  await evalBool(
+    cdp,
+    `(function(){
+      const input = document.getElementById('new-project-name');
+      if (!input) return false;
+      input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', bubbles: true, cancelable: true }));
+      return true;
+    })()`,
+  );
+  await waitFor(
+    cdp,
+    `(function(){
+      return !document.querySelector('.project-dialog') && document.activeElement && document.activeElement.id === 'new-project-fab';
+    })()`,
+    'Escape closes the dialog and returns focus',
+    10_000,
+  );
+  await clickAssert(
+    cdp,
+    `(function(){
+      const fab = document.querySelector('button.project-fab');
+      if (!fab) return false;
+      fab.click();
+      return true;
+    })()`,
+    'New project button for backdrop',
+  );
+  await waitFor(
+    cdp,
+    `!!document.querySelector('.project-create-backdrop')`,
+    'dialog open for backdrop',
+    10_000,
+  );
+  await clickAssert(
+    cdp,
+    `(function(){
+      const backdrop = document.querySelector('.project-create-backdrop');
+      if (!backdrop) return false;
+      backdrop.click();
+      return true;
+    })()`,
+    'backdrop',
+  );
+  await waitFor(
+    cdp,
+    `(function(){
+      return !document.querySelector('.project-dialog') && document.activeElement && document.activeElement.id === 'new-project-fab';
+    })()`,
+    'backdrop closes the dialog and returns focus',
+    10_000,
+  );
+  await clickAssert(
+    cdp,
+    `(function(){
+      const fab = document.querySelector('button.project-fab');
+      if (!fab) return false;
+      fab.click();
+      return true;
+    })()`,
+    'New project button for create',
+  );
+  await waitFor(
+    cdp,
+    `document.activeElement && document.activeElement.id === 'new-project-name'`,
+    'name field focused for create',
+    10_000,
+  );
+  const typed = await evalBool(
+    cdp,
+    `(function(){
+      const input = document.getElementById('new-project-name');
+      if (!input) return false;
+      const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+      set.call(input, 'Shore trip');
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', bubbles: true, cancelable: true }));
+      return true;
+    })()`,
+  );
+  if (!typed) {
+    fail('could not type a project name');
+    return;
+  }
+  await waitFor(
+    cdp,
+    `(function(){
+      const title = document.querySelector('.project-page .grok-page-title');
+      const fabs = [...document.querySelectorAll('button.project-fab')];
+      const chatFab = fabs.length === 1 && fabs[0].getAttribute('aria-label') === 'New chat';
+      return title && title.textContent.includes('Shore trip') && chatFab && !document.querySelector('.project-dialog');
+    })()`,
+    'created project page without the New project button',
+    15_000,
+  );
+}
+
+async function runProjectsPhase(cdp, stubState) {
+  await assertSidebarLayout(cdp);
+  await clickAssert(
+    cdp,
+    `(function(){
+      const row = document.querySelector('.sidebar-nav button[aria-label="Plugins"]');
+      if (!row) return false;
+      row.click();
+      return true;
+    })()`,
+    'Plugins nav',
+  );
+  await waitFor(
+    cdp,
+    `(function(){
+      const title = document.querySelector('.plugins-page .grok-page-title');
+      return title && title.textContent.includes('Connected MCP servers');
+    })()`,
+    'plugins page',
+    15_000,
+  );
+  await clickAssert(
+    cdp,
+    `(function(){
+      const btn = document.querySelector('.phone-menu-fab') || document.querySelector('.sidebar-menu-btn');
+      if (!btn) return false;
+      btn.click();
+      return true;
+    })()`,
+    'sidebar menu before Projects',
+  );
+  await waitFor(
+    cdp,
+    `(function(){
+      const layout = document.querySelector('.grok-layout');
+      return layout && layout.classList.contains('drawer-open');
+    })()`,
+    'sidebar drawer open for Projects',
+    10_000,
+  );
+  await clickAssert(
+    cdp,
+    `(function(){
+      const row = document.querySelector('button[aria-label="Projects"]');
+      if (!row) return false;
+      row.click();
+      return true;
+    })()`,
+    'Projects nav',
+  );
+  await waitFor(
+    cdp,
+    `(function(){
+      const title = document.querySelector('.projects-page .grok-page-title');
+      const create = document.querySelector('button.project-fab[aria-label="New project"]');
+      const card = [...document.querySelectorAll('.project-card-name')].some((el) => el.textContent.includes('Trip notes'));
+      return title && title.textContent.includes('Projects') && !!create && card;
+    })()`,
+    'projects page with Trip notes and New project',
+    15_000,
+  );
+  await assertProjectFab(cdp);
+  await exerciseProjectDialog(cdp);
+  if (stubState.createdProjects.length !== 1 || stubState.createdProjects[0].name !== 'Shore trip') {
+    fail(`create must post one project: ${JSON.stringify(stubState.createdProjects)}`);
+  }
+  await clickAssert(
+    cdp,
+    `(function(){
+      const back = document.querySelector('button[aria-label="Back to projects"]');
+      if (!back) return false;
+      back.click();
+      return true;
+    })()`,
+    'Back to projects after create',
+  );
+  await waitFor(
+    cdp,
+    `(function(){
+      const title = document.querySelector('.projects-page:not(.project-page) .grok-page-title');
+      const fab = document.querySelector('button.project-fab');
+      return title && title.textContent.includes('Projects') && !!fab;
+    })()`,
+    'projects list after create',
+    15_000,
+  );
+  await clickAssert(
+    cdp,
+    `(function(){
+      const card = [...document.querySelectorAll('.project-card-open')].find((el) => el.textContent.includes('Trip notes'));
+      if (!card) return false;
+      card.click();
+      return true;
+    })()`,
+    'Trip notes project card',
+  );
+  await waitFor(
+    cdp,
+    `(function(){
+      const title = document.querySelector('.project-page .grok-page-title');
+      const chat = [...document.querySelectorAll('.project-chat-open')].some((el) => el.textContent.includes('Packing list'));
+      const fabs = [...document.querySelectorAll('button.project-fab')];
+      const inline = [...document.querySelectorAll('.project-page button')].some((el) => el.textContent.trim() === 'New chat');
+      const back = document.querySelector('button[aria-label="Back to projects"]');
+      const chatFab = fabs.length === 1 && fabs[0].getAttribute('aria-label') === 'New chat' && fabs[0].textContent.trim() === '+';
+      return title && title.textContent.includes('Trip notes') && chat && chatFab && !!back && !inline;
+    })()`,
+    'project page with Packing list and New chat',
+    15_000,
+  );
+  await assertChatFab(cdp);
+  await clickAssert(
+    cdp,
+    `(function(){
+      const fab = document.querySelector('button.project-fab[aria-label="New chat"]');
+      if (!fab) return false;
+      fab.click();
+      return true;
+    })()`,
+    'New chat button',
+  );
+  await waitFor(
+    cdp,
+    `(function(){
+      return !!document.getElementById('chat-input') && !document.querySelector('button.project-fab') && !document.querySelector('.project-page');
+    })()`,
+    'new project chat',
+    15_000,
+  );
+  if (stubState.createdChats.length !== 1 || stubState.createdChats[0].project !== 'proj-trip') {
+    fail(`new chat must post this project once: ${JSON.stringify(stubState.createdChats)}`);
+  }
 }
 
 async function runReconcileOnLoadPhase(cdp, stubState) {
@@ -1734,4 +2367,5 @@ module.exports = {
   chromeLaunchArgs,
   isChromeStartupFailure,
   retryChromeStartup,
+  clientShellPath,
 };

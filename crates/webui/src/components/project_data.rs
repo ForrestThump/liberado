@@ -1,15 +1,19 @@
-//! Coding projects from `GET /api/projects`.
+//! Chat projects from `GET /api/chat-projects`.
 //!
-//! A pick attaches the project to the open chat with `PATCH /api/conversations/{id}`.
-//! A chat that does not exist yet keeps the name until the first message, which sends
-//! it on that same patch as the title.
+//! Topology rows keep a coding root. A project created here has none.
+//! Attaching a project still uses `PATCH /api/conversations/{id}`.
 
 use dioxus::prelude::*;
 use serde::Deserialize;
 
-/// Shown on the projects page. Projects are config, not a create form.
-pub(crate) const PROJECT_SOURCE: &str =
-    "Projects are declared in topology.toml. This list reads them. It does not create one.";
+pub(crate) use super::project_catalog::{
+    ProjectPath, chat_date, delete_prompt, display_name, fetch_project_chats, label_map,
+    new_project_body, project_editable, project_path, project_route_from_path,
+};
+
+/// Shown on the projects page.
+pub(crate) const PROJECT_SOURCE: &str = "Topology projects stay in topology.toml and keep a \
+     coding root. New project creates a chat project with no coding root.";
 
 /// Shown on the projects page. A phone has no hover, so the sentence is not only a tooltip.
 pub(crate) const PROJECT_BIND_GAP: &str = "Choosing a project attaches it to the open chat. \
@@ -19,10 +23,25 @@ const DOTS: [&str; 3] = ["var(--dot-cyan)", "var(--dot-green)", "var(--dot-orang
 
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
 pub(crate) struct ProjectRow {
+    #[serde(default)]
+    pub id: String,
     pub name: String,
-    pub root: String,
+    #[serde(default)]
+    pub source: String,
+    #[serde(default)]
+    pub root: Option<String>,
     #[serde(default)]
     pub write_class: Option<String>,
+    #[serde(default)]
+    pub instructions: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+pub(crate) struct ProjectChatRow {
+    pub id: String,
+    #[serde(default)]
+    pub title: Option<String>,
+    pub updated_at: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -34,11 +53,25 @@ struct ProjectsResponse {
 pub(crate) fn parse_projects(body: &str) -> Result<Vec<ProjectRow>, String> {
     let parsed: ProjectsResponse =
         serde_json::from_str(body).map_err(|e| format!("Bad response: {e}"))?;
-    Ok(parsed.projects)
+    Ok(parsed.projects.into_iter().map(normalize_row).collect())
+}
+
+pub(crate) fn normalize_row(mut row: ProjectRow) -> ProjectRow {
+    if row.id.trim().is_empty() {
+        row.id = row.name.clone();
+    }
+    if row.source.trim().is_empty() {
+        row.source = if row.root.is_some() {
+            "topology".into()
+        } else {
+            "user".into()
+        };
+    }
+    row
 }
 
 pub(crate) async fn fetch_projects(api_base: &str) -> Result<Vec<ProjectRow>, String> {
-    let url = format!("{api_base}/api/projects");
+    let url = format!("{api_base}/api/chat-projects");
     let resp = crate::http::get(&url)
         .await
         .map_err(|e| format!("Failed to reach daemon: {e}"))?;
@@ -73,6 +106,22 @@ pub(crate) fn collapsed_after_pick(narrow: bool, collapsed: bool) -> bool {
 }
 
 /// Close the phone drawer after a nav item opens a view. A desk rail is unchanged.
+pub(crate) fn replace_project_path(path: &str) {
+    #[cfg(target_arch = "wasm32")]
+    {
+        if let Some(window) = web_sys::window() {
+            if let Ok(history) = window.history() {
+                let _ =
+                    history.replace_state_with_url(&wasm_bindgen::JsValue::NULL, "", Some(path));
+            }
+        }
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let _ = path;
+    }
+}
+
 pub(crate) fn close_phone_drawer(mut collapsed: Signal<bool>) {
     let Ok(now) = collapsed.try_peek().map(|value| *value) else {
         return;
@@ -180,11 +229,20 @@ pub(crate) fn ProjectContextChip(
     session: Signal<Option<String>>,
     list_epoch: Signal<u64>,
 ) -> Element {
+    let labels = use_resource({
+        let base = api_base.clone();
+        move || {
+            let base = base.clone();
+            async move { fetch_projects(&base).await.map(|rows| label_map(&rows)) }
+        }
+    });
     let Some(name) = active_project() else {
         return rsx! {};
     };
+    let loaded = labels.read();
+    let shown = display_name(&name, loaded.as_ref());
     let saved = session().is_some();
-    let line = project_chip_line(&name, saved);
+    let line = project_chip_line(&shown, saved);
     rsx! {
         p {
             class: "composer-project",
@@ -229,8 +287,23 @@ mod tests {
         let rows = parse_projects(body).unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].name, "liberado");
-        assert_eq!(rows[0].root, "/src");
+        assert_eq!(rows[0].id, "liberado");
+        assert_eq!(rows[0].source, "topology");
+        assert_eq!(rows[0].root.as_deref(), Some("/src"));
         assert_eq!(rows[0].write_class.as_deref(), Some("agent_writable"));
+    }
+
+    #[test]
+    fn a_user_project_has_no_coding_root() {
+        let body =
+            r#"{"projects":[{"id":"01P","name":"Trip","source":"user","instructions":"Pack"}]}"#;
+        let rows = parse_projects(body).unwrap();
+        assert_eq!(rows[0].id, "01P");
+        assert_eq!(rows[0].source, "user");
+        assert!(rows[0].root.is_none());
+        assert!(rows[0].write_class.is_none());
+        assert!(project_editable(&rows[0].source));
+        assert!(!project_editable("topology"));
     }
 
     #[test]
@@ -270,7 +343,37 @@ mod tests {
     #[test]
     fn the_projects_page_names_topology_and_not_a_create_form() {
         assert!(PROJECT_SOURCE.contains("topology.toml"));
-        assert!(PROJECT_SOURCE.contains("does not create"));
+        assert!(PROJECT_SOURCE.contains("New project"));
+        assert!(PROJECT_SOURCE.contains("no coding root"));
+    }
+
+    #[test]
+    fn paths_round_trip_and_a_blank_name_is_not_a_body() {
+        assert_eq!(
+            project_route_from_path("/projects"),
+            Some(ProjectPath::List)
+        );
+        assert_eq!(
+            project_route_from_path("/projects/01P"),
+            Some(ProjectPath::Detail("01P".into()))
+        );
+        assert_eq!(
+            project_route_from_path("/projects/a%20b"),
+            Some(ProjectPath::Detail("a b".into()))
+        );
+        assert_eq!(project_route_from_path("/other"), None);
+        assert_eq!(project_path(Some("a b")), "/projects/a%20b");
+        assert_eq!(project_path(None), "/projects");
+        assert!(new_project_body("  ", "notes").is_none());
+        assert_eq!(
+            new_project_body(" Trip ", " Pack "),
+            Some(serde_json::json!({ "name": "Trip", "instructions": "Pack" }))
+        );
+        assert_eq!(chat_date("2026-11-01T12:00:00Z"), "2026-11-01");
+        let prompt = delete_prompt("Trip");
+        assert!(prompt.contains("Trip"));
+        assert!(prompt.contains("detached"));
+        assert!(prompt.contains("chat list"));
     }
 
     #[test]

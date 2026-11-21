@@ -40,10 +40,7 @@ pub(super) fn PrimaryNavRow(
     #[props(into)] icon: Element,
     collapsed: Signal<bool>,
 ) -> Element {
-    let active = match target {
-        Route::Chat => route().is_chat_view(),
-        _ => route() == target,
-    };
+    let active = nav_row_active(target, route());
     let cls = if active {
         "sidebar-nav-row active"
     } else {
@@ -62,6 +59,17 @@ pub(super) fn PrimaryNavRow(
             {icon}
             span { class: "sidebar-nav-label", "{label}" }
         }
+    }
+}
+
+/// A primary-nav row is on when it is the open view.
+///
+/// Chat also covers an open conversation. Projects also covers one project's page.
+pub(super) fn nav_row_active(target: Route, current: Route) -> bool {
+    match target {
+        Route::Chat => current.is_chat_view(),
+        Route::Projects => matches!(current, Route::Projects | Route::ProjectDetail),
+        _ => current == target,
     }
 }
 

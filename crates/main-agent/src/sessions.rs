@@ -104,6 +104,8 @@ mod turn_clock;
 #[path = "sessions/turn_failure.rs"]
 mod turn_failure;
 pub use turn_failure::{TURN_ERROR_AUTHOR, public_failure_text, public_turn_failure};
+#[path = "sessions/search_scope.rs"]
+mod search_scope;
 #[path = "sessions_waivers.rs"]
 mod waivers;
 #[path = "sessions/workspace.rs"]
@@ -1627,9 +1629,12 @@ impl ChatSessions {
             && self.live_catalog.is_none()
         {
             // Truly unguarded test fixtures — raw runtime only when no live catalog is attached.
-            return self.attach_workspace(
+            return search_scope::wrap(
                 session,
-                Box::new(DecoratingRuntime::passthrough(self.runtime.clone())),
+                self.attach_workspace(
+                    session,
+                    Box::new(DecoratingRuntime::passthrough(self.runtime.clone())),
+                ),
             );
         }
 
@@ -1682,15 +1687,18 @@ impl ChatSessions {
         // Gate on the session grant, not the narrowed `scope` and not the process grant.
         // Narrowing only hides tools. Dropping Write and the other non-execute capabilities
         // here would shrink the gate. See the filter above.
-        self.attach_workspace(
+        search_scope::wrap(
             session,
-            Box::new(self.gate_with_session_grant(
-                inner,
-                capabilities.clone(),
-                user,
+            self.attach_workspace(
                 session,
-                profile,
-            )),
+                Box::new(self.gate_with_session_grant(
+                    inner,
+                    capabilities.clone(),
+                    user,
+                    session,
+                    profile,
+                )),
+            ),
         )
     }
 

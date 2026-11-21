@@ -5,6 +5,7 @@ mod auth;
 mod automations;
 mod chat;
 mod chat_create;
+mod chat_projects;
 mod completions;
 #[cfg(test)]
 mod completions_http_tests;
@@ -46,6 +47,10 @@ pub use chat::{
     patch_conversation_title, set_conversation_profile,
 };
 pub use chat_create::create_conversation;
+pub use chat_projects::{
+    create_chat_project, delete_chat_project, list_chat_projects, list_project_chats,
+    patch_chat_project,
+};
 pub use completions::list_completions;
 pub use goals::{
     goals_cancel, goals_diff, goals_domains, goals_get, goals_list, goals_message, goals_park,

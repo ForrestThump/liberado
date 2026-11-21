@@ -3,6 +3,7 @@
 use std::sync::Arc;
 
 use axum::{Json, extract::State, http::StatusCode, response::IntoResponse};
+use liberado_conversation_store::ConversationStore;
 use serde::Deserialize;
 
 use chat_client_contract::ApiError;
@@ -40,6 +41,9 @@ pub struct CreateConversationRequest {
     /// Edit click. Omitted for a new automation. Stored in the system prompt.
     #[serde(default)]
     pub target: Option<AutomationTargetRequest>,
+    /// Topology project name or user project id. The creator and editor faces ignore it.
+    #[serde(default)]
+    pub project: Option<String>,
 }
 
 /// Schedule the human opened from the Automations list.
@@ -195,6 +199,13 @@ async fn create_standard_conversation(
     state: Arc<AppState>,
     req: CreateConversationRequest,
 ) -> axum::response::Response {
+    let project = match super::chat_projects::accepted_project(&state, req.project.as_deref()).await
+    {
+        Ok(project) => project,
+        Err(error) => {
+            return (StatusCode::BAD_REQUEST, Json(ApiError { error })).into_response();
+        }
+    };
     let Some(sessions) = &state.chat else {
         return (
             StatusCode::SERVICE_UNAVAILABLE,
@@ -247,6 +258,22 @@ async fn create_standard_conversation(
             }
         }
     };
+
+    if let Some(project) = project {
+        let update = liberado_conversation_store::ChatMetaUpdate {
+            project: Some(Some(project)),
+            pending_model: None,
+        };
+        if let Err(error) = state.sessions.set_chat_meta(id, update).await {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiError {
+                    error: error.to_string(),
+                }),
+            )
+                .into_response();
+        }
+    }
 
     match sessions.list().await {
         Ok(headers) => {

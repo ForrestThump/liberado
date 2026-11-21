@@ -50,14 +50,21 @@ impl ChatSearchServer {
     ///
     /// Returns up to `limit` conversations (newest first), each with the matching messages'
     /// snippets, as JSON.
+    ///
+    /// `project` limits matches to that project id or topology name. `scope` of `project`
+    /// uses the current chat's project (`conversation` is that chat's id). Omit both to
+    /// search every chat.
     #[tool(
-        description = "Search conversation history. Literal mode (default): all whitespace-separated terms must match within the SAME message (quoted phrases count as one term) — this is per-message, not per-conversation, so terms split across different messages won't match. Regex mode: query is a single case-insensitive Rust regex, also matched per-message. Returns matching conversations with message snippets, as JSON."
+        description = "Search chats. Literal mode (default): every term must occur in the same message; quotes keep a phrase. Regex mode: one case-insensitive pattern. Pass project to limit results to that project id or topology name. Pass scope \"project\" to limit results to the current chat's project. Omit both to search every chat."
     )]
     async fn search_conversations(
         &self,
         query: String,
         regex: bool,
         limit: i32,
+        project: Option<String>,
+        scope: Option<String>,
+        conversation: Option<String>,
     ) -> McpResult<String> {
         // The **converged** session store (S5′/D7) — resolved once at construction so a server
         // built for tests can point elsewhere (see `sessions_root`).
@@ -70,8 +77,18 @@ impl ChatSearchServer {
         }
         .map_err(|e| McpError::invalid_params(e.to_string()))?;
 
+        let current = conversation
+            .as_deref()
+            .map(|id| liberado_chat_search::stored_project(root, id));
+        let project = liberado_chat_search::resolve_project_filter(
+            project.as_deref(),
+            scope.as_deref(),
+            current.as_ref(),
+        )
+        .map_err(McpError::invalid_params)?;
+
         let limit = limit.clamp(1, 50) as usize;
-        let results = liberado_chat_search::search(root, &parsed, limit)
+        let results = liberado_chat_search::search_in(root, &parsed, limit, project.as_deref())
             .await
             .map_err(|e| McpError::internal(e.to_string()))?;
 
@@ -160,7 +177,7 @@ mod tests {
         );
 
         let out = server(dir.path())
-            .search_conversations("dark mode".into(), false, 10)
+            .search_conversations("dark mode".into(), false, 10, None, None, None)
             .await
             .unwrap();
         let v: Value = serde_json::from_str(&out).unwrap();
@@ -181,7 +198,7 @@ mod tests {
         let missing = dir.path().join("no/such/dir");
 
         let out = server(&missing)
-            .search_conversations("anything".into(), false, 10)
+            .search_conversations("anything".into(), false, 10, None, None, None)
             .await
             .unwrap();
         let v: Value = serde_json::from_str(&out).unwrap();
@@ -210,7 +227,7 @@ mod tests {
         );
 
         let out = server(dir.path())
-            .search_conversations("hello world".into(), false, 10)
+            .search_conversations("hello world".into(), false, 10, None, None, None)
             .await
             .unwrap();
         let v: Value = serde_json::from_str(&out).unwrap();
@@ -241,7 +258,7 @@ mod tests {
 
         // "dark mode" as one quoted phrase matches a message containing the whole phrase.
         let out = server(dir.path())
-            .search_conversations("\"dark mode\" themes".into(), false, 10)
+            .search_conversations("\"dark mode\" themes".into(), false, 10, None, None, None)
             .await
             .unwrap();
         assert_eq!(
@@ -270,7 +287,7 @@ mod tests {
         );
 
         let out = server(dir.path())
-            .search_conversations("dark".into(), true, 10)
+            .search_conversations("dark".into(), true, 10, None, None, None)
             .await
             .unwrap();
         assert_eq!(
@@ -283,7 +300,7 @@ mod tests {
     async fn invalid_regex_is_rejected_as_invalid_params() {
         let dir = tempfile::tempdir().unwrap();
         let err = server(dir.path())
-            .search_conversations("([".into(), true, 10)
+            .search_conversations("([".into(), true, 10, None, None, None)
             .await
             .unwrap_err();
         // `kind` is a field; compare kinds without naming `ErrorKind` (which turbomcp's umbrella
@@ -319,7 +336,7 @@ mod tests {
 
         // limit 0 (and negative) clamp up to 1; both conversations match "alpha".
         let out = server(dir.path())
-            .search_conversations("alpha".into(), false, 0)
+            .search_conversations("alpha".into(), false, 0, None, None, None)
             .await
             .unwrap();
         let v: Value = serde_json::from_str(&out).unwrap();
@@ -350,7 +367,7 @@ mod tests {
         );
 
         let out = server(dir.path())
-            .search_conversations("x".into(), false, 10)
+            .search_conversations("x".into(), false, 10, None, None, None)
             .await
             .unwrap();
         let v: Value = serde_json::from_str(&out).unwrap();
@@ -385,7 +402,7 @@ mod tests {
         }
 
         let out = server(dir.path())
-            .search_conversations("alpha".into(), false, 999)
+            .search_conversations("alpha".into(), false, 999, None, None, None)
             .await
             .unwrap();
         let v: Value = serde_json::from_str(&out).unwrap();
@@ -412,7 +429,7 @@ mod tests {
         );
 
         let out = server(dir.path())
-            .search_conversations("intact".into(), false, 10)
+            .search_conversations("intact".into(), false, 10, None, None, None)
             .await
             .unwrap();
         assert_eq!(
@@ -438,7 +455,7 @@ mod tests {
         );
 
         let out = server(dir.path())
-            .search_conversations("headless".into(), false, 10)
+            .search_conversations("headless".into(), false, 10, None, None, None)
             .await
             .unwrap();
         assert_eq!(
@@ -485,5 +502,83 @@ mod tests {
         let v: Value = serde_json::from_str(&json_out).unwrap();
         assert_eq!(v["total_found"], 1);
         assert_eq!(v["matches"][0]["title"], "Greetings");
+    }
+
+    #[tokio::test]
+    async fn project_and_scope_limit_the_scan() {
+        let dir = tempfile::tempdir().unwrap();
+        let alpha = "01JVAAAAAAAAAAAAAAAAAAAAAA";
+        let beta = "01JVAAAAAAAAAAAAAAAAAAAABB";
+        let node_a = "01JVAAAAAAAAAAAAAAAAAAAAB1";
+        let node_b = "01JVAAAAAAAAAAAAAAAAAAAAB2";
+        write_fixture(
+            dir.path(),
+            &format!("{alpha}.jsonl"),
+            &[
+                &format!(
+                    r#"{{"kind":"header","id":"{alpha}","title":"Alpha","parent_conversation":null,"spawned_by":null,"created_at":"2026-01-01T00:00:00Z","project":"proj-alpha"}}"#
+                ),
+                &node(
+                    node_a,
+                    alpha,
+                    "user",
+                    "shared token",
+                    "2026-01-02T00:00:00Z",
+                ),
+            ],
+        );
+        write_fixture(
+            dir.path(),
+            &format!("{beta}.jsonl"),
+            &[
+                &format!(
+                    r#"{{"kind":"header","id":"{beta}","title":"Beta","parent_conversation":null,"spawned_by":null,"created_at":"2026-01-01T00:00:00Z","project":"proj-beta"}}"#
+                ),
+                &node(node_b, beta, "user", "shared token", "2026-01-02T00:00:00Z"),
+            ],
+        );
+        let scoped = server(dir.path());
+        let by_project = scoped
+            .search_conversations(
+                "shared token".into(),
+                false,
+                10,
+                Some("proj-alpha".into()),
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        let by_project: Value = serde_json::from_str(&by_project).unwrap();
+        assert_eq!(by_project["total_found"], 1);
+        assert_eq!(by_project["matches"][0]["title"], "Alpha");
+
+        let by_scope = scoped
+            .search_conversations(
+                "shared token".into(),
+                false,
+                10,
+                None,
+                Some("project".into()),
+                Some(alpha.into()),
+            )
+            .await
+            .unwrap();
+        let by_scope: Value = serde_json::from_str(&by_scope).unwrap();
+        assert_eq!(by_scope["total_found"], 1);
+        assert_eq!(by_scope["matches"][0]["conversation_id"], alpha);
+
+        let missing = scoped
+            .search_conversations(
+                "shared token".into(),
+                false,
+                10,
+                None,
+                Some("project".into()),
+                None,
+            )
+            .await
+            .unwrap_err();
+        assert!(missing.to_string().contains("current conversation"));
     }
 }

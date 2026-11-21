@@ -10,6 +10,8 @@
 
 mod query;
 mod scan;
+mod scope;
 
 pub use query::{ParsedQuery, QueryParseError};
-pub use scan::{ConversationMatch, MessageMatch, SearchError, SearchResults, search};
+pub use scan::{ConversationMatch, MessageMatch, SearchError, SearchResults, search, search_in};
+pub use scope::{CurrentProject, resolve_project_filter, stored_project};

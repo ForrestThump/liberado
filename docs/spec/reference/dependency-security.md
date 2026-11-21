@@ -20,9 +20,9 @@ cargo-vet before any job may compile a build script or procedural macro.
 4. Run `just dependency-security` and request the CODEOWNER review.
 
 `deny.toml` allows the build script `libz-sys@1.1.33`. The vet exemption in
-`supply-chain/config.toml` names 1.1.33. That release clears RUSTSEC-2026-0544.
-The build script is the same file as 1.1.31; the version pin moves with it.
-The exemption is still debt, not an audit.
+`supply-chain/config.toml` moved from 1.1.31 to 1.1.33 for RUSTSEC-2026-0544,
+a heap buffer overflow in zlib `gz_vacate`. The build script is the same
+9463-byte file as in 1.1.31. The exemption is still debt, not an audit.
 
 `deny.toml` allows the build script `rustls@0.23.46`. The vet exemption
 in `supply-chain/config.toml` names the same version. 0.23.46 is the
@@ -45,7 +45,7 @@ replaced.
 
 | Crate | Was | Now | Advisory |
 |---|---|---|---|
-| `libz-sys` | 1.1.29 | 1.1.33 | RUSTSEC-2026-0418, build script printed probe command into build output; 1.1.33 clears RUSTSEC-2026-0544 |
+| `libz-sys` | 1.1.31 | 1.1.33 | RUSTSEC-2026-0544, zlib `gz_vacate` heap overflow. 1.1.31 fixed RUSTSEC-2026-0418 |
 | `rustls-webpki` | 0.103.15 | 0.103.16 | RUSTSEC-2026-0382, distrusted intermediates accepted |
 | `webpki-roots` | 1.0.8 | 1.0.11 | RUSTSEC-2026-0381, bundled emSign roots |
 | `webpki-root-certs` | 1.0.8 | 1.0.11 | RUSTSEC-2026-0383, bundled emSign roots |

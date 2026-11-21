@@ -9,4 +9,12 @@ fn the_default_search_limit_is_twenty() {
     let query: SearchQuery = serde_urlencoded::from_str("q=hello").expect("minimal query");
     assert_eq!(query.limit, 20);
     assert!(!query.regex);
+    assert!(query.project.is_none());
+}
+
+#[test]
+fn a_project_query_is_kept() {
+    let query: SearchQuery =
+        serde_urlencoded::from_str("q=hello&project=01PROJECT").expect("project query");
+    assert_eq!(query.project.as_deref(), Some("01PROJECT"));
 }
