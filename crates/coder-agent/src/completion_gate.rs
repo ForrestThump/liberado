@@ -15,11 +15,11 @@
 //! `ReviewVote::Approve` would defeat the entire mechanism, which is why [`ModelReviewer::review`]
 //! has no fallback path.
 
-use chrono::Utc;
 use liberado_coder_core::{
     CoderError, CoderEvent, CoderRoleConfig, CoderRunRequest, CriticVerdict, GateVoteRecord,
     NamedVerdict, VerdictStatus,
 };
+use liberado_common::UtcStamp;
 use liberado_provider::{CompletionRequest, Message, Provider};
 use liberado_session::{
     CompletionGate, GateError, GateEvidence, GateObserver, GateOutcome, RecordedVote, ReviewVote,
@@ -293,7 +293,7 @@ impl GateObserver for TraceObserver<'_> {
                         issues: issues.clone(),
                     },
                 },
-                at: Utc::now(),
+                at: UtcStamp::now(),
             },
         );
         if vote.was_coerced() {
@@ -303,7 +303,7 @@ impl GateObserver for TraceObserver<'_> {
                 CoderEvent::LoopGuardTriggered {
                     guard: format!("gate_reviewer_unavailable:{}", vote.reviewer),
                     action: "counted_as_refuting".to_string(),
-                    at: Utc::now(),
+                    at: UtcStamp::now(),
                 },
             );
         }
@@ -439,7 +439,7 @@ async fn build_reviewer(
         CoderEvent::RoleStarted {
             role: format!("{}:{name}", kind_label(kind)),
             model: role.model.clone(),
-            at: Utc::now(),
+            at: UtcStamp::now(),
         },
     );
     let provider = providers.provider_for("critic", role)?;

@@ -1,6 +1,7 @@
 //! Split from `intake.rs` for module-health boundaries.
 
 use super::*;
+use liberado_common::UtcStamp;
 
 #[test]
 fn verifiers_skip_unknown_type_entries() {
@@ -479,7 +480,7 @@ fn validate_draft_rejects_content_contains_without_must_include() {
 
 #[test]
 fn apply_to_request_populates_task_and_config() {
-    let now = chrono::Utc::now();
+    let now = UtcStamp::now();
     let draft = GoalContractDraft {
         description: "add feature".into(),
         success_criteria: vec!["test passes".into()],

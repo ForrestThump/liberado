@@ -16,7 +16,6 @@ name = "liberado-harness-worker"
 path = "src/bin/worker.rs"
 
 [dependencies]
-chrono = { workspace = true }
 liberado-coder-core = { workspace = true }
 liberado-common = { workspace = true }
 notify = { workspace = true }

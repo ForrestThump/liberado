@@ -17,7 +17,9 @@ tests, architecture and workflow rules, module health, the cyclomatic diff gate,
 documentation contracts, and the exact Linux CRAP diff gate. Success writes `.liberado/ready.json`.
 
 Full CI writes `.liberado/ci-ready.json`. The exact Linux CRAP check writes
-`.liberado/crap-linux-ready.json`. The final receipt accepts both results only when all three
+`.liberado/crap-linux-ready.json`. Each receipt stores `completed_at` as UTC RFC 3339.
+Whole seconds use an explicit `+00:00` offset. A fractional second is written in groups of
+three digits. The final receipt accepts both results only when all three
 receipts bind the current commit, tracked changes, and untracked files. A commit, amend, merge,
 rebase, conflict resolution, or content change makes them stale.
 

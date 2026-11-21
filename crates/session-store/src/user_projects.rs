@@ -9,7 +9,7 @@
 
 use std::path::{Path, PathBuf};
 
-use chrono::{DateTime, Utc};
+use liberado_common::UtcStamp;
 use liberado_conversation_store::{ChatMetaUpdate, ConversationStore};
 use serde::{Deserialize, Serialize};
 use ulid::Ulid;
@@ -31,8 +31,8 @@ pub struct UserProject {
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub instructions: Option<String>,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
+    pub created_at: UtcStamp,
+    pub updated_at: UtcStamp,
 }
 
 /// A chat that belongs to a project, for the project page.
@@ -251,7 +251,7 @@ impl SessionStore {
                 "a project named {name} already exists"
             )));
         }
-        let now = Utc::now();
+        let now = UtcStamp::now();
         let project = UserProject {
             id: Ulid::new().to_string(),
             name,
@@ -305,7 +305,7 @@ impl SessionStore {
         if let Some(instructions) = instructions {
             project.instructions = instructions;
         }
-        project.updated_at = Utc::now();
+        project.updated_at = UtcStamp::now();
         let updated = project.clone();
         if let Err(error) = self.persist_locked(&catalog.projects) {
             catalog.projects = snapshot;
@@ -390,7 +390,7 @@ impl SessionStore {
 fn last_activity(
     header: &crate::types::SessionHeader,
     nodes: &[liberado_conversation_store::MessageNode],
-) -> DateTime<Utc> {
+) -> UtcStamp {
     nodes
         .iter()
         .map(|node| node.created_at)

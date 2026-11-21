@@ -1,8 +1,7 @@
 //! Vault report writer — every run, under `conformance/reports/`.
 
+use liberado_common::UtcStamp;
 use std::path::Path;
-
-use chrono::Utc;
 
 use crate::result::{PathStatus, RunReport};
 
@@ -24,7 +23,7 @@ pub fn write_vault_report(
         PathStatus::Fail => "fail",
         PathStatus::Skipped => "skipped",
     };
-    let ts = Utc::now().format("%Y-%m-%dT%H%M%SZ");
+    let ts = UtcStamp::now().strftime("%Y-%m-%dT%H%M%SZ");
     let rel = std::path::PathBuf::from("conformance")
         .join("reports")
         .join(format!("{ts}-{tag}.md"));

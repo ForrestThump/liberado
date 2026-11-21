@@ -1,6 +1,6 @@
 //! Structured logs for outbox actions. Ids and timestamps only.
 
-use chrono::{DateTime, SecondsFormat, Utc};
+use liberado_common::UtcStamp;
 use tracing::{info, warn};
 
 pub(crate) const VIA_DETAIL: &str = "detail";
@@ -20,7 +20,7 @@ pub(crate) fn log_outbox_action(
     action: &str,
     via: &str,
     row_id: i64,
-    received_at: DateTime<Utc>,
+    received_at: UtcStamp,
     result: &str,
 ) {
     let received_at = rfc3339(received_at);
@@ -39,9 +39,9 @@ pub(crate) struct SnoozeApplied<'a> {
     pub via: &'a str,
     pub row_id: i64,
     pub minutes: i64,
-    pub received_at: DateTime<Utc>,
-    pub prior_due_at: DateTime<Utc>,
-    pub new_due_at: DateTime<Utc>,
+    pub received_at: UtcStamp,
+    pub prior_due_at: UtcStamp,
+    pub new_due_at: UtcStamp,
     pub follow_up_row_id: i64,
 }
 
@@ -67,7 +67,7 @@ pub(crate) fn log_snooze_stopped(
     via: &str,
     row_id: i64,
     minutes: i64,
-    received_at: DateTime<Utc>,
+    received_at: UtcStamp,
     result: &str,
 ) {
     let received_at = rfc3339(received_at);
@@ -83,7 +83,7 @@ pub(crate) fn log_snooze_stopped(
     );
 }
 
-pub(crate) fn log_body_tap_ack(row_id: i64, received_at: DateTime<Utc>) {
+pub(crate) fn log_body_tap_ack(row_id: i64, received_at: UtcStamp) {
     let received_at = rfc3339(received_at);
     info!(
         row_id,
@@ -97,6 +97,6 @@ pub(crate) fn log_ack_failed(row_id: i64) {
     warn!(row_id, "outbox_ack failed");
 }
 
-fn rfc3339(at: DateTime<Utc>) -> String {
-    at.to_rfc3339_opts(SecondsFormat::Secs, true)
+fn rfc3339(at: UtcStamp) -> String {
+    at.to_rfc3339_opts(liberado_common::Rfc3339Seconds::Secs, true)
 }

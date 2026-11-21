@@ -7,8 +7,7 @@ use axum::{
     body::Body,
     http::{Request, StatusCode},
 };
-use chrono::Utc;
-use liberado_common::UserTimezone;
+use liberado_common::{UserTimezone, UtcStamp};
 use liberado_config::VaultRemindersConfig;
 use liberado_outbox::{
     EnqueueOutcome, NewReminder, Outbox, OutboxSource, PRECISION_TAP, RES_COMPLETED,
@@ -62,7 +61,7 @@ fn task(key: &str, text: &str) -> NewReminder {
         target: "sub:1".into(),
         title: format!("Due now: {text}"),
         body: "body".into(),
-        due_at: Utc::now(),
+        due_at: UtcStamp::now(),
         catch_up: false,
         kind: Some(TASK_DUE.into()),
         source: Some(OutboxSource::VaultNote {
@@ -74,7 +73,7 @@ fn task(key: &str, text: &str) -> NewReminder {
 }
 
 fn deliver(outbox: &Outbox, row: NewReminder) -> (i64, String) {
-    let now = Utc::now();
+    let now = UtcStamp::now();
     let EnqueueOutcome::Inserted(id) = outbox.enqueue(&row, now).unwrap() else {
         panic!("duplicate");
     };
@@ -181,12 +180,12 @@ async fn a_normal_done_checks_the_line_and_does_not_insert_the_log_row() {
     let vault = tempfile::tempdir().unwrap();
     note(vault.path(), "- [ ] Call dentist\n");
     let app = app(outbox.clone(), vault.path().to_path_buf()).await;
-    let before = local_date_of(Utc::now(), "America/Chicago");
+    let before = local_date_of(UtcStamp::now(), "America/Chicago");
     let response = app
         .oneshot(owner_post(&format!("/api/outbox/{id}/complete")))
         .await
         .unwrap();
-    let after = local_date_of(Utc::now(), "America/Chicago");
+    let after = local_date_of(UtcStamp::now(), "America/Chicago");
     assert_eq!(response.status(), StatusCode::NO_CONTENT);
     let text = std::fs::read_to_string(vault.path().join("Tasks/Inbox.md")).unwrap();
     let stamped = text == format!("- [x] Call dentist ✅ {before}\n")
@@ -206,13 +205,13 @@ async fn a_one_off_done_stamps_the_line_and_the_next_tick_logs_one_tap_row() {
     run_completions(vault.path(), &outbox);
     assert!(outbox.list_completions(None, 10).unwrap().is_empty());
 
-    let before = local_date_of(Utc::now(), "America/Chicago");
+    let before = local_date_of(UtcStamp::now(), "America/Chicago");
     let app = app(outbox.clone(), vault.path().to_path_buf()).await;
     let response = app
         .oneshot(owner_post(&format!("/api/outbox/{id}/complete")))
         .await
         .unwrap();
-    let after = local_date_of(Utc::now(), "America/Chicago");
+    let after = local_date_of(UtcStamp::now(), "America/Chicago");
     assert_eq!(response.status(), StatusCode::NO_CONTENT);
     let text = std::fs::read_to_string(vault.path().join("Tasks/Inbox.md")).unwrap();
     let date = if text.contains(&format!(" ✅ {before}")) {
@@ -279,7 +278,7 @@ fn run_completions(vault: &std::path::Path, outbox: &Outbox) {
         completions: true,
         ..VaultRemindersConfig::default()
     };
-    let now = UserTimezone::default_zone().now().naive_local();
+    let now = UserTimezone::default_zone().now().datetime();
     liberado_daemon::record_vault_task_completions(
         vault,
         now,

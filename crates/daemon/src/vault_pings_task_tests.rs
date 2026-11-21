@@ -1,12 +1,17 @@
-use chrono::NaiveDate;
+use jiff::civil::Date;
 
 use super::task_ping_message;
 
-fn day(year: i32, month: u32, date: u32) -> NaiveDate {
-    NaiveDate::from_ymd_opt(year, month, date).expect("valid date")
+fn day(year: i32, month: u32, date: u32) -> Date {
+    Date::new(
+        i16::try_from(year).expect("year"),
+        i8::try_from(month).expect("month"),
+        i8::try_from(date).expect("day"),
+    )
+    .expect("valid date")
 }
 
-fn today() -> NaiveDate {
+fn today() -> Date {
     day(2026, 9, 28)
 }
 

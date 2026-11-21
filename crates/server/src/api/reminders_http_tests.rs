@@ -1,5 +1,6 @@
 //! Unauthenticated outbox ack and owner push routes.
 
+use liberado_common::UtcStamp;
 use std::sync::Arc;
 
 use axum::{
@@ -7,7 +8,6 @@ use axum::{
     body::Body,
     http::{Request, StatusCode},
 };
-use chrono::Utc;
 use liberado_outbox::{NewReminder, Outbox};
 use tower::ServiceExt;
 
@@ -96,7 +96,7 @@ async fn outbox_ack_without_owner_cookie_is_open_and_constant_time() {
         .keep()
         .unwrap();
     let outbox = Arc::new(Outbox::open(&path).unwrap());
-    let at = Utc::now();
+    let at = UtcStamp::now();
     outbox
         .enqueue(
             &NewReminder {
@@ -154,7 +154,7 @@ async fn body_tap_ack_logs_the_row_and_omits_the_token() {
         .keep()
         .unwrap();
     let outbox = Arc::new(Outbox::open(&path).unwrap());
-    let at = Utc::now();
+    let at = UtcStamp::now();
     outbox
         .enqueue(
             &NewReminder {
@@ -262,7 +262,7 @@ async fn push_handlers_keep_expected_statuses() {
         .await
         .unwrap();
     assert_eq!(test.status(), StatusCode::OK);
-    assert_eq!(outbox.due_rows(Utc::now(), 10).unwrap().len(), 1);
+    assert_eq!(outbox.due_rows(UtcStamp::now(), 10).unwrap().len(), 1);
 
     let removed = app
         .oneshot(
@@ -328,7 +328,7 @@ async fn push_test_without_subscriptions_does_not_enqueue() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::CONFLICT);
-    assert!(outbox.due_rows(Utc::now(), 10).unwrap().is_empty());
+    assert!(outbox.due_rows(UtcStamp::now(), 10).unwrap().is_empty());
 }
 
 #[tokio::test]
@@ -359,5 +359,5 @@ async fn push_test_unknown_endpoint_does_not_enqueue() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::NOT_FOUND);
-    assert!(outbox.due_rows(Utc::now(), 10).unwrap().is_empty());
+    assert!(outbox.due_rows(UtcStamp::now(), 10).unwrap().is_empty());
 }

@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
+use liberado_common::UtcStamp;
 
 use crate::batch::{DeliveryBatch, DeliveryOutcome};
 use crate::error::Result;
@@ -39,7 +39,7 @@ pub trait DeliverySink: Send + Sync {
 pub async fn run_pass(
     outbox: &Outbox,
     sink: &dyn DeliverySink,
-    now: DateTime<Utc>,
+    now: UtcStamp,
     limits: PassLimits<'_>,
 ) -> Result<PassReport> {
     outbox.prune(now)?;
@@ -56,7 +56,7 @@ async fn apply_one(
     outbox: &Outbox,
     sink: &dyn DeliverySink,
     batch: &DeliveryBatch,
-    now: DateTime<Utc>,
+    now: UtcStamp,
     limits: PassLimits<'_>,
     report: &mut PassReport,
 ) -> Result<()> {

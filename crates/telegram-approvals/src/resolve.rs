@@ -8,10 +8,9 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use chrono::Utc;
 use liberado_common::{
     ApprovalDecision, ApprovalLedger, DecisionVia, GrantScope, PROPOSALS_DIR, Proposal,
-    ProposalStatus, WriteProvenance, apply_permission_decision,
+    ProposalStatus, UtcStamp, WriteProvenance, apply_permission_decision,
 };
 use liberado_messaging::{
     ResolvedElsewhere, already_decided_phrase, decided_phrase, permission_choice,
@@ -195,7 +194,7 @@ impl PermissionResolver {
             Loaded::Bad => return elsewhere::kept(ResolveOutcome::Unreadable),
             Loaded::Found(proposal) => *proposal,
         };
-        let now = Utc::now();
+        let now = UtcStamp::now();
         match apply_permission_decision(&mut proposal, action, via, now) {
             Err(liberado_common::PermissionDecideError::UnknownAction) => {
                 elsewhere::kept(ResolveOutcome::UnknownAction)
@@ -531,7 +530,7 @@ mod tests {
             &mut proposal,
             "deny",
             DecisionVia::Channel(liberado_common::ChannelKind::Telegram),
-            Utc::now(),
+            UtcStamp::now(),
         )
         .unwrap();
         let proposal = signer.sign(proposal);

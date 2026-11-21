@@ -1,24 +1,23 @@
 //! Plain-English reading of a cron expression.
 //!
-//! Liberado stores 6- or 7-field expressions, seconds first, in UTC (the `cron` crate:
+//! Liberado stores 6- or 7-field expressions, seconds first, in UTC (jiff-cron:
 //! Sunday is 1). A 5-field string is Unix cron, minute first, with seconds taken as 0
 //! (Sunday is 0 or 7). Clock times are converted into `timezone` at `at`. An expression
 //! this module cannot describe exactly is left unchanged.
 
+use liberado_common::UtcStamp;
 use std::str::FromStr;
-
-use chrono::{DateTime, Utc};
 
 mod parse;
 mod phrase;
 
 /// Read `expr` in `timezone` as of now. Odd or unsupported expressions return `expr`.
 pub fn cron_to_english(expr: &str, timezone: &str) -> String {
-    cron_to_english_at(expr, timezone, Utc::now())
+    cron_to_english_at(expr, timezone, UtcStamp::now())
 }
 
 /// [`cron_to_english`] at a fixed UTC instant, so tests can pin the offset.
-pub fn cron_to_english_at(expr: &str, timezone: &str, at: DateTime<Utc>) -> String {
+pub fn cron_to_english_at(expr: &str, timezone: &str, at: UtcStamp) -> String {
     describe(expr.trim(), timezone.trim(), at).unwrap_or_else(|| expr.to_string())
 }
 
@@ -32,16 +31,16 @@ pub fn cron_to_english_civil(expr: &str, timezone: &str) -> String {
     if let Some(spec) = liberado_common::parse_compiled_cron(raw) {
         return liberado_common::civil_english(&spec, zone);
     }
-    let plain = cron_to_english_at(raw, "UTC", Utc::now());
+    let plain = cron_to_english_at(raw, "UTC", UtcStamp::now());
     if plain != raw && !plain.contains(" at ") {
         return plain;
     }
     raw.to_string()
 }
 
-fn describe(raw: &str, timezone: &str, at: DateTime<Utc>) -> Option<String> {
+fn describe(raw: &str, timezone: &str, at: UtcStamp) -> Option<String> {
     let (spec, five_field) = parse::parse_expression(raw)?;
-    if !five_field && cron::Schedule::from_str(raw).is_err() {
+    if !five_field && jiff_cron::Schedule::from_str(raw).is_err() {
         return None;
     }
     if let Some(text) = phrase::interval_text(&spec) {

@@ -1,6 +1,6 @@
 //! Mechanical cron job outcomes: quiet, legacy remind, and outbox row delivery.
 
-use liberado_common::Event;
+use liberado_common::{Event, UtcStamp};
 
 use crate::types::{Daemon, ReactionOutcome};
 
@@ -31,13 +31,13 @@ impl Daemon {
             }
             JobEffect::RemindRows(items) => {
                 tracing::warn!(job = %job.name, count = items.len(), "startup snapshot needs attention");
-                let now = chrono::Utc::now();
+                let now = UtcStamp::now();
                 self.send_reminder_rows(&items, job, false, now);
             }
             JobEffect::Continue => {}
             JobEffect::Remind(text) => {
                 tracing::warn!(job = %job.name, "startup snapshot needs attention");
-                let now = chrono::Utc::now();
+                let now = UtcStamp::now();
                 self.send_reminder(&text, job, false, now);
             }
         }

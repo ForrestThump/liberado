@@ -1,11 +1,12 @@
 //! Proposal write, approval handling, archive, and grant application.
 
+use jiff::SignedDuration;
 use std::path::Path;
 use std::time::Duration;
 
-use chrono::Utc;
 use liberado_common::{
-    DEFAULT_POOL, PROPOSALS_DIR, Proposal, ProposalStatus, SignedProposal, WriteProvenance,
+    DEFAULT_POOL, PROPOSALS_DIR, Proposal, ProposalStatus, SignedProposal, UtcStamp,
+    WriteProvenance,
 };
 use liberado_orchestrator::{Disposition, EXPIRED_PROPOSAL_REFUSAL_SUMMARY, Orchestrator};
 use liberado_vault::{Vault, VaultError};
@@ -190,7 +191,7 @@ impl Daemon {
         proposal: &mut Proposal,
         late: bool,
     ) -> Option<ReactionOutcome> {
-        if !proposal.is_expired_at(chrono::Utc::now()) {
+        if !proposal.is_expired_at(UtcStamp::now()) {
             return None;
         }
         let provenance =
@@ -556,10 +557,10 @@ pub(crate) async fn proposal_reap_loop(vault: Vault, interval: Duration) {
 /// on a human edit, so an Approved note that expires and is never touched again would otherwise sit
 /// in the active dir forever. Waiting this long makes both true: far longer than any execute, far
 /// shorter than "forever".
-const APPROVED_REAP_GRACE: chrono::Duration = chrono::Duration::hours(1);
+const APPROVED_REAP_GRACE: SignedDuration = SignedDuration::from_hours(1);
 
 /// Sweep `proposals/` once: read every `.md` file (excluding the archive subtree), check
-/// `is_expired_at(Utc::now())`, and if so write `status: expired` + archive into
+/// `is_expired_at(UtcStamp::now())`, and if so write `status: expired` + archive into
 /// `proposals/archive/expired/`.
 ///
 /// Ownership between this and the reactive path (`handle_proposal_change`) is by status:
@@ -578,7 +579,7 @@ pub(crate) async fn reap_expired_proposals(vault: &Vault) -> Result<(), DaemonEr
     };
 
     let entries = materialize_entries(&mut reader).await?;
-    let now = Utc::now();
+    let now = UtcStamp::now();
 
     for entry in entries {
         let Some(rel_path) = active_proposal_rel_path(vault, &entry) else {
@@ -647,7 +648,7 @@ async fn read_proposal_note(vault: &Vault, rel_path: &std::path::Path) -> Option
 /// reactive path (`handle_proposal_change`) is by status: **Pending** is reaper-owned immediately;
 /// **Approved** only after [`APPROVED_REAP_GRACE`] past the deadline, so an in-flight execute
 /// finishes first; terminal statuses are nobody's.
-fn reaper_owns(proposal: &Proposal, now: chrono::DateTime<Utc>) -> bool {
+fn reaper_owns(proposal: &Proposal, now: UtcStamp) -> bool {
     if !proposal.is_expired_at(now) {
         return false;
     }
@@ -713,7 +714,7 @@ async fn mark_and_archive_expired(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::{Duration as ChronoDuration, Utc};
+    use jiff::SignedDuration;
     use liberado_common::{Proposal, ProposalStatus, ProposedAction, ToolCall, WriteProvenance};
     use liberado_vault::Vault;
     use std::fs;
@@ -730,8 +731,8 @@ mod tests {
             }]),
             "Expired test proposal",
         );
-        p.expires = Some(Utc::now() - ChronoDuration::hours(1));
-        p.created = Utc::now() - ChronoDuration::hours(2);
+        p.expires = Some(UtcStamp::now() - SignedDuration::from_hours(1));
+        p.created = UtcStamp::now() - SignedDuration::from_hours(2);
         p
     }
 
@@ -746,8 +747,8 @@ mod tests {
             }]),
             "Expired test proposal",
         );
-        p.expires = Some(Utc::now() - ChronoDuration::hours(1));
-        p.created = Utc::now() - ChronoDuration::hours(2);
+        p.expires = Some(UtcStamp::now() - SignedDuration::from_hours(1));
+        p.created = UtcStamp::now() - SignedDuration::from_hours(2);
         p
     }
 
@@ -762,7 +763,7 @@ mod tests {
             }]),
             "Still-valid test proposal",
         );
-        p.expires = Some(Utc::now() + ChronoDuration::hours(1));
+        p.expires = Some(UtcStamp::now() + SignedDuration::from_hours(1));
         p
     }
 
@@ -1040,7 +1041,7 @@ mod tests {
         let mut p = expired_proposal_named("approved-late", "corr-approved");
         p.status = ProposalStatus::Approved;
         // Expired, but only just — inside the grace window.
-        p.expires = Some(Utc::now() - ChronoDuration::minutes(1));
+        p.expires = Some(UtcStamp::now() - SignedDuration::from_mins(1));
         vault
             .write("proposals/approved-late.md", &p.to_note(), None, &prov)
             .await
@@ -1078,7 +1079,7 @@ mod tests {
 
         let mut p = expired_proposal_named("approved-stranded", "corr-stranded");
         p.status = ProposalStatus::Approved;
-        p.expires = Some(Utc::now() - APPROVED_REAP_GRACE - ChronoDuration::minutes(1));
+        p.expires = Some(UtcStamp::now() - APPROVED_REAP_GRACE - SignedDuration::from_mins(1));
         vault
             .write("proposals/approved-stranded.md", &p.to_note(), None, &prov)
             .await

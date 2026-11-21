@@ -10,7 +10,7 @@
 #      via usearch -> turbovault-vector. The deploy image (rust:trixie) builds with gcc; matching
 #      that here fixes both. gcc/g++ ship in the base image and are already registered alternatives.
 #
-# `turbovault*` and `turbomcp*` are git+tag pins. Cargo fetches tag `liberado-2026-08-27` from the
+# `turbovault*` and `turbomcp*` are git+rev pins. Cargo fetches the pinned commit from the
 # public ForrestThump forks; nested sibling clones are not required.
 set -euo pipefail
 

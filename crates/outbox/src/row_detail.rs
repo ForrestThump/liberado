@@ -1,6 +1,7 @@
 //! Single-row reads and owner resolution for the notification detail API.
 
-use chrono::{DateTime, Duration, Utc};
+use jiff::SignedDuration;
+use liberado_common::UtcStamp;
 use rusqlite::{OptionalExtension, Row, params};
 
 use crate::error::Result;
@@ -18,13 +19,13 @@ pub struct OutboxRecord {
     pub title: String,
     pub body: String,
     pub catch_up: bool,
-    pub due_at: DateTime<Utc>,
+    pub due_at: UtcStamp,
     pub kind: String,
     pub source: Option<OutboxSource>,
     pub state: String,
     pub acked: bool,
     pub resolution: Option<String>,
-    pub resolved_at: Option<DateTime<Utc>>,
+    pub resolved_at: Option<UtcStamp>,
 }
 
 impl Outbox {
@@ -42,7 +43,7 @@ impl Outbox {
         Ok(row)
     }
 
-    pub fn due_at_by_idempotency(&self, key: &str) -> Result<Option<DateTime<Utc>>> {
+    pub fn due_at_by_idempotency(&self, key: &str) -> Result<Option<UtcStamp>> {
         let conn = self.lock();
         let due: Option<String> = conn
             .query_row(
@@ -59,7 +60,7 @@ impl Outbox {
         &self,
         id: i64,
         resolution: &str,
-        now: DateTime<Utc>,
+        now: UtcStamp,
     ) -> Result<OwnerResolveResult> {
         let when = stamp(now);
         let changed = self.lock().execute(
@@ -97,12 +98,7 @@ impl Outbox {
     }
 
     /// Snooze: claim resolution on the original row and enqueue one follow-up.
-    pub fn owner_snooze(
-        &self,
-        id: i64,
-        minutes: i64,
-        now: DateTime<Utc>,
-    ) -> Result<OwnerSnoozeResult> {
+    pub fn owner_snooze(&self, id: i64, minutes: i64, now: UtcStamp) -> Result<OwnerSnoozeResult> {
         let conn = self.lock();
         let record = conn
             .query_row(
@@ -148,7 +144,7 @@ impl Outbox {
             });
         }
 
-        let due = now + Duration::minutes(minutes);
+        let due = now + SignedDuration::from_mins(minutes);
         let follow_title = snooze_follow_up_title(&title);
         let key = format!("snooze/{id}");
         let reminder = NewReminder {
@@ -195,7 +191,7 @@ fn read_outbox_record(row: &Row<'_>) -> rusqlite::Result<OutboxRecord> {
         title: row.get(3)?,
         body: row.get(4)?,
         catch_up: row.get::<_, i64>(5)? != 0,
-        due_at: parse_stamp(&due).unwrap_or_else(|_| Utc::now()),
+        due_at: parse_stamp(&due).unwrap_or_else(|_| UtcStamp::now()),
         kind: crate::kind::parse_stored(row.get::<_, Option<String>>(7)?.as_deref()).to_string(),
         source: OutboxSource::decode(row.get(8)?),
         state: row.get(9)?,
@@ -212,7 +208,6 @@ fn read_outbox_record(row: &Row<'_>) -> rusqlite::Result<OutboxRecord> {
 
 #[cfg(test)]
 mod tests {
-    use chrono::{Duration, TimeZone, Utc};
     use tempfile::NamedTempFile;
 
     use super::*;
@@ -228,8 +223,8 @@ mod tests {
     #[test]
     fn future_due_enqueue_is_not_due_until_scheduled_time() {
         let (outbox, _path) = open_temp();
-        let now = Utc::now();
-        let due = now + Duration::minutes(15);
+        let now = UtcStamp::now();
+        let due = now + SignedDuration::from_mins(15);
         outbox
             .enqueue(
                 &NewReminder {
@@ -247,14 +242,14 @@ mod tests {
             )
             .unwrap();
         assert!(outbox.due_rows(now, 10).unwrap().is_empty());
-        let after = due + Duration::seconds(1);
+        let after = due + SignedDuration::from_secs(1);
         assert_eq!(outbox.due_rows(after, 10).unwrap().len(), 1);
     }
 
     #[test]
     fn owner_resolve_works_after_deliver_and_push_ack() {
         let (outbox, _path) = open_temp();
-        let now = Utc::now();
+        let now = UtcStamp::now();
         let EnqueueOutcome::Inserted(id) = outbox
             .enqueue(
                 &NewReminder {
@@ -292,7 +287,7 @@ mod tests {
     #[test]
     fn snoozed_follow_up_not_due_until_scheduled_time() {
         let (outbox, _path) = open_temp();
-        let now = Utc::now();
+        let now = UtcStamp::now();
         outbox
             .enqueue(
                 &NewReminder {
@@ -314,7 +309,7 @@ mod tests {
             other => panic!("unexpected {other:?}"),
         }
         assert!(outbox.due_rows(now, 10).unwrap().is_empty());
-        let fire = now + Duration::minutes(15) + Duration::seconds(1);
+        let fire = now + SignedDuration::from_mins(15) + SignedDuration::from_secs(1);
         let rows = outbox.due_rows(fire, 10).unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].title, "Snoozed: Due now: x");
@@ -323,8 +318,8 @@ mod tests {
     #[test]
     fn snooze_follow_up_due_is_action_time_plus_minutes() {
         let (outbox, _path) = open_temp();
-        let action = Utc.with_ymd_and_hms(2026, 11, 8, 10, 37, 0).unwrap();
-        let original_due = Utc.with_ymd_and_hms(2026, 11, 8, 10, 0, 0).unwrap();
+        let action = UtcStamp::from_civil_utc(2026, 11, 8, 10, 37, 0).unwrap();
+        let original_due = UtcStamp::from_civil_utc(2026, 11, 8, 10, 0, 0).unwrap();
         let EnqueueOutcome::Inserted(id) = outbox
             .enqueue(
                 &NewReminder {
@@ -350,9 +345,9 @@ mod tests {
             panic!("expected applied");
         };
         let follow = outbox.fetch_record(follow_up_id).unwrap().unwrap();
-        let expected = action + Duration::minutes(15);
+        let expected = action + SignedDuration::from_mins(15);
         assert_eq!(follow.due_at, expected);
-        assert_ne!(follow.due_at, original_due + Duration::minutes(15));
+        assert_ne!(follow.due_at, original_due + SignedDuration::from_mins(15));
         assert_eq!(
             outbox.fetch_record(id).unwrap().unwrap().due_at,
             original_due

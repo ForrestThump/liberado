@@ -2,6 +2,7 @@
 
 use super::*;
 use axum::http::header::CONTENT_TYPE;
+use liberado_common::UtcStamp;
 use liberado_executor::{Budget, Executor};
 use liberado_main_agent::ChatSessions;
 use liberado_session_store::SessionStore;
@@ -251,7 +252,7 @@ fn chat_message_carries_tool_calls_only_when_present() {
             parent_id: None,
             conversation_id: Ulid::new(),
             author: liberado_conversation_store::Author::Assistant,
-            created_at: chrono::Utc::now(),
+            created_at: UtcStamp::now(),
             message: liberado_provider::Message {
                 role: liberado_provider::Role::Assistant,
                 content: "answer".into(),

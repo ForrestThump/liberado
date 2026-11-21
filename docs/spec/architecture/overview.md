@@ -185,9 +185,11 @@ domain pack** (first pack — not the product center; see [`agentic-loops.md`](a
 
 ## Co-development with Turbovault & Turbomcp
 
-`turbovault*` and `turbomcp*` crates are **git+tag pins** on the ForrestThump forks at
-`liberado-2026-08-27`. Nested sibling clones inside this repo are not required. A root
-`[patch.crates-io]` redirects Turbovault's published `turbomcp` to the same git tag so the
+`turbovault*` and `turbomcp*` crates are **git+rev pins** on the ForrestThump forks, one
+commit SHA per fork (the merge commit that landed each fork's jiff migration).
+Nested
+sibling clones inside this repo are not required. A root
+`[patch.crates-io]` redirects Turbovault's published `turbomcp` to the same git revision so the
 whole tree builds against one Turbomcp — the one carrying the request-`_meta` pass-through
 that the provenance loop depends on. Leftover `turbovault/` and `turbomcp/` directories stay
 gitignored if present.

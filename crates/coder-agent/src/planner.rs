@@ -3,8 +3,8 @@
 //! Skipped when the planner role has no prompt / prompt_path (config-skippable). Maker ≠ checker:
 //! the planner does not own verifiers and does not mutate the workspace.
 
-use chrono::Utc;
 use liberado_coder_core::{CoderError, CoderEvent, CoderRunRequest};
+use liberado_common::UtcStamp;
 use liberado_provider::{CompletionRequest, Message};
 use serde_json::json;
 
@@ -77,7 +77,7 @@ pub async fn run_planner(
         CoderEvent::RoleStarted {
             role: "planner".to_string(),
             model: role.model.clone(),
-            at: Utc::now(),
+            at: UtcStamp::now(),
         },
     );
 
@@ -156,7 +156,7 @@ pub async fn run_planner(
             events,
             CoderEvent::RoleFinished {
                 role: "planner".to_string(),
-                at: Utc::now(),
+                at: UtcStamp::now(),
             },
         );
         return Ok(None);
@@ -167,7 +167,7 @@ pub async fn run_planner(
         events,
         CoderEvent::RoleFinished {
             role: "planner".to_string(),
-            at: Utc::now(),
+            at: UtcStamp::now(),
         },
     );
     Ok(Some(plan))

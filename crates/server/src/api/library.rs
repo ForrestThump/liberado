@@ -13,7 +13,7 @@ use axum::{
     extract::{Query, State},
     response::IntoResponse,
 };
-use liberado_common::{Capability, CapabilitySet, Zone};
+use liberado_common::{Capability, CapabilitySet, UtcStamp, Zone};
 use serde::{Deserialize, Serialize};
 
 use crate::state::AppState;
@@ -223,8 +223,8 @@ fn kind_of(path: &Path) -> String {
 /// Last modification time in UTC. Birth time is not portable, so v1 does not use it.
 fn modified_stamp(meta: &std::fs::Metadata) -> Option<String> {
     let modified = meta.modified().ok()?;
-    let dt: chrono::DateTime<chrono::Utc> = modified.into();
-    Some(dt.to_rfc3339_opts(chrono::SecondsFormat::Secs, true))
+    let dt = UtcStamp::try_from(modified).ok()?;
+    Some(dt.to_rfc3339_opts(liberado_common::Rfc3339Seconds::Secs, true))
 }
 
 #[cfg(test)]

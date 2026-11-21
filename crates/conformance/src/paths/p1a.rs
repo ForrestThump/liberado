@@ -1,10 +1,11 @@
 //! P1a — cron liveness (read-only).
 
+use liberado_common::UtcStamp;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-use chrono::{DateTime, Utc};
-use cron::Schedule;
+use jiff::tz::TimeZone;
+use jiff_cron::Schedule;
 use std::str::FromStr;
 
 use crate::client::DaemonClient;
@@ -66,7 +67,7 @@ pub async fn run(client: &DaemonClient, cfg: &ConformanceConfig, _timeout: Durat
 
     let mut failures = Vec::new();
     let mut checked = Vec::new();
-    let now = Utc::now();
+    let now = UtcStamp::now();
 
     for sched in &schedules {
         let period = match estimate_period_secs(&sched.cron_expr) {
@@ -96,12 +97,11 @@ pub async fn run(client: &DaemonClient, cfg: &ConformanceConfig, _timeout: Durat
         let newest = reactions
             .iter()
             .filter(|r| r.source == source)
-            .filter_map(|r| DateTime::parse_from_rfc3339(&r.timestamp).ok())
-            .map(|dt| dt.with_timezone(&Utc))
+            .filter_map(|r| r.timestamp.parse::<UtcStamp>().ok())
             .max();
 
         match newest {
-            Some(ts) if (now - ts).num_seconds() as u64 <= threshold => {
+            Some(ts) if (now - ts).as_secs() as u64 <= threshold => {
                 checked.push(serde_json::json!({
                     "schedule": sched.name,
                     "status": "ok",
@@ -210,10 +210,12 @@ fn load_enabled_user_schedules(path: &Path) -> Result<Vec<ScheduleRow>, String> 
 /// Estimate schedule period in seconds from two successive firings after now.
 fn estimate_period_secs(cron_expr: &str) -> Option<u64> {
     let schedule = Schedule::from_str(cron_expr).ok()?;
-    let mut upcoming = schedule.after(&Utc::now()).take(2);
-    let a = upcoming.next()?;
-    let b = upcoming.next()?;
-    let secs = (b - a).num_seconds();
+    let mut upcoming = schedule
+        .after(UtcStamp::now().timestamp().to_zoned(TimeZone::UTC))
+        .take(2);
+    let a = upcoming.next()?.timestamp();
+    let b = upcoming.next()?.timestamp();
+    let secs = b.duration_since(a).as_secs();
     if secs <= 0 { None } else { Some(secs as u64) }
 }
 

@@ -4,7 +4,7 @@
 
 use super::*;
 use crate::{CoderRunRequest, CoderTask, WorkspaceRef};
-use chrono::Utc;
+use liberado_common::UtcStamp;
 
 fn export(messages: Value) -> MessagesExport {
     MessagesExport {
@@ -233,7 +233,7 @@ fn load_run_view_prefers_native_then_messages_export() {
             tool_calls: Vec::new(),
             prompt_tokens: 1,
             completion_tokens: 1,
-            at: Utc::now(),
+            at: UtcStamp::now(),
         }],
         result: None,
     };

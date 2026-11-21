@@ -1,5 +1,6 @@
 //! WebAuthn ceremony HTTP handlers.
 
+use liberado_common::UtcStamp;
 use std::sync::Arc;
 
 use axum::{
@@ -9,7 +10,6 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use chat_client_contract::ApiError;
-use chrono::Utc;
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use webauthn_rs::prelude::{Passkey, PublicKeyCredential, RegisterPublicKeyCredential, Uuid};
@@ -131,7 +131,7 @@ pub async fn passkey_login_finish(
         row.id,
         &json,
         result.counter(),
-        Utc::now(),
+        UtcStamp::now(),
     );
     mint_full_session(&guard, &headers, "passkey")
 }
@@ -252,7 +252,7 @@ pub async fn passkey_register_finish(
         passkey.cred_id().as_ref(),
         &json,
         &name,
-        Utc::now(),
+        UtcStamp::now(),
     );
     mint_full_session(&guard, &headers, "passkey")
 }

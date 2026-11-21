@@ -1,6 +1,7 @@
 //! Split from `chat.rs` for module-health boundaries.
 
 use super::ChatRequest;
+use liberado_common::UtcStamp;
 use std::str::FromStr;
 
 /// The WebUI reaches the chat stream through `EventSource`, which can only issue a `GET` — so
@@ -284,7 +285,7 @@ fn chat_message_from_node_carries_the_store_model_stamp() {
         parent_id: None,
         conversation_id: Ulid::new(),
         author: Author::Assistant,
-        created_at: chrono::Utc::now(),
+        created_at: UtcStamp::now(),
         message: Message {
             role: Role::Assistant,
             content: "hi".into(),
@@ -310,7 +311,7 @@ fn chat_message_from_node_maps_a_turn_failure_to_the_error_role() {
         parent_id: None,
         conversation_id: Ulid::new(),
         author: Author::Named(liberado_main_agent::TURN_ERROR_AUTHOR.into()),
-        created_at: chrono::Utc::now(),
+        created_at: UtcStamp::now(),
         message: Message {
             role: Role::Assistant,
             content: "The model provider failed before it could reply.".into(),
@@ -342,7 +343,7 @@ fn chat_message_from_node_hides_assistant_think_blocks() {
         parent_id: None,
         conversation_id: Ulid::new(),
         author: Author::Assistant,
-        created_at: chrono::Utc::now(),
+        created_at: UtcStamp::now(),
         message: Message {
             role: Role::Assistant,
             content: stored.into(),
@@ -362,7 +363,7 @@ fn chat_message_from_node_hides_assistant_think_blocks() {
         parent_id: None,
         conversation_id: Ulid::new(),
         author: Author::User,
-        created_at: chrono::Utc::now(),
+        created_at: UtcStamp::now(),
         message: Message {
             role: Role::User,
             content: stored.into(),

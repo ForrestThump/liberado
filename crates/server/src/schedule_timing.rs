@@ -99,7 +99,7 @@ pub fn fire_lines(expr: &str, timezone: &str) -> String {
 fn fire_row(fire: &FireInstant) -> Value {
     json!({
         "weekday": fire.weekday_name(),
-        "local": fire.local.to_rfc3339(),
+        "local": liberado_common::format_zoned_rfc3339(&fire.local),
         "utc": fire.utc.to_rfc3339(),
         "display": fire.display(),
     })

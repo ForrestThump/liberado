@@ -49,7 +49,7 @@ vocabulary every crate compiles against regardless of whether it touches config.
 
 ## Dependencies
 
-- Depends on: only `serde`, `chrono`, `chrono-tz`, `thiserror` (no internal crates).
+- Depends on: `serde`, `jiff`, `thiserror`, and the other crates in `Cargo.toml` (no internal crates).
 - Depended on by: essentially everything (`vault`, `dispatcher`, `executor`, `mcp`, `orchestrator`,
   `daemon`, `provider-*` indirectly).
 

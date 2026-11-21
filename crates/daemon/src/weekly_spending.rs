@@ -7,7 +7,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use chrono::{Datelike, NaiveDate, NaiveDateTime, NaiveTime, TimeDelta};
+use jiff::Span;
+use jiff::civil::{Date, DateTime, Time, Weekday};
 use liberado_config::{
     UnmappedPolicy, WeeklySpendingConfig, has_enabled_weekly_schedule, weekly_open_clock,
 };
@@ -65,8 +66,8 @@ pub struct WeeklyRuntime {
 pub trait SpendingSource: Send + Sync {
     async fn spending(
         &self,
-        start: NaiveDate,
-        end: NaiveDate,
+        start: Date,
+        end: Date,
         exclude: &[String],
     ) -> Result<Vec<CategorySpend>, String>;
 }
@@ -81,54 +82,56 @@ pub fn weekly_runtime(topology: &liberado_config::Topology) -> WeeklyRuntime {
     }
 }
 
-pub fn local_now(fixed: Option<NaiveDateTime>, timezone: &str) -> NaiveDateTime {
+pub fn local_now(fixed: Option<DateTime>, timezone: &str) -> DateTime {
     if let Some(now) = fixed {
         return now;
     }
     match liberado_common::UserTimezone::parse(timezone) {
-        Ok(zone) => zone.now().naive_local(),
+        Ok(zone) => zone.now().datetime(),
         Err(_) => liberado_common::UserTimezone::default_zone()
             .now()
-            .naive_local(),
+            .datetime(),
     }
 }
 
 struct WeekWindow {
     week_id: String,
-    start: NaiveDate,
-    end: NaiveDate,
+    start: Date,
+    end: Date,
 }
 
-pub fn week_window(now: NaiveDateTime, hour: u32, minute: u32) -> (String, NaiveDate, NaiveDate) {
+pub fn week_window(now: DateTime, hour: u32, minute: u32) -> (String, Date, Date) {
     let window = window_for(now, hour, minute);
     (window.week_id, window.start, window.end)
 }
 
-fn window_for(now: NaiveDateTime, hour: u32, minute: u32) -> WeekWindow {
+fn window_for(now: DateTime, hour: u32, minute: u32) -> WeekWindow {
     let monday = this_monday(now.date());
     let send = if before_open(now, hour, minute) {
-        monday - TimeDelta::days(7)
+        monday - Span::new().days(7)
     } else {
         monday
     };
     WeekWindow {
-        week_id: send.format("%Y-%m-%d").to_string(),
-        start: send - TimeDelta::days(7),
-        end: send - TimeDelta::days(1),
+        week_id: send.to_string(),
+        start: send - Span::new().days(7),
+        end: send - Span::new().days(1),
     }
 }
 
-fn this_monday(day: NaiveDate) -> NaiveDate {
-    let offset = i64::from(day.weekday().num_days_from_monday());
-    day - TimeDelta::days(offset)
+fn this_monday(day: Date) -> Date {
+    let offset = i64::from(day.weekday().to_monday_zero_offset());
+    day - Span::new().days(offset)
 }
 
-fn before_open(now: NaiveDateTime, hour: u32, minute: u32) -> bool {
-    now.weekday() == chrono::Weekday::Mon && now.time() < open_time(hour, minute)
+fn before_open(now: DateTime, hour: u32, minute: u32) -> bool {
+    now.weekday() == Weekday::Monday && now.time() < open_time(hour, minute)
 }
 
-fn open_time(hour: u32, minute: u32) -> NaiveTime {
-    NaiveTime::from_hms_opt(hour.min(23), minute.min(59), 0).unwrap_or(NaiveTime::MIN)
+fn open_time(hour: u32, minute: u32) -> Time {
+    let hour = i8::try_from(hour.min(23)).unwrap_or(0);
+    let minute = i8::try_from(minute.min(59)).unwrap_or(0);
+    Time::new(hour, minute, 0, 0).unwrap_or(Time::midnight())
 }
 
 /// Nearest whole dollar, half away from zero. `cents` is already "spent" (positive spends).
@@ -303,7 +306,7 @@ fn money(dollars: i64) -> String {
 
 pub async fn run_weekly(
     cfg: &WeeklySpendingConfig,
-    local_now: NaiveDateTime,
+    local_now: DateTime,
     open_hour: u32,
     open_minute: u32,
     source: Arc<dyn SpendingSource>,
@@ -341,7 +344,7 @@ fn skip_fetch(mode: RunMode, sender: &dyn WeekSender, week_id: &str) -> bool {
     matches!(mode, RunMode::Send) && !sender.needs_week(week_id)
 }
 
-fn quiet(week_id: &str, start: NaiveDate, end: NaiveDate) -> RunOutcome {
+fn quiet(week_id: &str, start: Date, end: Date) -> RunOutcome {
     RunOutcome {
         message: String::new(),
         week_id: week_id.to_string(),
@@ -359,8 +362,8 @@ async fn deliver(
     mode: RunMode,
     sender: &dyn WeekSender,
     week_id: &str,
-    start: NaiveDate,
-    end: NaiveDate,
+    start: Date,
+    end: Date,
     message: &str,
     unmapped: Vec<String>,
 ) -> Result<RunOutcome, String> {
@@ -374,8 +377,8 @@ async fn deliver(
 
 fn outcome(
     week_id: &str,
-    start: NaiveDate,
-    end: NaiveDate,
+    start: Date,
+    end: Date,
     message: &str,
     unmapped: Vec<String>,
     report: WeekReport,
@@ -395,7 +398,7 @@ fn outcome(
 
 pub async fn run_weekly_job(
     cfg: WeeklySpendingConfig,
-    now: NaiveDateTime,
+    now: DateTime,
     hour: u32,
     minute: u32,
     source: Option<Arc<dyn SpendingSource>>,
@@ -469,8 +472,8 @@ impl HttpBudget {
 impl SpendingSource for HttpBudget {
     async fn spending(
         &self,
-        start: NaiveDate,
-        end: NaiveDate,
+        start: Date,
+        end: Date,
         exclude: &[String],
     ) -> Result<Vec<CategorySpend>, String> {
         crate::weekly_net::BudgetHttp::new(&self.client, &self.base, &self.key)

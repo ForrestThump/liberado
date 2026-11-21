@@ -2,7 +2,7 @@
 
 use super::*;
 use crate::contract::*;
-use chrono::Utc;
+use liberado_common::UtcStamp;
 use liberado_common::process::std_command;
 use std::fs;
 use std::path::Path;
@@ -32,7 +32,7 @@ fn policy_binds_base_url_and_disables_binary_overrides() {
     let mut spec = JobSpec {
         version: JOB_SPEC_VERSION,
         job_id: JobId::new(),
-        submitted_at: Utc::now(),
+        submitted_at: UtcStamp::now(),
         repository: repository.clone(),
         base_revision: "deadbeef".to_string(),
         task: TaskBundle::new("task.txt", "test".to_string()).unwrap(),
@@ -106,7 +106,7 @@ fn preflight_flags_missing_siblings_index_locks_and_disk_space() {
     let spec = JobSpec {
         version: JOB_SPEC_VERSION,
         job_id: JobId::new(),
-        submitted_at: Utc::now(),
+        submitted_at: UtcStamp::now(),
         repository: repository.clone(),
         base_revision: "HEAD".to_string(),
         task: TaskBundle::new("task.txt", "test task".to_string()).unwrap(),
@@ -209,7 +209,7 @@ fn validate_policy_rejects_disallowed_provider_model_and_base_url() {
     let spec = JobSpec {
         version: JOB_SPEC_VERSION,
         job_id: JobId::new(),
-        submitted_at: Utc::now(),
+        submitted_at: UtcStamp::now(),
         repository: repository.clone(),
         base_revision: "HEAD".to_string(),
         task: TaskBundle::new("task.txt", "test task".to_string()).unwrap(),

@@ -9,9 +9,8 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use chat_client_contract::{ApprovalCard, PendingApproval};
-use chrono::{DateTime, Utc};
 use liberado_common::{
-    ApprovalLedger, Capability, ChannelKind, Proposal, ProposedAction, recorded_action,
+    ApprovalLedger, Capability, ChannelKind, Proposal, ProposedAction, UtcStamp, recorded_action,
 };
 use liberado_executor::PermissionSink;
 use liberado_main_agent::ChatSessions;
@@ -63,7 +62,7 @@ pub async fn pending_approval_rows(hub: &Option<Arc<ApprovalHub>>) -> Vec<Pendin
     let Some(hub) = hub else {
         return Vec::new();
     };
-    let now = Utc::now();
+    let now = UtcStamp::now();
     hub.resolver
         .list_pending_permission_requests()
         .await
@@ -73,7 +72,7 @@ pub async fn pending_approval_rows(hub: &Option<Arc<ApprovalHub>>) -> Vec<Pendin
 }
 
 /// One pending permission row. `None` for an ordinary proposal or a decided note.
-pub fn pending_approval_row(proposal: &Proposal, now: DateTime<Utc>) -> Option<PendingApproval> {
+pub fn pending_approval_row(proposal: &Proposal, now: UtcStamp) -> Option<PendingApproval> {
     if !is_open_permission(proposal, now) {
         return None;
     }
@@ -86,7 +85,7 @@ pub fn pending_approval_row(proposal: &Proposal, now: DateTime<Utc>) -> Option<P
     })
 }
 
-fn is_open_permission(proposal: &Proposal, now: DateTime<Utc>) -> bool {
+fn is_open_permission(proposal: &Proposal, now: UtcStamp) -> bool {
     proposal.requested_grant.is_some() && recorded_action(proposal, now) == "pending"
 }
 
@@ -108,7 +107,7 @@ fn card_from_proposal(
     proposal: &Proposal,
     book: Option<&crate::schedule_card_text::ScheduleBook>,
 ) -> ApprovalCard {
-    let action = recorded_action(proposal, Utc::now());
+    let action = recorded_action(proposal, UtcStamp::now());
     let pending = action == "pending";
     ApprovalCard {
         id: proposal.id.clone(),

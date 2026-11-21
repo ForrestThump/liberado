@@ -2,6 +2,7 @@
 //! nodes a project adapter supplies. This is the generic build pipeline: scan crates, apply the
 //! declared flows and profile rules, and drop edges whose endpoints are absent.
 
+use liberado_common::UtcStamp;
 use std::collections::BTreeSet;
 use std::path::Path;
 
@@ -90,7 +91,7 @@ pub fn build(
     edges.dedup_by(|a, b| a.from == b.from && a.to == b.to && a.kind == b.kind);
 
     Ok(SystemMap {
-        generated_at: chrono::Utc::now().to_rfc3339(),
+        generated_at: UtcStamp::now().to_rfc3339(),
         repository_root: root.to_string_lossy().into_owned(),
         config_dir,
         vocabulary: profile.vocabulary(),

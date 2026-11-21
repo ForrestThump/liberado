@@ -1,7 +1,8 @@
+use jiff::SignedDuration;
+use liberado_common::UtcStamp;
 use std::sync::Mutex;
 
 use async_trait::async_trait;
-use chrono::{DateTime, Duration, Utc};
 
 use crate::batch::{DeliveryBatch, DeliveryOutcome};
 use crate::pass::{DeliverySink, PassLimits, run_pass};
@@ -74,13 +75,7 @@ fn db() -> (Outbox, std::path::PathBuf) {
 }
 
 #[cfg(test)]
-fn reminder(
-    key: &str,
-    channel: &str,
-    target: &str,
-    catch_up: bool,
-    due: DateTime<Utc>,
-) -> NewReminder {
+fn reminder(key: &str, channel: &str, target: &str, catch_up: bool, due: UtcStamp) -> NewReminder {
     NewReminder {
         idempotency_key: key.into(),
         channel: channel.into(),
@@ -95,10 +90,8 @@ fn reminder(
 }
 
 #[cfg(test)]
-fn now() -> DateTime<Utc> {
-    DateTime::parse_from_rfc3339("2026-10-29T15:00:00Z")
-        .unwrap()
-        .with_timezone(&Utc)
+fn now() -> UtcStamp {
+    "2026-10-29T15:00:00Z".parse::<UtcStamp>().unwrap()
 }
 
 #[tokio::test]
@@ -120,7 +113,7 @@ async fn telegram_failures_then_one_accepted_send() {
             .await
             .unwrap();
         assert_eq!(outbox.state_of(1).unwrap(), "failed");
-        at += Duration::hours(2);
+        at += SignedDuration::from_hours(2);
     }
     run_pass(&outbox, &sink, at, PassLimits::default())
         .await
@@ -148,7 +141,7 @@ async fn telegram_ok_false_is_a_retryable_failure_not_a_delivery() {
     run_pass(
         &outbox,
         &sink,
-        at + Duration::hours(2),
+        at + SignedDuration::from_hours(2),
         PassLimits::default(),
     )
     .await
@@ -177,7 +170,9 @@ async fn a_reopened_pending_row_and_an_expired_lease_each_send_once() {
     outbox
         .enqueue(&reminder("leased", "telegram", "reminder", false, at), at)
         .unwrap();
-    outbox.lease(&[1], at - Duration::minutes(3)).unwrap();
+    outbox
+        .lease(&[1], at - SignedDuration::from_mins(3))
+        .unwrap();
     drop(outbox);
     let outbox = Outbox::open(&path).unwrap();
     let sink = Script::ready(vec![DeliveryOutcome::Accepted]);
@@ -265,7 +260,7 @@ fn the_first_cursor_is_now_and_a_duplicate_insert_does_not_block_it() {
     assert_eq!(outbox.ensure_cursor("vault", at).unwrap(), at);
     assert_eq!(
         outbox
-            .ensure_cursor("vault", at + Duration::hours(6))
+            .ensure_cursor("vault", at + SignedDuration::from_hours(6))
             .unwrap(),
         at
     );
@@ -276,12 +271,12 @@ fn the_first_cursor_is_now_and_a_duplicate_insert_does_not_block_it() {
     ));
     assert_eq!(outbox.enqueue(&row, at).unwrap(), EnqueueOutcome::Duplicate);
     outbox
-        .record_cursor("vault", at + Duration::minutes(1))
+        .record_cursor("vault", at + SignedDuration::from_mins(1))
         .unwrap();
     outbox.record_cursor("vault", at).unwrap();
     assert_eq!(
         outbox.cursor("vault").unwrap(),
-        Some(at + Duration::minutes(1))
+        Some(at + SignedDuration::from_mins(1))
     );
 }
 
@@ -327,7 +322,7 @@ fn old_delivered_rows_are_pruned() {
         panic!("insert");
     };
     outbox
-        .mark_accepted(&[old], at - Duration::days(31))
+        .mark_accepted(&[old], at - liberado_common::duration_days(31))
         .unwrap();
     assert_eq!(outbox.prune(at).unwrap(), 1);
     let EnqueueOutcome::Inserted(fresh) = outbox
@@ -342,25 +337,19 @@ fn old_delivered_rows_are_pruned() {
 
 #[test]
 fn a_clock_jump_includes_the_missed_minute_once() {
-    let at = DateTime::parse_from_rfc3339("2026-10-29T14:05:00Z")
-        .unwrap()
-        .with_timezone(&Utc);
-    let cursor = DateTime::parse_from_rfc3339("2026-10-29T13:58:00Z")
-        .unwrap()
-        .with_timezone(&Utc);
-    let missed = DateTime::parse_from_rfc3339("2026-10-29T14:00:00Z")
-        .unwrap()
-        .with_timezone(&Utc);
+    let at = "2026-10-29T14:05:00Z".parse::<UtcStamp>().unwrap();
+    let cursor = "2026-10-29T13:58:00Z".parse::<UtcStamp>().unwrap();
+    let missed = "2026-10-29T14:00:00Z".parse::<UtcStamp>().unwrap();
     assert!(crate::in_catchup_window(
         missed,
         cursor,
         at,
-        Duration::hours(6)
+        SignedDuration::from_hours(6)
     ));
     assert!(!crate::in_catchup_window(
         missed,
         missed,
         at,
-        Duration::hours(6)
+        SignedDuration::from_hours(6)
     ));
 }

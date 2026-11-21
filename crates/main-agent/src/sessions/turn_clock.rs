@@ -27,8 +27,8 @@
 //! and the call-site that frames the current user message in [`turn`](super::ChatSessions::turn)
 //! and [`turn_stream`](super::ChatSessions::turn_stream).
 
-use chrono::{DateTime, Duration, Utc};
-use liberado_common::UserTimezone;
+use jiff::SignedDuration;
+use liberado_common::{UserTimezone, UtcStamp};
 use liberado_conversation_store::{Author, MessageNode};
 use liberado_provider::Message;
 
@@ -43,8 +43,8 @@ use super::ChatSessions;
 pub(super) const DEFAULT_GAP_THRESHOLD_HOURS: i64 = 12;
 
 /// How long the model remembers as "still close in time" — see [`DEFAULT_GAP_THRESHOLD_HOURS`].
-pub(super) fn default_gap_threshold() -> Duration {
-    Duration::hours(DEFAULT_GAP_THRESHOLD_HOURS)
+pub(super) fn default_gap_threshold() -> SignedDuration {
+    SignedDuration::from_hours(DEFAULT_GAP_THRESHOLD_HOURS)
 }
 
 /// The most recent `Author::User` node's `created_at`, or `None` when there is no prior user
@@ -55,7 +55,7 @@ pub(super) fn default_gap_threshold() -> Duration {
 /// would lie about the gap; a profile switch note, a subagent handoff, or any other
 /// [`Author::Named`] is not user-typed text; and `Author::System` / `Author::Assistant` /
 /// `Author::Tool` were not written by the human.
-pub(super) fn previous_user_created_at(nodes: &[MessageNode]) -> Option<DateTime<Utc>> {
+pub(super) fn previous_user_created_at(nodes: &[MessageNode]) -> Option<UtcStamp> {
     nodes
         .iter()
         .rev()
@@ -75,31 +75,31 @@ pub(super) fn previous_user_created_at(nodes: &[MessageNode]) -> Option<DateTime
 /// gap line uses the full weekday for clarity and drops the brackets, the prior-message
 /// prefix uses the abbreviated weekday and the brackets (which belong to the model-history
 /// list of messages, not to the parenthetical date inside a sentence).
-pub(super) fn format_user_date_prefix(tz: &UserTimezone, utc: DateTime<Utc>) -> String {
+pub(super) fn format_user_date_prefix(tz: &UserTimezone, utc: UtcStamp) -> String {
     format!("[{}] ", format_short_date(tz, utc))
 }
 
 /// `Sat 2026-10-03 13:36 CDT` — abbreviated weekday, the prior-message prefix's body.
-fn format_short_date(tz: &UserTimezone, utc: DateTime<Utc>) -> String {
+fn format_short_date(tz: &UserTimezone, utc: UtcStamp) -> String {
     let local = tz.at(utc);
     format!(
         "{} {} {}",
-        local.format("%a"),
-        local.format("%Y-%m-%d %H:%M"),
-        local.format("%Z"),
+        local.strftime("%a"),
+        local.strftime("%Y-%m-%d %H:%M"),
+        local.strftime("%Z"),
     )
 }
 
 /// `Saturday 2026-10-03 13:36 CDT` — full weekday, the gap line's date body. No brackets:
 /// the parens the gap line wraps the date in are the framing, and an extra pair would just
 /// be noise the model has to parse around.
-fn format_long_date(tz: &UserTimezone, utc: DateTime<Utc>) -> String {
+fn format_long_date(tz: &UserTimezone, utc: UtcStamp) -> String {
     let local = tz.at(utc);
     format!(
         "{} {} {}",
-        local.format("%A"),
-        local.format("%Y-%m-%d %H:%M"),
-        local.format("%Z"),
+        local.strftime("%A"),
+        local.strftime("%Y-%m-%d %H:%M"),
+        local.strftime("%Z"),
     )
 }
 
@@ -118,8 +118,8 @@ fn format_long_date(tz: &UserTimezone, utc: DateTime<Utc>) -> String {
 /// Pure: no I/O, no allocation outside the returned `String`. The exact thresholds and unit names
 /// are part of the contract — the gap line is a string the model has to read, and reordering the
 /// units or rounding the day boundary would change what the model believes about the gap.
-pub(super) fn humanize_gap(delta: Duration) -> String {
-    let secs = delta.num_seconds().max(0);
+pub(super) fn humanize_gap(delta: SignedDuration) -> String {
+    let secs = delta.as_secs().max(0);
     if secs < 60 {
         return "less than a minute".to_string();
     }
@@ -176,12 +176,12 @@ fn plural_unit(n: i64, unit: &str) -> String {
 /// `now` is an injected instant so tests can pin the output without sleeping.
 pub(super) fn compute_gap_line(
     tz: &UserTimezone,
-    now: DateTime<Utc>,
-    previous: Option<DateTime<Utc>>,
-    threshold: Duration,
+    now: UtcStamp,
+    previous: Option<UtcStamp>,
+    threshold: SignedDuration,
 ) -> Option<String> {
     let prev = previous?;
-    let delta = now.signed_duration_since(prev);
+    let delta = now.duration_since(prev);
     if delta <= threshold {
         return None;
     }
@@ -200,9 +200,9 @@ pub(super) fn compute_gap_line(
 /// no `UserTimezone` has been wired.
 pub(super) fn frame_user_message(
     tz: Option<&UserTimezone>,
-    now: DateTime<Utc>,
-    previous_user: Option<DateTime<Utc>>,
-    threshold: Duration,
+    now: UtcStamp,
+    previous_user: Option<UtcStamp>,
+    threshold: SignedDuration,
     raw_user: &str,
 ) -> String {
     let Some(tz) = tz else {
@@ -273,7 +273,7 @@ impl ChatSessions {
     /// without one. Tests assert on this to prove framing is / is not in effect.
     #[cfg(test)]
     pub(crate) fn user_timezone(&self) -> Option<UserTimezone> {
-        self.user_timezone
+        self.user_timezone.clone()
     }
 
     /// Build the model-visible copy of the current user message: `Local time: ...` (and, when
@@ -285,8 +285,8 @@ impl ChatSessions {
     /// framing must happen before `maybe_compact` consumes the loaded nodes.
     pub(super) fn frame_user_message(
         &self,
-        now: DateTime<Utc>,
-        previous_user: Option<DateTime<Utc>>,
+        now: UtcStamp,
+        previous_user: Option<UtcStamp>,
         raw_user: &str,
     ) -> String {
         frame_user_message(

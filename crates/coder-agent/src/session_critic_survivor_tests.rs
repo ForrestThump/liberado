@@ -5,6 +5,7 @@
 //! guard's conjunction, review parsing, and the clean-review shape.
 
 use super::*;
+use liberado_common::UtcStamp;
 use liberado_provider::{CompletionResponse, Provider};
 use std::sync::Arc;
 
@@ -56,7 +57,7 @@ fn turn(turn: u32, content: Option<&str>) -> CoderEvent {
         tool_calls: Vec::new(),
         prompt_tokens: 0,
         completion_tokens: 0,
-        at: chrono::Utc::now(),
+        at: UtcStamp::now(),
     }
 }
 
@@ -64,7 +65,7 @@ fn tool_started(name: &str) -> CoderEvent {
     CoderEvent::ToolStarted {
         name: name.into(),
         args_preview: "{}".into(),
-        at: chrono::Utc::now(),
+        at: UtcStamp::now(),
     }
 }
 

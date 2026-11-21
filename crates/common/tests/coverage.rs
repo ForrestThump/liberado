@@ -259,8 +259,9 @@ fn report_round_trips_each_outcome() {
 
 #[test]
 fn proposal_expiry() {
-    use chrono::{Duration, Utc};
-    let now = Utc::now();
+    use jiff::SignedDuration;
+
+    let now = UtcStamp::now();
 
     let mut p = Proposal::pending(
         "p1",
@@ -273,10 +274,10 @@ fn proposal_expiry() {
     );
     assert!(!p.is_expired_at(now), "no expiry set");
 
-    p.expires = Some(now - Duration::hours(1));
+    p.expires = Some(now - SignedDuration::from_hours(1));
     assert!(p.is_expired_at(now), "past expiry");
 
-    p.expires = Some(now + Duration::hours(1));
+    p.expires = Some(now + SignedDuration::from_hours(1));
     assert!(!p.is_expired_at(now), "future expiry");
 }
 

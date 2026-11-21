@@ -1,5 +1,6 @@
 //! Schema version upgrades for `liberado.db`.
 
+use liberado_common::UtcStamp;
 use rand::RngCore;
 use rusqlite::Connection;
 
@@ -99,7 +100,7 @@ fn seed_owner_account(conn: &Connection) -> Result<()> {
     }
     let mut user_id = [0u8; 32];
     rand::rngs::OsRng.fill_bytes(&mut user_id);
-    let now = stamp(chrono::Utc::now());
+    let now = stamp(UtcStamp::now());
     conn.execute(
         "INSERT INTO accounts(id, handle, display_name, webauthn_user_id, created_at)
          VALUES (1, 'owner', 'Owner', ?1, ?2)",
@@ -195,7 +196,6 @@ pub fn migrate(conn: &Connection) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use chrono::Utc;
     use rusqlite::Connection;
     use tempfile::TempDir;
 
@@ -262,7 +262,7 @@ CREATE TABLE IF NOT EXISTS schedule_cursor (
         let path = dir.path().join("liberado.db");
         let conn = Connection::open(&path).unwrap();
         conn.execute_batch(V1_SCHEMA).unwrap();
-        let now = stamp(Utc::now());
+        let now = stamp(UtcStamp::now());
         conn.execute(
             "INSERT INTO outbox(idempotency_key, channel, target, title, body, state,
              next_attempt_at, created_at, due_at, ack_token_hash)
@@ -321,7 +321,7 @@ VALUES (1, 'owner', 'Owner', x'00', '2026-01-01T00:00:00Z');
         let path = dir.path().join("liberado.db");
         let conn = Connection::open(&path).unwrap();
         conn.execute_batch(V2_SCHEMA).unwrap();
-        let now = stamp(Utc::now());
+        let now = stamp(UtcStamp::now());
         conn.execute(
             "INSERT INTO outbox(idempotency_key, channel, target, title, body, state,
              next_attempt_at, created_at, due_at, ack_token_hash)
@@ -413,7 +413,7 @@ VALUES (1, 'owner', 'Owner', x'00', '2026-01-01T00:00:00Z');
              UPDATE schema_meta SET value = '3' WHERE key = 'version';",
         )
         .unwrap();
-        let now = stamp(Utc::now());
+        let now = stamp(UtcStamp::now());
         conn.execute(
             "INSERT INTO outbox(idempotency_key, channel, target, title, body, state,
              next_attempt_at, created_at, due_at, ack_token_hash)

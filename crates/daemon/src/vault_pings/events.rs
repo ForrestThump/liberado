@@ -2,7 +2,8 @@ use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use chrono::{Datelike, NaiveDate};
+use jiff::Span;
+use jiff::civil::Date;
 
 use super::date::parse_ymd;
 use super::walk::markdown_notes;
@@ -16,15 +17,15 @@ const WEEKDAY_LETTERS: [char; 7] = ['M', 'T', 'W', 'R', 'F', 'S', 'U'];
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct VaultEvent {
     pub(crate) title: String,
-    pub(crate) start: NaiveDate,
-    pub(crate) end: NaiveDate,
+    pub(crate) start: Date,
+    pub(crate) end: Date,
     pub(crate) start_time: Option<String>,
     pub(crate) end_time: Option<String>,
     pub(crate) all_day: bool,
     pub(crate) path: String,
 }
 
-pub(crate) fn event_ping_message(root: &Path, today: NaiveDate, zone: &str) -> String {
+pub(crate) fn event_ping_message(root: &Path, today: Date, zone: &str) -> String {
     let mut events = Vec::new();
     for (rel, text) in markdown_notes(root) {
         events.extend(events_in_note(&rel, &text, today));
@@ -50,7 +51,7 @@ fn event_rank(left: &VaultEvent, right: &VaultEvent) -> Ordering {
     left.path.cmp(&right.path)
 }
 
-pub(super) fn events_in_note(rel: &str, text: &str, today: NaiveDate) -> Vec<VaultEvent> {
+pub(super) fn events_in_note(rel: &str, text: &str, today: Date) -> Vec<VaultEvent> {
     let Some(yaml) = liberado_common::extract_frontmatter(text) else {
         return Vec::new();
     };
@@ -67,13 +68,13 @@ pub(super) fn events_in_note(rel: &str, text: &str, today: NaiveDate) -> Vec<Vau
         .collect()
 }
 
-pub(crate) fn event_in_window(event: &VaultEvent, today: NaiveDate) -> bool {
+pub(crate) fn event_in_window(event: &VaultEvent, today: Date) -> bool {
     event.end >= today && event.start <= horizon_end(today)
 }
 
-fn horizon_end(today: NaiveDate) -> NaiveDate {
+fn horizon_end(today: Date) -> Date {
     today
-        .checked_add_signed(chrono::Duration::days(EVENT_HORIZON_DAYS))
+        .checked_add(Span::new().days(EVENT_HORIZON_DAYS))
         .unwrap_or(today)
 }
 
@@ -90,7 +91,7 @@ fn expand_recurring(
     rel: &str,
     text: &str,
     map: &BTreeMap<String, String>,
-    today: NaiveDate,
+    today: Date,
 ) -> Vec<VaultEvent> {
     let letters = map
         .get("daysOfWeek")
@@ -121,11 +122,11 @@ fn expand_recurring(
 }
 
 fn dates_in_window(
-    today: NaiveDate,
-    start_recur: Option<NaiveDate>,
-    end_recur: Option<NaiveDate>,
+    today: Date,
+    start_recur: Option<Date>,
+    end_recur: Option<Date>,
     letters: &[char],
-) -> Vec<NaiveDate> {
+) -> Vec<Date> {
     let mut cursor = today;
     if let Some(start) = start_recur
         && start > today
@@ -144,7 +145,7 @@ fn dates_in_window(
         if letters.contains(&weekday_letter(cursor)) {
             out.push(cursor);
         }
-        let Some(next) = cursor.checked_add_signed(chrono::Duration::days(1)) else {
+        let Some(next) = cursor.checked_add(Span::new().days(1)).ok() else {
             break;
         };
         cursor = next;
@@ -152,8 +153,10 @@ fn dates_in_window(
     out
 }
 
-fn weekday_letter(date: NaiveDate) -> char {
-    WEEKDAY_LETTERS[date.weekday().num_days_from_monday() as usize]
+fn weekday_letter(date: Date) -> char {
+    let offset = date.weekday().to_monday_zero_offset();
+    let index = usize::try_from(offset).unwrap_or(0);
+    WEEKDAY_LETTERS[index]
 }
 
 fn weekday_letters(value: &str) -> Vec<char> {
@@ -340,7 +343,7 @@ fn clock_token(value: &str) -> Option<String> {
     Some(format!("{hour:02}:{minute:02}"))
 }
 
-fn render_events(events: &[VaultEvent], today: NaiveDate, zone: &str) -> String {
+fn render_events(events: &[VaultEvent], today: Date, zone: &str) -> String {
     if events.is_empty() {
         return format!("No events today or in the next {EVENT_HORIZON_DAYS} days ({zone}).");
     }

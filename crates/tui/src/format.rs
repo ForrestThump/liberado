@@ -4,17 +4,18 @@
 //! and `commands.rs`.
 
 use crate::tuning::*;
+use jiff::Timestamp;
 
 pub fn relative_time(iso: &str) -> String {
-    let Ok(ts) = chrono::DateTime::parse_from_rfc3339(iso) else {
+    let Ok(ts) = iso.parse::<Timestamp>() else {
         return iso.to_string();
     };
-    let now = chrono::Utc::now();
-    let delta = now.signed_duration_since(ts);
-    if delta.num_seconds() < 0 {
+    let now = Timestamp::now();
+    let delta = now.duration_since(ts);
+    if delta.as_secs() < 0 {
         return iso.to_string();
     }
-    let secs = delta.num_seconds() as u64;
+    let secs = delta.as_secs() as u64;
     if secs < RELATIVE_SECS_THRESHOLD {
         return format!("{}s ago", secs);
     }
@@ -33,7 +34,7 @@ pub fn relative_time(iso: &str) -> String {
     if days < RELATIVE_DAYS_THRESHOLD {
         return format!("{days}d ago");
     }
-    ts.format("%b %e").to_string()
+    ts.strftime("%b %e").to_string()
 }
 
 /// Safely truncates a string to `max` bytes at a valid UTF-8 char boundary.
@@ -84,6 +85,7 @@ pub fn truncate_path(path: &str, max: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use jiff::SignedDuration;
 
     #[test]
     fn safe_truncate_ascii() {
@@ -139,12 +141,11 @@ mod tests {
     /// Sub-minute deltas render in seconds; the renderers exercise the older buckets elsewhere.
     #[test]
     fn relative_time_recent_deltas_show_seconds() {
-        use chrono::{Duration, Utc};
-        let now = Utc::now();
-        let iso = (now - Duration::seconds(5)).to_rfc3339();
+        let now = Timestamp::now();
+        let iso = (now - SignedDuration::from_secs(5)).to_string();
         assert_eq!(relative_time(&iso), "5s ago");
         // Future timestamps and unparseable strings pass through untouched.
-        let future = (now + Duration::seconds(5)).to_rfc3339();
+        let future = (now + SignedDuration::from_secs(5)).to_string();
         assert_eq!(relative_time(&future), future);
         assert_eq!(relative_time("not-a-date"), "not-a-date");
     }

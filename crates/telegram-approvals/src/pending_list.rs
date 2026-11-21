@@ -6,8 +6,7 @@
 
 use std::path::Path;
 
-use chrono::{DateTime, Utc};
-use liberado_common::{PROPOSALS_DIR, Proposal, recorded_action};
+use liberado_common::{PROPOSALS_DIR, Proposal, UtcStamp, recorded_action};
 
 use super::PermissionResolver;
 
@@ -15,13 +14,13 @@ impl PermissionResolver {
     /// Pending permission requests, oldest first. Ordinary proposals are omitted.
     pub async fn list_pending_permission_requests(&self) -> Vec<Proposal> {
         let dir = self.vault.root().join(PROPOSALS_DIR);
-        let mut found = read_pending_notes(&dir, Utc::now()).await;
+        let mut found = read_pending_notes(&dir, UtcStamp::now()).await;
         found.sort_by_key(|proposal| proposal.created);
         found
     }
 }
 
-async fn read_pending_notes(dir: &Path, now: DateTime<Utc>) -> Vec<Proposal> {
+async fn read_pending_notes(dir: &Path, now: UtcStamp) -> Vec<Proposal> {
     let mut found = Vec::new();
     let mut entries = match tokio::fs::read_dir(dir).await {
         Ok(entries) => entries,
@@ -33,7 +32,7 @@ async fn read_pending_notes(dir: &Path, now: DateTime<Utc>) -> Vec<Proposal> {
     found
 }
 
-async fn push_if_pending(path: &Path, now: DateTime<Utc>, found: &mut Vec<Proposal>) {
+async fn push_if_pending(path: &Path, now: UtcStamp, found: &mut Vec<Proposal>) {
     if path.extension().and_then(|ext| ext.to_str()) != Some("md") {
         return;
     }
@@ -48,7 +47,7 @@ async fn push_if_pending(path: &Path, now: DateTime<Utc>, found: &mut Vec<Propos
     }
 }
 
-fn is_open_permission(proposal: &Proposal, now: DateTime<Utc>) -> bool {
+fn is_open_permission(proposal: &Proposal, now: UtcStamp) -> bool {
     proposal.requested_grant.is_some() && recorded_action(proposal, now) == "pending"
 }
 

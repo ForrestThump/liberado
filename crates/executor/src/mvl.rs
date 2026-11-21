@@ -4,6 +4,7 @@
 //! lines and flushed (`sync_all`) before the function returns. Nothing is buffered until
 //! process exit. The writer does not convert a finished `CoderEvent` document.
 
+use liberado_common::UtcStamp;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fs::{File, OpenOptions};
 use std::io::{self, Write};
@@ -79,7 +80,7 @@ impl JsonlWriter {
 }
 
 fn rfc3339_now() -> String {
-    chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+    UtcStamp::now().to_rfc3339_opts(liberado_common::Rfc3339Seconds::Millis, true)
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {

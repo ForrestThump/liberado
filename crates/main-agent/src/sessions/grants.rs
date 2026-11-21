@@ -2,6 +2,7 @@
 
 use super::super::*;
 use super::test_fixtures::*;
+use liberado_common::UtcStamp;
 
 use std::sync::Arc as StdArc;
 
@@ -639,7 +640,7 @@ fn profile_model_needs_a_named_profile() {
         title: None,
         parent_conversation: None,
         spawned_by: None,
-        created_at: chrono::Utc::now(),
+        created_at: UtcStamp::now(),
         grant: liberado_session::SessionGrant {
             profile: Some("researcher".into()),
             model: Some("gpt-x".into()),
@@ -658,7 +659,7 @@ fn profile_model_needs_a_named_profile() {
         title: None,
         parent_conversation: None,
         spawned_by: None,
-        created_at: chrono::Utc::now(),
+        created_at: UtcStamp::now(),
         grant: liberado_session::SessionGrant {
             profile: None,
             model: Some("gpt-x".into()),

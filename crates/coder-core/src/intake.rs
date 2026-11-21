@@ -3,7 +3,7 @@
 //! See `docs/spec/architecture/verifiers.md` §3. Freeze is a product/UI step; these types are the
 //! structured output surface for `complete_json`.
 
-use chrono::{DateTime, Utc};
+use liberado_common::UtcStamp;
 use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::verify::VerifierSpec;
@@ -248,7 +248,7 @@ pub enum FreezeAuthority {
 pub struct GoalContract {
     pub id: String,
     pub draft: GoalContractDraft,
-    pub frozen_at: DateTime<Utc>,
+    pub frozen_at: UtcStamp,
     pub frozen_by: FreezeAuthority,
     pub content_hash: String,
 }
@@ -286,7 +286,7 @@ impl GoalContract {
                     .join("\n")
             ));
         }
-        let frozen_at = Utc::now();
+        let frozen_at = UtcStamp::now();
         let content_hash = hash_draft(&draft);
         Ok(Self {
             id: id.into(),

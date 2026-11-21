@@ -10,7 +10,6 @@ description = "Coding domain pack: Liberado goal-session backend over Executor +
 
 [dependencies]
 async-trait.workspace = true
-chrono.workspace = true
 tracing.workspace = true
 liberado-coder-core.workspace = true
 liberado-coder-sandbox.workspace = true

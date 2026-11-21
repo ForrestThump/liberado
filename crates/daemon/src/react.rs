@@ -186,7 +186,7 @@ impl Daemon {
         if event.payload.path.is_some() {
             return None;
         }
-        let tz = self.user_timezone?;
+        let tz = self.user_timezone.as_ref()?;
         // Prefer the event's own timestamp (the fire instant) so a delayed reaction still
         // reports the time that mattered for the schedule, not "whenever we got around to it".
         Some(tz.with_context_at(event.timestamp, goal))

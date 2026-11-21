@@ -1,6 +1,6 @@
-use chrono::{Duration, Utc};
+use jiff::SignedDuration;
 use liberado_common::{
-    Capability, Proposal, ProposalStatus, ProposedAction, ToolCall, WriteProvenance, Zone,
+    Capability, Proposal, ProposalStatus, ProposedAction, ToolCall, UtcStamp, WriteProvenance, Zone,
 };
 use liberado_vault::Vault;
 
@@ -34,7 +34,7 @@ async fn lists_open_permission_requests_oldest_first() {
     let vault = Vault::open("test", dir.path()).await.unwrap();
     let mut older = permission("perm-old", "turbovault:edit_note", "tasks");
     older.session_id = Some("sess-a".into());
-    older.created -= Duration::seconds(90);
+    older.created -= SignedDuration::from_secs(90);
     let newer = permission("perm-new", "turbovault:move_note", "work");
     write_note(&vault, &older).await;
     write_note(&vault, &newer).await;
@@ -55,7 +55,7 @@ async fn lists_open_permission_requests_oldest_first() {
     write_note(&vault, &ordinary).await;
 
     let mut expired = permission("perm-old-clock", "turbovault:edit_note", "tasks");
-    expired.expires = Some(Utc::now() - Duration::seconds(5));
+    expired.expires = Some(UtcStamp::now() - SignedDuration::from_secs(5));
     write_note(&vault, &expired).await;
 
     let archive = dir.path().join("proposals/archive/approved");

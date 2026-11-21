@@ -2,12 +2,12 @@
 
 use super::super::*;
 use super::test_fixtures::*;
-use chrono::{Duration as ChronoDuration, Utc};
+use jiff::SignedDuration;
 use liberado_common::{
     ApprovalDecision, ApprovalLedger, Capability, CapabilityCatalog, CapabilitySet, Consequence,
     DEFAULT_POOL, Delivery, DispatchAction, DispatchDecision, GrantScope, McpDescriptor, Outcome,
-    Proposal, ProposalSigner, ProposalStatus, ProposedAction, Report, ToolCall, WriteClass,
-    WriteProvenance, session_grants,
+    Proposal, ProposalSigner, ProposalStatus, ProposedAction, Report, ToolCall, UtcStamp,
+    WriteClass, WriteProvenance, session_grants,
 };
 use liberado_config_loader::DispatchTuning;
 use liberado_dispatcher::Dispatcher;
@@ -469,7 +469,7 @@ async fn handle_proposal_change_expires_and_archives_past_deadline_pending() {
         }]),
         "expired pending proposal",
     );
-    proposal.expires = Some(Utc::now() - ChronoDuration::hours(1));
+    proposal.expires = Some(UtcStamp::now() - SignedDuration::from_hours(1));
     let proposal = signer.sign(proposal);
     let rel = Path::new("proposals/stale-pending.md");
     let prov = WriteProvenance::agent("test", "c1");
@@ -553,7 +553,7 @@ async fn handle_proposal_change_expired_refuse_does_not_apply_session_grant() {
     )
     .with_requested_grant(Capability::Write(liberado_common::Zone::vault("sandbox")));
     proposal.pool = Some(pool.clone());
-    proposal.expires = Some(Utc::now() - ChronoDuration::hours(1));
+    proposal.expires = Some(UtcStamp::now() - SignedDuration::from_hours(1));
     proposal.approved_scope = Some(GrantScope::Session);
     let mut proposal = signer.sign(proposal);
     proposal.set_status(ProposalStatus::Approved);
@@ -746,7 +746,7 @@ async fn handle_proposal_change_does_not_execute_approved_past_deadline() {
         }]),
         "approved after expiry",
     );
-    proposal.expires = Some(Utc::now() - ChronoDuration::hours(1));
+    proposal.expires = Some(UtcStamp::now() - SignedDuration::from_hours(1));
     let mut proposal = signer.sign(proposal);
     proposal.set_status(ProposalStatus::Approved);
     let rel = Path::new("proposals/late-approve.md");
@@ -1331,7 +1331,7 @@ async fn handle_proposal_change_active_failed_not_expired_does_not_enter_expiry_
     )
     .with_requested_grant(Capability::Write(liberado_common::Zone::vault("sandbox")));
     proposal.pool = Some(DEFAULT_POOL.to_string());
-    proposal.expires = Some(Utc::now() + ChronoDuration::hours(1));
+    proposal.expires = Some(UtcStamp::now() + SignedDuration::from_hours(1));
     proposal.approved_scope = Some(GrantScope::Session);
     let mut proposal = signer.sign(proposal);
     proposal.set_status(ProposalStatus::Approved);

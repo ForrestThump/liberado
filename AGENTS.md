@@ -10,9 +10,9 @@ local run is how you keep GitHub from sending the work back.
 
 ## Build and test
 
-**Cargo fetches the co-developed forks by git tag.** `turbovault*` and `turbomcp*` crates are
-pinned to the ForrestThump forks at tag `liberado-2026-08-27` (the same SHAs CI previously
-checked out as path siblings). Nested `turbovault/` and `turbomcp/` clones inside this repo are
+**Cargo fetches the co-developed forks by git rev.** `turbovault*` and `turbomcp*` crates are
+pinned to the ForrestThump forks at the merge commits that landed their jiff migrations, one
+commit SHA per fork. Nested `turbovault/` and `turbomcp/` clones inside this repo are
 not required; leftover directories stay gitignored if present.
 
 `.github/workflows/ci.yml` is the authority on what CI runs, and preflight mirrors it.
@@ -122,10 +122,10 @@ machine and on no CI runner, so `git commit` in a temp repo passes locally and f
 
 **Never junction leftover `turbovault/` or `turbomcp/` directories into a git worktree.** Those
 names stay gitignored in case a local clone is present, but they are not required to build: Cargo
-fetches the ForrestThump forks at tag `liberado-2026-08-27`. Creating a scratch worktree and
+fetches the ForrestThump forks at their pinned commit SHAs. Creating a scratch worktree and
 linking leftover clones in with `mklink /J` works — until `git worktree remove --force` follows
 the junction and deletes the **contents of the originals**. Copying leftover dirs, or omitting
-them, both avoid it. Confirm the git+tag pins with `cargo metadata --locked`.
+them, both avoid it. Confirm the git+rev pins with `cargo metadata --locked`.
 
 **A trait that shared test doubles implement must live below every crate that tests against it.**
 A crate's `#[cfg(test)]` binary is a *second* rustc instance of that crate, so a double from
