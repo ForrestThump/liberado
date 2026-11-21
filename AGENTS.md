@@ -11,7 +11,7 @@ local run is how you keep GitHub from sending the work back.
 ## Build and test
 
 **Cargo fetches the co-developed forks by git rev.** `turbovault*` and `turbomcp*` crates are
-pinned to the ForrestThump forks at the head of their `feat/jiff-migration` pull requests, one
+pinned to the ForrestThump forks at the merge commits that landed their jiff migrations, one
 commit SHA per fork. Nested `turbovault/` and `turbomcp/` clones inside this repo are
 not required; leftover directories stay gitignored if present.
 

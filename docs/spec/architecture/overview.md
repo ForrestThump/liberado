@@ -186,7 +186,8 @@ domain pack** (first pack — not the product center; see [`agentic-loops.md`](a
 ## Co-development with Turbovault & Turbomcp
 
 `turbovault*` and `turbomcp*` crates are **git+rev pins** on the ForrestThump forks, one
-commit SHA per fork (the head of each fork's `feat/jiff-migration` pull request). Nested
+commit SHA per fork (the merge commit that landed each fork's jiff migration).
+Nested
 sibling clones inside this repo are not required. A root
 `[patch.crates-io]` redirects Turbovault's published `turbomcp` to the same git revision so the
 whole tree builds against one Turbomcp — the one carrying the request-`_meta` pass-through
