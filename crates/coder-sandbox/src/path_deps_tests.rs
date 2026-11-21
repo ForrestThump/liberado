@@ -60,7 +60,9 @@ fn pin_revision(fork: &str, name: &str, spec: &toml::Value) -> String {
 ///
 /// Both `[workspace.dependencies]` and `[patch.crates-io]` count: the patch list is how the
 /// git-pinned turbovault is kept on one turbomcp, so a pin there is a pin like any other.
-fn fork_pins(manifest: &str) -> std::collections::BTreeMap<String, std::collections::BTreeSet<String>> {
+fn fork_pins(
+    manifest: &str,
+) -> std::collections::BTreeMap<String, std::collections::BTreeSet<String>> {
     let value: toml::Value = toml::from_str(manifest).expect("parse root Cargo.toml");
     let mut revisions: std::collections::BTreeMap<String, std::collections::BTreeSet<String>> =
         Default::default();
@@ -76,10 +78,7 @@ fn fork_pins(manifest: &str) -> std::collections::BTreeMap<String, std::collecti
                 continue;
             };
             let rev = pin_revision(fork, name, spec);
-            revisions
-                .entry(fork.to_string())
-                .or_default()
-                .insert(rev);
+            revisions.entry(fork.to_string()).or_default().insert(rev);
         }
     }
     revisions
