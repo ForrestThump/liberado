@@ -22,6 +22,9 @@ mod grants;
 #[path = "grant_gate_tests.rs"]
 mod grant_gate_tests;
 
+#[path = "workspace_opt_out_tests.rs"]
+mod workspace_opt_out_tests;
+
 #[path = "dispatch.rs"]
 mod dispatch;
 

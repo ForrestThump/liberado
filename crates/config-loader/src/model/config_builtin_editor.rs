@@ -55,6 +55,7 @@ fn editor_profile_from_policy(config: &Config) -> ResolvedProfile {
         delegation: Some(false),
         model: None,
         prompt_append: None,
+        workspace: true,
     }
 }
 

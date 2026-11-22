@@ -87,6 +87,33 @@ fn a_policy_read_grant_with_no_delegation_key_resolves_off() {
     assert!(resolved.capabilities.authorizes_only_reads());
 }
 
+#[test]
+fn workspace_false_is_copied_onto_the_resolved_grant() {
+    let mut cfg = Config::default();
+    cfg.topology.vault_path = std::path::PathBuf::from("/tmp/vault");
+    let mut profile = SessionProfile::empty("budget-bot");
+    profile.workspace = false;
+    profile.delegation = Some(false);
+    cfg.topology.session_profiles = vec![profile];
+    let resolved = cfg
+        .resolve_session_profile(Some("budget-bot"), "main-agent")
+        .expect("budget-bot resolves");
+    assert!(!resolved.workspace);
+    assert!(!resolved.grant_parts().workspace);
+}
+
+#[test]
+fn an_omitted_workspace_key_resolves_on() {
+    let mut cfg = Config::default();
+    cfg.topology.vault_path = std::path::PathBuf::from("/tmp/vault");
+    cfg.topology.session_profiles = vec![SessionProfile::empty("budget-bot")];
+    let resolved = cfg
+        .resolve_session_profile(Some("budget-bot"), "main-agent")
+        .expect("budget-bot resolves");
+    assert!(resolved.workspace);
+    assert!(resolved.grant_parts().workspace);
+}
+
 /// `AskHuman` is not a read. The coding hat (read + ask) still inherits.
 #[test]
 fn a_read_plus_ask_human_profile_still_inherits_delegation() {

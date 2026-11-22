@@ -234,6 +234,22 @@ The value is read from the live profile table on each turn. It is not copied ont
 
 A finance profile's `prompt_append` should name the narrow read tools (`live_spending`, `upcoming`, `get_summary`, `list_loans`), tell the model to call `upcoming` once and not again with a longer horizon, and tell it not to promise a schedule cleanup unless a tool for that cleanup exists. This repository does not ship that profile.
 
+### Private workspace tools
+
+`workspace` on `[[session_profiles]]` is optional. The default is `true`.
+
+```toml
+[[session_profiles]]
+name = "budget-bot"
+delegation = false
+workspace = false
+```
+
+- Omit the key, or set `workspace = true`, and a turn attaches `workspace_list`, `workspace_read`, `workspace_write`, `workspace_delete`, and `workspace_download` when the workspace root opens.
+- `workspace = false` leaves those tools off that profile's turns. The turn log field `workspace` is false. A call to one of those names reaches the risk gate, which refuses it.
+- The daemon loads every profile's `workspace` at boot. A turn on a named profile uses that table. Restart the daemon after you edit the file and an existing chat follows the new value. A profile with no table row uses the value stored on the session grant. A chat with no profile stays on.
+- The same switch applies on the face path and on the direct path. `delegation = false` (a narrow chat such as `budget-bot`) uses the direct path.
+
 ## 4.5 Schedule file writer
 
 `[[schedules]]` is the only schedule store. The daemon copies enabled rows into the cron task

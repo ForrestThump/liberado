@@ -617,6 +617,12 @@ categories = ["Dining Out", "Vending", "Housewares", "Fuel & Gas", "Entertainmen
 #
 # A profile may set max_turns (integer >= 1). Chat sessions on that profile use it
 # instead of [main_agent] max_turns. Omit the key and the face ceiling stays.
+# `workspace` is optional and defaults to true. Omit it, or set `workspace = true`, and a turn
+# attaches workspace_list, workspace_read, workspace_write, workspace_delete, and
+# workspace_download when the private workspace root opens. Set `workspace = false` on a narrow
+# chat (an MCP-only finance profile, for example) to leave those tools off that profile's turns.
+# A call then reaches the risk gate, which refuses the name. Restart the daemon after you edit
+# the row; an existing chat under that profile follows the new value.
 # This example is not an enabled profile. A finance prompt should name the narrow
 # read tools (live_spending, upcoming, get_summary, list_loans), call upcoming once
 # and not again with a longer horizon, and not promise a schedule cleanup unless a
@@ -624,6 +630,7 @@ categories = ["Dining Out", "Vending", "Housewares", "Fuel & Gas", "Entertainmen
 # [[session_profiles]]
 # name = "budget-bot"
 # max_turns = 18
+# workspace = false
 
 # --- Chat hats (CAS3 + Reading B) --------------------------------------------------------------
 # No `domain` = chat profile (WebUI /profile + New Agent picker). New Chat stays the

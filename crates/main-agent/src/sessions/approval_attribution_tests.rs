@@ -83,8 +83,14 @@ async fn request_raised_by_the_researcher(dir: &std::path::Path, resolver_wired:
         .expect("the researcher chat starts");
 
     let grant = sessions.turn_settings(session).await.capabilities;
-    let runtime =
-        sessions.build_turn_runtime("file this note", session, &[], &grant, Some("researcher"));
+    let runtime = sessions.build_turn_runtime(
+        "file this note",
+        session,
+        &[],
+        &grant,
+        Some("researcher"),
+        true,
+    );
     let answer = runtime
         .invoke(&ToolInvocation::new(
             "c-write",

@@ -173,6 +173,7 @@ pub(super) fn resolve_chat_grant(
                         delegation: parts.delegation,
                         model: parts.model.map(str::to_string),
                         prompt_append: parts.prompt_append.map(str::to_string),
+                        workspace: parts.workspace,
                     })
             })
             .map(Some),
@@ -808,6 +809,7 @@ pub async fn set_conversation_profile(
                         delegation: parts.delegation,
                         model: parts.model.map(str::to_string),
                         prompt_append: parts.prompt_append.map(str::to_string),
+                        workspace: parts.workspace,
                     }
                 }
                 Err(e) => {

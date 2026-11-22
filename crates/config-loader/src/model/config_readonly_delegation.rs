@@ -22,6 +22,7 @@ pub(super) fn declared_profile(config: &Config, profile: &SessionProfile) -> Res
         delegation: read_only_delegation_default(profile.delegation, &capabilities),
         model: profile.model.clone(),
         prompt_append: profile.prompt_append.clone(),
+        workspace: profile.workspace,
         capabilities,
     }
 }

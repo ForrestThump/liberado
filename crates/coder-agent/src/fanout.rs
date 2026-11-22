@@ -251,6 +251,7 @@ pub fn child_session_grant(
         delegation: Some(false), // no nested fan-out via face delegate
         model: parent.model.clone(),
         prompt_append: parent.prompt_append.clone(),
+        workspace: parent.workspace,
     }
 }
 

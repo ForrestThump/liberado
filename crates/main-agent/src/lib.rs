@@ -6,7 +6,8 @@
 //! when privileged, [`face::CREATE_AGENT_TOOL_NAME`] (Agents-shelf specialist chats) — so tool
 //! schemas and raw tool results never pollute chat context. Each session also has a private file
 //! workspace (`workspace_list`, `workspace_read`, `workspace_write`, `workspace_delete`,
-//! `workspace_download`). That directory is not a shared scratch area. Operators can still grant
+//! `workspace_download`). A session profile may set `workspace = false` to leave those
+//! tools off its turns. That directory is not a shared scratch area. Operators can still grant
 //! extra MCPs to the `"main-agent"` policy component if they want a thicker surface.
 //!
 //! Delegate handoffs write **dispatch journals** under `<LIBERADO_DATA_DIR>/dispatches/` (linked from

@@ -52,6 +52,7 @@ fn settings(editor: bool) -> TurnSettings {
         profile: Some(AUTOMATION_EDITOR_PROFILE.into()),
         model: None,
         automation_editor: editor,
+        workspace: true,
     }
 }
 
@@ -351,6 +352,7 @@ fn grant_for_named_hat(
         delegation: parts.delegation,
         model: parts.model.map(str::to_string),
         prompt_append: parts.prompt_append.map(str::to_string),
+        workspace: parts.workspace,
     })
 }
 
