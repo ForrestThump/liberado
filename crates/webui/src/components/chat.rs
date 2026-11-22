@@ -285,22 +285,21 @@ pub fn Chat(
             if let Some(ref conv_id) = id {
                 session.set(Some(conv_id.clone()));
                 let conv_id = conv_id.clone();
-                let mut opened = transcript_follow;
+                let pin = transcript_follow;
                 wasm_bindgen_futures::spawn_local(async move {
                     if let Ok(loaded) = fetch_conversation(&base, &conv_id).await {
                         let running = loaded.turn_running;
                         let unanswered = loaded.turn_unanswered;
-                        let mut loaded_messages = loaded.messages;
+                        let mut rows = loaded.messages;
                         // Derived at render time, never stored: this is a *reading* of the
                         // transcript, and writing it into the log would make a display decision
                         // permanent and re-answer it wrongly if the turn were later retried.
                         if unanswered {
-                            loaded_messages.push(unanswered_turn_note());
+                            rows.push(unanswered_turn_note());
                         }
-                        // History arrived. Pin before the rows paint so the pane lands on the
-                        // latest message, including when the reader had scrolled up before.
-                        chat_scroll::TranscriptStick::pin_if_alive(&mut opened);
-                        let _ = set_if_alive(&mut messages, loaded_messages);
+                        // History arrived. Apply it while it is still the conversation on
+                        // screen, and pin it so the pane lands on the latest message.
+                        chat_scroll::apply_history(pin, messages, &conv_id, &active_conv_id, rows);
                         let _ = set_if_alive(&mut approvals, loaded.approvals);
                         set_surface(active_surface, Some(loaded.surface_mode));
                         // From the conversation, not remembered client-side: opening a chat in a

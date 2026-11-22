@@ -4,16 +4,17 @@
 //! These tests drive that decision. A DOM runner is not part of `cargo test`.
 
 use super::{
-    LATEST_SLACK_PX, TranscriptJump, TranscriptStick, max_scroll_top, scroll_top_to_apply,
-    viewport_shows_latest,
+    ChatMsg, LATEST_SLACK_PX, TranscriptJump, TranscriptStick, apply_history, max_scroll_top,
+    payload_owns_bottom, scroll_top_to_apply, viewport_shows_latest,
 };
 
 const CLIENT: i32 = 100;
 const TALL: i32 = 800;
 
+/// A reader who scrolled up into earlier messages.
 fn away_from_latest() -> TranscriptStick {
     let mut stick = TranscriptStick::pinned();
-    stick.note_viewport(0, CLIENT, TALL);
+    stick.note_reader_scroll();
     assert!(
         !viewport_shows_latest(0, CLIENT, TALL),
         "the fixture must start on earlier messages"
@@ -27,7 +28,7 @@ fn away_from_latest() -> TranscriptStick {
 #[test]
 fn opening_lands_on_the_latest_row_from_either_side() {
     let mut stick = away_from_latest();
-    stick.opened_conversation();
+    stick.opened_conversation("conv-a");
     let bottom = max_scroll_top(CLIENT, TALL);
     assert_eq!(
         scroll_top_to_apply(stick.on_content(), 0, CLIENT, TALL),
@@ -44,7 +45,7 @@ fn opening_lands_on_the_latest_row_from_either_side() {
 fn history_that_arrives_after_open_still_jumps_to_the_bottom() {
     let mut stick = away_from_latest();
     assert_eq!(stick.on_content(), TranscriptJump::Hold);
-    stick.opened_conversation();
+    stick.opened_conversation("conv-a");
     // The rows are taller once the payload is in the pane. Scroll is still at the top.
     let loaded = TALL + 200;
     assert_eq!(
@@ -108,8 +109,211 @@ fn slack_is_a_narrow_window_around_the_bottom_edge() {
     assert!(viewport_shows_latest(inside, CLIENT, TALL), "inside slack");
     assert!(!viewport_shows_latest(outside, CLIENT, TALL), "past slack");
     let mut stick = TranscriptStick::pinned();
-    stick.note_viewport(outside, CLIENT, TALL);
+    stick.note_reader_scroll();
     assert_eq!(stick.on_content(), TranscriptJump::Hold);
-    stick.note_viewport(inside, CLIENT, TALL);
+    stick.note_at_bottom();
     assert_eq!(stick.on_content(), TranscriptJump::Bottom);
+}
+
+/// The rows are replaced under the reader. The browser moves the pane on its
+/// own — the content shrinks and `scrollTop` is clamped, or the content above
+/// the viewport grows and the browser re-anchors it. The reader did not ask to
+/// leave the latest row, so the open must still land there.
+///
+/// This is the failure that left a thread on its oldest row: the move dropped
+/// the pin, and the pane stayed where the browser put it.
+#[test]
+fn a_browser_move_does_not_drop_the_open_pin() {
+    let mut stick = away_from_latest();
+    stick.opened_conversation("conv-a");
+    // The browser moved the pane while the rows were replaced.
+    assert_eq!(
+        stick.note_browser_scroll(),
+        TranscriptJump::Bottom,
+        "the open pin must survive a move the browser made"
+    );
+    assert_eq!(
+        scroll_top_to_apply(stick.on_content(), 0, CLIENT, TALL),
+        Some(max_scroll_top(CLIENT, TALL)),
+        "and the pane must go back to the bottom"
+    );
+}
+
+/// The same for a send: the line the reader just sent is the bottom of the
+/// thread, and a browser move must not leave it below the fold.
+#[test]
+fn a_browser_move_does_not_drop_the_send_pin() {
+    let mut stick = away_from_latest();
+    stick.user_sent();
+    assert_eq!(stick.note_browser_scroll(), TranscriptJump::Bottom);
+    assert_eq!(
+        scroll_top_to_apply(stick.on_content(), 0, CLIENT, TALL),
+        Some(max_scroll_top(CLIENT, TALL))
+    );
+}
+
+/// A browser move must not drag a reader who scrolled up back to the bottom
+/// either: they keep the place they chose.
+#[test]
+fn a_browser_move_leaves_a_reader_who_scrolled_up_alone() {
+    let mut stick = TranscriptStick::pinned();
+    stick.note_reader_scroll();
+    assert_eq!(
+        stick.note_browser_scroll(),
+        TranscriptJump::Hold,
+        "the reader's place stands against a move the browser made"
+    );
+}
+
+/// The reader's own scroll still releases the pane. A reply must not pull them
+/// back down while they read an earlier message.
+#[test]
+fn a_reader_scroll_still_releases_the_pane() {
+    let mut stick = TranscriptStick::pinned();
+    stick.note_reader_scroll();
+    assert_eq!(
+        stick.on_content(),
+        TranscriptJump::Hold,
+        "a reader who scrolled up keeps that place while the reply grows"
+    );
+    assert_eq!(
+        scroll_top_to_apply(stick.on_content(), 0, CLIENT, TALL + 40),
+        None
+    );
+}
+
+/// A reader scroll after a browser move still wins: the browser's move is not
+/// the reader's, and only the reader releases the pane.
+#[test]
+fn a_reader_scroll_after_a_browser_move_still_releases_the_pane() {
+    let mut stick = TranscriptStick::pinned();
+    assert_eq!(stick.note_browser_scroll(), TranscriptJump::Bottom);
+    stick.note_reader_scroll();
+    assert_eq!(stick.on_content(), TranscriptJump::Hold);
+}
+
+/// A conversation the reader just opened owns the bottom of the pane.
+#[test]
+fn a_new_conversation_takes_the_bottom() {
+    assert!(payload_owns_bottom("conv-b", Some("conv-a")));
+    assert!(payload_owns_bottom("conv-b", None));
+}
+/// A refresh of the conversation already on screen does not. The reader may
+/// have scrolled up while the reply was streaming, and the refresh must not
+/// drag them back down.
+#[test]
+fn a_refresh_of_the_open_conversation_does_not_take_the_bottom() {
+    assert!(!payload_owns_bottom("conv-a", Some("conv-a")));
+}
+
+/// The stick applies that rule: opening a conversation pins the pane, and the
+/// refresh that follows the same conversation leaves the reader's place alone.
+#[test]
+fn a_refresh_does_not_re_pin_a_reader_who_scrolled_up() {
+    let mut stick = TranscriptStick::pinned();
+    stick.opened_conversation("conv-a");
+    // The reader scrolled up while the reply streamed.
+    stick.note_reader_scroll();
+    // The history is fetched again when the turn ends. Same conversation.
+    stick.opened_conversation("conv-a");
+    assert_eq!(
+        stick.on_content(),
+        TranscriptJump::Hold,
+        "the refresh must not take the bottom back"
+    );
+    // Switching to another conversation takes it back.
+    stick.opened_conversation("conv-b");
+    assert_eq!(stick.on_content(), TranscriptJump::Bottom);
+}
+
+/// The history fetch is asynchronous, so it can land after the reader has moved on.
+///
+/// A payload for the conversation the reader left is stale: it would replace the
+/// thread they are reading now with the one they came from, and the pane would
+/// follow the wrong thread to its bottom.
+#[cfg(test)]
+mod history_apply {
+    use super::*;
+    use dioxus::prelude::*;
+    use std::cell::RefCell;
+
+    struct Held {
+        follow: Signal<TranscriptStick>,
+        messages: Signal<Vec<ChatMsg>>,
+        active: Signal<Option<String>>,
+    }
+
+    thread_local! {
+        static HELD: RefCell<Option<Held>> = const { RefCell::new(None) };
+    }
+
+    #[component]
+    fn Keeper() -> Element {
+        let follow = use_signal(TranscriptStick::pinned);
+        let messages = use_signal(Vec::<ChatMsg>::new);
+        let active = use_signal(|| Some("conv-b".to_string()));
+        HELD.with(|cell| {
+            *cell.borrow_mut() = Some(Held {
+                follow,
+                messages,
+                active,
+            })
+        });
+        rsx! {}
+    }
+
+    fn row(text: &str) -> ChatMsg {
+        ChatMsg {
+            role: "user",
+            content: text.to_string(),
+            thinking_steps: Vec::new(),
+            reasoning: None,
+        }
+    }
+
+    /// The signals live in the rendered scope, so the dom has to outlive them.
+    fn held_signals() -> (dioxus_core::VirtualDom, Held) {
+        let mut dom = dioxus_core::VirtualDom::new(|| rsx! { Keeper {} });
+        dom.rebuild_in_place();
+        let held = HELD
+            .with(|cell| cell.borrow_mut().take())
+            .expect("the signals");
+        (dom, held)
+    }
+
+    #[test]
+    fn a_payload_for_the_conversation_the_reader_left_is_dropped() {
+        let (_dom, held) = held_signals();
+        let applied = apply_history(
+            held.follow,
+            held.messages,
+            "conv-a",
+            &held.active,
+            vec![row("from the thread they left")],
+        );
+        assert!(!applied, "a stale payload must not be applied");
+        assert!(
+            held.messages.read().is_empty(),
+            "the thread on screen must stay the one the reader is reading"
+        );
+    }
+
+    #[test]
+    fn the_payload_for_the_conversation_on_screen_lands_and_pins_the_pane() {
+        let (_dom, held) = held_signals();
+        let applied = apply_history(
+            held.follow,
+            held.messages,
+            "conv-b",
+            &held.active,
+            vec![row("the thread they opened")],
+        );
+        assert!(applied, "the payload on screen must be applied");
+        assert_eq!(held.messages.read().len(), 1);
+        assert_eq!(
+            held.follow.read().on_content(),
+            TranscriptJump::Bottom,
+            "the opened conversation owns the bottom of the pane"
+        );
+    }
 }
