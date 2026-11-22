@@ -320,6 +320,14 @@ impl GoalSessionRecord {
     }
 }
 
+fn workspace_tools_default() -> bool {
+    true
+}
+
+fn workspace_tools_are_on(enabled: &bool) -> bool {
+    *enabled
+}
+
 /// What a goal session is allowed to do, and how its pack is configured (S6).
 ///
 /// Two things the server resolves from `[[session_profiles]]` before the kernel starts a session:
@@ -341,14 +349,6 @@ impl GoalSessionRecord {
 /// the compiler.
 ///
 /// The type therefore means "what this session runs as", of which authority is the largest part.
-fn workspace_tools_default() -> bool {
-    true
-}
-
-fn workspace_tools_are_on(enabled: &bool) -> bool {
-    *enabled
-}
-
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SessionGrant {
     /// The session's authority ceiling.
