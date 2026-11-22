@@ -19,6 +19,7 @@ fn settings(profile: Option<&str>) -> TurnSettings {
         profile: profile.map(str::to_string),
         model: None,
         automation_editor: false,
+        workspace: true,
     }
 }
 
