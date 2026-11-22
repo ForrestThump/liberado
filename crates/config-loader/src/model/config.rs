@@ -31,6 +31,8 @@ pub struct ResolvedProfile {
     pub max_idle_secs: Option<u64>,
     /// `None` = the daemon's default delegation mode.
     pub delegation: Option<bool>,
+    /// Private file tools. `true` unless the profile sets `workspace = false`.
+    pub workspace: bool,
     /// `None` = the daemon's current model for the role.
     pub model: Option<String>,
     pub prompt_append: Option<String>,
@@ -53,6 +55,7 @@ impl ResolvedProfile {
             delegation: self.delegation,
             model: self.model.as_deref(),
             prompt_append: self.prompt_append.as_deref(),
+            workspace: self.workspace,
         }
     }
 }
@@ -64,6 +67,7 @@ pub struct GrantParts<'a> {
     pub delegation: Option<bool>,
     pub model: Option<&'a str>,
     pub prompt_append: Option<&'a str>,
+    pub workspace: bool,
 }
 
 /// Hand-written rather than derived: `toml::Value` has no `Default`, and "no overrides" must
@@ -80,6 +84,7 @@ impl Default for ResolvedProfile {
             delegation: None,
             model: None,
             prompt_append: None,
+            workspace: true,
         }
     }
 }

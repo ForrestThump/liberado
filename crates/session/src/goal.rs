@@ -341,7 +341,15 @@ impl GoalSessionRecord {
 /// the compiler.
 ///
 /// The type therefore means "what this session runs as", of which authority is the largest part.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+fn workspace_tools_default() -> bool {
+    true
+}
+
+fn workspace_tools_are_on(enabled: &bool) -> bool {
+    *enabled
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SessionGrant {
     /// The session's authority ceiling.
     #[serde(default)]
@@ -366,6 +374,32 @@ pub struct SessionGrant {
     /// Extra system-prompt text for this profile, appended to the base prompt.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prompt_append: Option<String>,
+    /// Private file tools (`workspace_list` and the other four).
+    ///
+    /// `true` when the field is absent, so a grant stored before the opt-out
+    /// still offers the tools. A profile copies `workspace` from
+    /// `[[session_profiles]]`. `false` withholds them. The turn's risk gate
+    /// then refuses a call, because the tools are no longer wrapped in front
+    /// of it.
+    #[serde(
+        default = "workspace_tools_default",
+        skip_serializing_if = "workspace_tools_are_on"
+    )]
+    pub workspace: bool,
+}
+
+impl Default for SessionGrant {
+    fn default() -> Self {
+        Self {
+            capabilities: CapabilitySet::default(),
+            profile: None,
+            overrides: serde_json::Value::Null,
+            delegation: None,
+            model: None,
+            prompt_append: None,
+            workspace: true,
+        }
+    }
 }
 
 impl SessionGrant {
@@ -512,6 +546,23 @@ mod tests {
     fn is_background_distinguishes_foreground_and_background() {
         assert!(Visibility::Background.is_background());
         assert!(!Visibility::Foreground.is_background());
+    }
+
+    #[test]
+    fn workspace_tools_default_on_when_the_field_is_absent() {
+        let grant: SessionGrant = serde_json::from_str("{}").unwrap();
+        assert!(grant.workspace);
+        assert!(SessionGrant::default().workspace);
+        let json = serde_json::to_value(SessionGrant::default()).unwrap();
+        assert!(json.get("workspace").is_none());
+        let off: SessionGrant = serde_json::from_str(r#"{"workspace":false}"#).unwrap();
+        assert!(!off.workspace);
+        let stored = serde_json::to_value(SessionGrant {
+            workspace: false,
+            ..SessionGrant::default()
+        })
+        .unwrap();
+        assert_eq!(stored["workspace"], false);
     }
 
     #[test]

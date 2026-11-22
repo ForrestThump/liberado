@@ -83,6 +83,7 @@ pub(crate) fn install(
                         delegation: parts.delegation,
                         model: parts.model.map(str::to_string),
                         prompt_append: parts.prompt_append.map(str::to_string),
+                        workspace: parts.workspace,
                     })
                 }
                 Err(e) => Err(e.to_string()),

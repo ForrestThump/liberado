@@ -537,5 +537,6 @@ fn editor_settings(editor: bool) -> super::super::TurnSettings {
         profile: None,
         model: None,
         automation_editor: editor,
+        workspace: true,
     }
 }

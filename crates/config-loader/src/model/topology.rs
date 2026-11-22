@@ -772,6 +772,15 @@ pub struct SessionProfile {
     /// `true` or `false` is kept. An empty grant still inherits.
     #[serde(default)]
     pub delegation: Option<bool>,
+    /// Private file tools for chats under this profile.
+    ///
+    /// Omit the key, or set `true`, and a turn attaches `workspace_list`,
+    /// `workspace_read`, `workspace_write`, `workspace_delete`, and
+    /// `workspace_download` when the workspace root opens. `false` leaves them
+    /// off that turn. The risk gate then refuses a call. Existing profiles stay
+    /// on: the default is `true`.
+    #[serde(default = "default_true")]
+    pub workspace: bool,
     /// Model to pin for sessions under this profile. `None` = the daemon's current face model.
     ///
     /// An id that contains `/` fails load when the provider that would receive it (this
@@ -862,6 +871,7 @@ impl SessionProfile {
             write: Vec::new(),
             mcps: Vec::new(),
             delegation: None,
+            workspace: true,
             model: None,
             provider: None,
             prompt_append: None,
@@ -1826,6 +1836,19 @@ mod session_profile_tests {
     #[test]
     fn default_true_is_true() {
         assert!(super::default_true());
+    }
+
+    #[test]
+    fn workspace_defaults_on_and_parses_true_and_false() {
+        let omitted: SessionProfile = toml::from_str("name = \"budget-bot\"\n").expect("name only");
+        assert!(omitted.workspace);
+        let on: SessionProfile =
+            toml::from_str("name = \"budget-bot\"\nworkspace = true\n").expect("workspace true");
+        assert!(on.workspace);
+        let off: SessionProfile =
+            toml::from_str("name = \"budget-bot\"\nworkspace = false\n").expect("workspace false");
+        assert!(!off.workspace);
+        assert!(SessionProfile::empty("budget-bot").workspace);
     }
 
     #[test]

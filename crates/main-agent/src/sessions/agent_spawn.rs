@@ -313,6 +313,7 @@ impl ChatSessions {
                 agent_spawner,
                 caller_capabilities,
             )),
+            settings.workspace,
         )
     }
 }

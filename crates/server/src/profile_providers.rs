@@ -8,6 +8,7 @@ use liberado_bootstrap::Config;
 use liberado_main_agent::ChatSessions;
 
 pub(crate) fn attach(sessions: ChatSessions, config: &Config) -> ChatSessions {
+    let sessions = sessions.with_profile_workspaces(workspace_flags(config));
     let wired = liberado_bootstrap::profile_providers_from_config(config);
     if wired.routes.is_empty() {
         return sessions;
@@ -18,4 +19,13 @@ pub(crate) fn attach(sessions: ChatSessions, config: &Config) -> ChatSessions {
         "chat: profile provider routes"
     );
     sessions.with_profile_providers(wired.routes, wired.backends, wired.unavailable)
+}
+
+fn workspace_flags(config: &Config) -> std::collections::HashMap<String, bool> {
+    config
+        .topology
+        .session_profiles
+        .iter()
+        .map(|profile| (profile.name.clone(), profile.workspace))
+        .collect()
 }

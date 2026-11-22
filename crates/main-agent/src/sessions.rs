@@ -105,6 +105,8 @@ mod turn_clock;
 #[path = "sessions/turn_failure.rs"]
 mod turn_failure;
 pub use turn_failure::{TURN_ERROR_AUTHOR, public_failure_text, public_turn_failure};
+#[path = "sessions/turn_settings.rs"]
+mod turn_settings;
 #[path = "sessions_waivers.rs"]
 mod waivers;
 #[path = "sessions/workspace.rs"]
@@ -112,6 +114,7 @@ mod workspace;
 use thiserror::Error;
 use tokio::sync::broadcast;
 use tokio::sync::mpsc::Sender;
+use turn_settings::TurnSettings;
 
 use crate::compaction::{
     self, COMPACTION_AUTHOR, COMPACTION_TAIL_AUTHOR, CompactionConfig, CompactionTriggerTable,
@@ -170,30 +173,6 @@ pub fn default_conversation_title(user_text: &str) -> String {
         .collect();
     out.push('…');
     out
-}
-
-/// What one turn runs under, resolved from the session's profile (or the daemon's defaults).
-///
-/// A struct rather than three lookups so a profile switch cannot land between them — a turn running
-/// one profile's tools under another's delegation setting would be a genuinely confusing bug to
-/// chase, and the cost of preventing it is one type.
-struct TurnSettings {
-    capabilities: CapabilitySet,
-    /// Whether the face agent may `delegate`. The profile's setting, else the daemon's.
-    /// A read-only grant that omits the setting is off.
-    delegation: bool,
-    /// Extra system-prompt text for this profile, injected per turn.
-    prompt_append: Option<String>,
-    /// The profile's name, for logging. `None` is "no profile named", which is distinct from a
-    /// profile that grants nothing — the distinction this plan keeps insisting on.
-    profile: Option<String>,
-    /// Model for this session's turns. `None` = the daemon's configured model.
-    ///
-    /// Resolved here with everything else for the reason this struct exists: a profile switch must
-    /// not land between two reads and give a turn one profile's model under another's tools.
-    model: Option<String>,
-    /// An Automation Editor chat. Its face catalog is the schedule tools only.
-    automation_editor: bool,
 }
 
 /// What can go wrong running a persisted turn: the agent loop failed, or the store did. Both are
@@ -300,6 +279,9 @@ pub struct ChatSessions {
     /// Declarative risk waivers from `policy.toml`. Passed through to the dispatcher pre-flight
     /// magnitude guard and every runtime gate built here.
     risk_waivers: RiskWaiverSet,
+    /// Profile name → private file tools. Empty means "use the stored grant".
+    /// The host fills this from `[[session_profiles]]` at boot.
+    profile_workspaces: Mutex<HashMap<String, bool>>,
     /// Process-wide capability grant. An unprofiled session inherits it
     /// ([`Self::default_turn_settings`]). A profiled session's risk gate uses that
     /// session's grant ([`Self::gate_with_session_grant`]), not this field.
@@ -422,6 +404,7 @@ impl ChatSessions {
             agent_profiles: AgentProfiles::default(),
             profile_providers: provider_route::ProfileProviderTable::default(),
             profile_max_turns: Mutex::new(HashMap::new()),
+            profile_workspaces: Mutex::new(HashMap::new()),
             agent_workspace: None,
             user_timezone: None,
             approval_hooks: approval::ApprovalHooks::new(),
@@ -846,6 +829,7 @@ impl ChatSessions {
                             &relevant_mcps,
                             &settings.capabilities,
                             settings.profile.as_deref(),
+                            settings.workspace,
                         );
                         self.state_tool_surface(
                             &mut convo,
@@ -969,6 +953,7 @@ impl ChatSessions {
                             &relevant_mcps,
                             &settings.capabilities,
                             settings.profile.as_deref(),
+                            settings.workspace,
                         );
                         self.state_tool_surface(
                             &mut convo,
@@ -1044,12 +1029,14 @@ impl ChatSessions {
                     profile: None,
                     model: None,
                     automation_editor: false,
+                    workspace: false,
                 };
             }
         };
         // A *named* profile is authoritative; the absence of one means the daemon's defaults. See
         // `ConversationHeader::grant` for why the name, not an empty capability set, is the signal.
         let from_profile = Self::profile_model(&header);
+        let workspace = self.workspace_for_grant(&header.grant);
         let mut settings = if header.grant.profile.is_none() {
             self.default_turn_settings()
         } else {
@@ -1063,6 +1050,7 @@ impl ChatSessions {
                 profile: header.grant.profile,
                 model: header.grant.model,
                 automation_editor: false,
+                workspace,
             }
         };
         settings.automation_editor = header.automation_editor;
@@ -1338,6 +1326,7 @@ impl ChatSessions {
             session = %session,
             profile = settings.profile.as_deref().unwrap_or("(none)"),
             delegation = settings.delegation,
+            workspace = settings.workspace,
             count = names.len(),
             tools = ?names,
             "chat turn: tool surface"
@@ -1353,14 +1342,7 @@ impl ChatSessions {
     }
 
     fn default_turn_settings(&self) -> TurnSettings {
-        TurnSettings {
-            capabilities: self.capabilities.clone(),
-            delegation: self.delegation_mode,
-            prompt_append: None,
-            profile: None,
-            model: None,
-            automation_editor: false,
-        }
+        turn_settings::bare(self)
     }
 
     /// The MCP tools this **session** may call directly.
@@ -1620,6 +1602,7 @@ impl ChatSessions {
         relevant_mcps: &[String],
         capabilities: &CapabilitySet,
         profile: Option<&str>,
+        workspace: bool,
     ) -> Box<dyn ToolRuntime> {
         // Deliberately still `self.capabilities`: this asks "is this daemon guarded at all", which is
         // a property of the *process*, not of one session. Reading the session's set here would let a
@@ -1634,6 +1617,7 @@ impl ChatSessions {
             return self.attach_workspace(
                 session,
                 Box::new(DecoratingRuntime::passthrough(self.runtime.clone())),
+                workspace,
             );
         }
 
@@ -1695,6 +1679,7 @@ impl ChatSessions {
                 session,
                 profile,
             )),
+            workspace,
         )
     }
 
