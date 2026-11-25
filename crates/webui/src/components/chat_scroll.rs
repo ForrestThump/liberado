@@ -16,7 +16,13 @@
 //! content above the viewport grows and the browser re-anchors it, or the rows land
 //! in a fresh pane that starts at the top. The reader did not ask to leave the latest
 //! row in any of those cases, and the pane goes back there. Only a scroll the reader
-//! made — a wheel, a touch, a scrollbar drag — releases the pane.
+//! made — a wheel, a touch, a scrollbar drag, the keys that page the transcript —
+//! releases the pane.
+//!
+//! **A refresh is not an open.** The history is fetched again when a turn ends, and
+//! that payload is for the conversation the reader is already in. It owns nothing: a
+//! reader who scrolled up while the reply streamed keeps that place when the reply
+//! finishes. Only a conversation the reader opened or picked owns the bottom.
 
 #[cfg(target_arch = "wasm32")]
 use std::cell::{Cell, RefCell};
@@ -58,6 +64,11 @@ pub(super) struct TranscriptStick {
     following: bool,
     /// The conversation whose history the pane is showing.
     conversation: Option<String>,
+    /// The reader's own send put the conversation on screen.
+    ///
+    /// The first payload for it is the refresh at the end of that turn, not a
+    /// conversation the reader just opened, so it owns nothing.
+    sent: bool,
 }
 
 impl TranscriptStick {
@@ -65,6 +76,7 @@ impl TranscriptStick {
         Self {
             following: true,
             conversation: None,
+            sent: false,
         }
     }
 
@@ -75,17 +87,58 @@ impl TranscriptStick {
     /// they came from. A refresh of the conversation already on screen does not:
     /// the reader may have scrolled up while the reply was streaming, and the
     /// refresh must not drag them back down.
+    ///
+    /// The refresh at the end of the reader's own turn is the same thing. The
+    /// conversation is the one their send opened, so it owns nothing either, and
+    /// a reader who scrolled up while the reply streamed keeps that place.
     pub(super) fn opened_conversation(&mut self, conv_id: &str) {
-        if !payload_owns_bottom(conv_id, self.conversation.as_deref()) {
+        let is_new = payload_owns_bottom(conv_id, self.conversation.as_deref());
+        self.conversation = Some(conv_id.to_string());
+        if self.sent {
+            // The reader's own send opened this conversation. The payload is the
+            // refresh at the end of that turn: the reader keeps the place they
+            // scrolled to.
+            self.sent = false;
             return;
         }
-        self.conversation = Some(conv_id.to_string());
+        if !is_new {
+            // A refresh of the conversation on screen. The reader keeps their place.
+            return;
+        }
         self.following = true;
     }
 
     /// The reader sent. Jump even if they had scrolled up.
+    ///
+    /// The turn ends in the conversation the send opens, and the refresh at the
+    /// end of that turn must not take the bottom back from a reader who scrolled
+    /// up while the reply streamed.
     pub(super) fn user_sent(&mut self) {
         self.following = true;
+        self.sent = true;
+    }
+
+    /// The stream reported the conversation the reader's send opened.
+    ///
+    /// The pane is showing it now. This is not a pin: the reader may have scrolled
+    /// up while the reply was already streaming.
+    pub(super) fn note_sent_conversation(&mut self, conv_id: &str) {
+        self.conversation = Some(conv_id.to_string());
+        self.sent = true;
+    }
+
+    /// The pane is showing `conv_id` now.
+    ///
+    /// A conversation the reader picked is not the one their own send opened, so
+    /// the refresh at the end of that turn does not apply to it: it is a
+    /// conversation they opened, and it owns the bottom of the pane.
+    ///
+    /// A pane that was showing nothing is not a pick. The conversation on screen
+    /// is the one their own send opened.
+    pub(super) fn note_shown_conversation(&mut self, conv_id: Option<&str>) {
+        if self.conversation.is_some() && self.conversation.as_deref() != conv_id {
+            self.sent = false;
+        }
     }
 
     /// The pane sits on the latest row.
@@ -116,6 +169,17 @@ impl TranscriptStick {
             TranscriptJump::Hold
         }
     }
+}
+
+/// The keys that move the transcript.
+///
+/// A reader who pages up with the keyboard is reading an earlier message, so the
+/// key is the reader's own move — the same release a wheel or a touch gives.
+pub(super) fn is_reader_key(key: &str) -> bool {
+    matches!(
+        key,
+        "PageUp" | "PageDown" | "Home" | "End" | "ArrowUp" | "ArrowDown"
+    )
 }
 
 /// Whether a loaded history payload takes the bottom of the pane.
@@ -318,10 +382,10 @@ fn attach_scroll_listener(follow: Signal<TranscriptStick>, retry: bool) {
 
 /// Mark the scrolls the reader makes, so a move the browser makes is not read as one.
 ///
-/// A wheel, a touch, and a scrollbar drag are the ways a reader scrolls a pane. A
-/// click is not: it is left out on purpose, because a click in the pane is usually a
-/// copy, not a scroll, and it must not make the browser's next move look like the
-/// reader's.
+/// A wheel, a touch, a scrollbar drag, and the keys that page the transcript are
+/// the ways a reader scrolls a pane. A click is not: it is left out on purpose,
+/// because a click in the pane is usually a copy, not a scroll, and it must not
+/// make the browser's next move look like the reader's.
 #[cfg(target_arch = "wasm32")]
 fn attach_reader_gesture_listeners(pane: &web_sys::Element) {
     use wasm_bindgen::JsCast;
@@ -343,6 +407,14 @@ fn attach_reader_gesture_listeners(pane: &web_sys::Element) {
     });
     let _ = pane.add_event_listener_with_callback("mousemove", drag.as_ref().unchecked_ref());
     drag.forget();
+    // Paging the transcript with the keyboard is the reader's move, too.
+    let key = Closure::<dyn FnMut(web_sys::KeyboardEvent)>::new(|evt: web_sys::KeyboardEvent| {
+        if is_reader_key(&evt.key()) {
+            READER_GESTURE_MS.with(|cell| cell.set(js_sys::Date::now()));
+        }
+    });
+    let _ = pane.add_event_listener_with_callback("keydown", key.as_ref().unchecked_ref());
+    key.forget();
 }
 
 /// Whether the scroll being handled was the reader's own.

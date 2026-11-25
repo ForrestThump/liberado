@@ -282,6 +282,13 @@ pub fn Chat(
         let base = base_for_effect.clone();
         #[cfg(target_arch = "wasm32")]
         {
+            // The reader may have picked another conversation while the turn was
+            // running. A payload for that one is a conversation they opened, not the
+            // refresh at the end of their own turn, so it owns the bottom of the
+            // pane.
+            transcript_follow
+                .write()
+                .note_shown_conversation(id.as_deref());
             if let Some(ref conv_id) = id {
                 session.set(Some(conv_id.clone()));
                 let conv_id = conv_id.clone();
@@ -322,6 +329,7 @@ pub fn Chat(
                                     active_conv_id,
                                     should_set_title,
                                     ghost_session,
+                                    follow: transcript_follow,
                                     list_epoch,
                                 },
                                 &base,
@@ -583,6 +591,7 @@ pub fn Chat(
                 active_conv_id,
                 should_set_title,
                 ghost_session,
+                follow: transcript_follow,
                 list_epoch,
             },
             &base_for_title,
@@ -963,6 +972,9 @@ struct StreamTargets {
     should_set_title: Signal<bool>,
     /// Where an incognito turn records the session it opened, for the teardown paths.
     ghost_session: Signal<Option<String>>,
+    /// The transcript pin. The conversation the reader's own send opened is recorded
+    /// here, so the refresh at the end of that turn is not read as a new open.
+    follow: Signal<chat_scroll::TranscriptStick>,
     /// Bumped when `create_agent` succeeds. The shelf reads it and refetches.
     list_epoch: Signal<u64>,
 }
@@ -1053,6 +1065,7 @@ fn connect_stream(
         mut active_conv_id,
         mut should_set_title,
         mut ghost_session,
+        mut follow,
         list_epoch,
     } = targets;
     use std::rc::Rc;
@@ -1079,6 +1092,10 @@ fn connect_stream(
                 && !data.is_empty()
             {
                 session.set(Some(data.clone()));
+                // The conversation this turn is in. The refresh at the end of the turn is
+                // for it, and it must not take the bottom back from a reader who scrolled
+                // up while the reply streamed.
+                follow.write().note_sent_conversation(&data);
                 if opened_incognito {
                     // Recorded as the ghost instead of the active conversation: it is not in the
                     // sidebar to be highlighted, and this is the id the teardown paths need. The
