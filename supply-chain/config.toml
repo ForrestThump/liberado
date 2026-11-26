@@ -1285,7 +1285,7 @@ version = "0.3.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.form_urlencoded]]
-version = "1.2.2"
+version = "1.2.3"
 criteria = "safe-to-deploy"
 
 [[exemptions.fs4]]
@@ -3872,7 +3872,7 @@ version = "0.6.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.url]]
-version = "2.5.8"
+version = "2.5.9"
 criteria = "safe-to-deploy"
 
 [[exemptions.urlencoding]]

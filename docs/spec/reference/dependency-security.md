@@ -39,9 +39,10 @@ The build script is the same file as in 0.13.5 (9313 bytes, byte-identical).
 The exemption is still debt, not an audit.
 
 The 2026-10 TLS and Tokio advisories moved four exemptions to the patched
-versions. No exemption was added and no criteria changed; each one names a
-release that fixes the advisory cargo-deny reports against the version it
-replaced.
+versions. The 2026-11 `url` advisory moved two more. No exemption was added
+and no criteria changed; each one names a release that fixes the advisory
+cargo-deny reports against the version it replaced, or the companion release
+that the patched version requires.
 
 | Crate | Was | Now | Advisory |
 |---|---|---|---|
@@ -50,10 +51,21 @@ replaced.
 | `webpki-roots` | 1.0.8 | 1.0.11 | RUSTSEC-2026-0381, bundled emSign roots |
 | `webpki-root-certs` | 1.0.8 | 1.0.11 | RUSTSEC-2026-0383, bundled emSign roots |
 | `tokio` | 1.52.3 | 1.53.3 | RUSTSEC-2026-0386, `AsyncFd::new` I/O safety |
+| `url` | 2.5.8 | 2.5.9 | RUSTSEC-2026-0592, stack overflow in `Url::origin()` on nested `blob:` URLs |
+| `form_urlencoded` | 1.2.2 | 1.2.3 | Required companion for `url` 2.5.9; no advisory of its own |
 
 `tokio` is pinned to 1.53.3, the first release in the 1.53 line that carries
 the fix, rather than the newest 1.54. The smaller step is the one the lockfile
 can carry on its own.
+
+`url` 2.5.9 clears RUSTSEC-2026-0592, a stack overflow in `Url::origin()` on
+nested `blob:` URLs. The advisory covers `url` up to and including 2.5.8 and
+is fixed in 2.5.9. `form_urlencoded` 1.2.3 is the required companion for
+`url` 2.5.9, which depends on it, and has no advisory of its own. The two vet
+exemptions moved with the lockfile. No exemption was added, no criteria
+changed, and no `deny.toml` ignore was added. Neither crate has a build
+script, so `deny.toml` needs no new `[bans.build].allow-build-scripts` entry.
+Both exemptions are still debt, not audits.
 
 RUSTSEC-2026-0459 (CVE-2026-119375) is a vulnerability in SQLite before
 3.54.0. `libsqlite3-sys` 0.37.0 bundles 3.51.3. `libsqlite3-sys` 0.39.1
