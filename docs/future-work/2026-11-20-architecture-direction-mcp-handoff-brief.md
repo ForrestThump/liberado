@@ -158,6 +158,20 @@ An LLM can create or modify workflows, interpret ambiguous requests, or choose a
 
 A critical qualification: **any background workflow that genuinely needs new reasoning still needs some inference source or a human decision**. A subscription-based chat interface does not automatically provide a durable, unattended inference service to Liberado. Zero inference cost applies when the assistant is actively used as the reasoning client and Liberado itself is not making model calls.
 
+### 5.4 What already exists in this tree
+
+The layers above are not a greenfield sketch. This tree already contains them:
+
+- **Daemon and API** — `liberado-daemon` with `liberado serve`; `liberado-server` hosts the HTTP/SSE API and the WebUI in the same process.
+- **Scheduling** — `liberado-cron`, driven by `Topology.schedules`; `liberado-daemon` also watches the vault for changes.
+- **Execution** — `liberado-executor` (the decide/act loop), `liberado-orchestrator` (dispatch decision to execution), `liberado-dispatcher` (execute, clarify, delegate, or propose).
+- **MCP** — `liberado-mcp` provides `TurbomcpRuntime`, the tool runtime the daemon executes against; `liberado-operator-dogfood-mcp` is an existing stdio MCP server that drives the daemon through that HTTP API.
+- **Notification** — `liberado-notify` is a `Notifier` trait; Telegram is the first implementation, and the crate also carries a Web Push implementation (RFC 8291/8292).
+- **State and data** — `liberado-session-store` keeps one append-only log per session under `<LIBERADO_DATA_DIR>/sessions`; `liberado-vault` attributes writes to their source.
+- **Approvals** — proposals are written as `proposals/*.md` artifacts; `liberado-telegram-approvals` answers the Approve/Reject buttons (both are code) and Revise (which can only redraft).
+
+Whether any of these are *reliable* in the user's daily use is a separate question, and this brief does not answer it.
+
 ## 6. MCP connectivity and deployment
 
 MCP support varies by product, plan, client, and transport. “Supports MCP” does not necessarily mean “supports arbitrary local and remote custom MCP servers in every app and subscription tier.” Compatibility must be checked against current official documentation before implementation decisions are based on it.
@@ -416,7 +430,7 @@ A subsequent model should help resolve these without assuming answers:
 
 ### Product scope
 
-- Which existing Liberado components are already implemented and reliable?
+- Which existing Liberado components are already implemented and reliable? §5.4 lists what the tree contains today; "reliable" is not answered here.
 - Which features does the user personally use today?
 - What is the minimum useful vertical slice?
 - Should Liberado primarily manage tasks/reminders, arbitrary workflows, personal knowledge, or all three over time?

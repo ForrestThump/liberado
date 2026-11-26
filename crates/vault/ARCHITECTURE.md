@@ -36,7 +36,8 @@ later human re-creation of the moved-from path — the one mistake the system mu
 
 - Depends on: `liberado-common` (`WriteProvenance`), `turbovault-core`/`-vault`/`-audit`.
 - Depended on by: `liberado-daemon` (calls `attribute`), `liberado-memory-store`,
-  `liberado-memory-mcp`, `liberado-telegram-approvals`, `liberado-bootstrap`, `liberado-server`,
+  `liberado-memory-mcp`, `liberado-telegram-approvals`, `liberado-bootstrap` (dev),
+  `liberado-server`,
   and the `provenance_e2e` end-to-end test.
 
 ## Tests

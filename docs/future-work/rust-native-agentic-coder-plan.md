@@ -174,8 +174,9 @@ Comparable systems we intentionally rip off for harness patterns (not code):
   config-owned surface for backend selection, role prompts/models/budgets, sandbox/policy, validation
   command, and progress thresholds. It converts directly to `CoderRunConfig`.
 - Workspace verification no longer expects a nested `turbovault/` checkout. Root `Cargo.toml` pins
-  every `turbovault-*` crate by git tag (`liberado-2026-11-10`), including `turbovault-vector`.
-  (Re-checked 2026-11-20.)
+  every `turbovault-*` crate by git rev (commit SHA), at the merge commit that landed the fork's
+  jiff migration, including `turbovault-vector`. The forks publish no `liberado-*` tag for these
+  merges, so the pins stay on the commit SHAs. (Re-checked 2026-11-20.)
 - Process checkpoint: after meaningful coder slices, run a debt audit for anti-patterns, coupling,
   duplication, doc drift, and missing tests. First audit fixed a status-gate coupling bug where
   backend `git status` verification could be blocked by the model-facing command policy.
@@ -466,7 +467,8 @@ the multi-role machinery. Until then, coding config is enough.
 ### Phase 4: PR factory integration 🔄
 
 - Default and document **`liberado-loop`** as the coding backend (the stable name is
-  `liberado_core::LIBERADO_LOOP_BACKEND`; it is config-visible in `dispatch.yaml` and the task DB).
+  `liberado_coder_core::LIBERADO_LOOP_BACKEND`; it is config-visible in the external
+  `liberado-pr-dispatch-mcp` repo's `dispatch.yaml` and task DB).
   Treat any remaining `vtcode` selection as deprecated rollback, then remove it.
 - `LIBERADO_CODER_RUN_CONFIG_PATH` for full `CoderRunConfig` without knobs duplication. (Not
   implemented: no code reads this variable. Re-checked 2026-11-20.)

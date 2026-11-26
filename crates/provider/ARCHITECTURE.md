@@ -48,10 +48,10 @@ the only HTTP coupling is the `reqwest` SSE response adapter.
 - Depended on by: `liberado-provider-openai-compat` (implements `Provider` on top of `openai_compat`),
   `liberado-dispatcher`, `liberado-executor`, `liberado-orchestrator`, `liberado-mcp` (tool types),
   `liberado-agent-workspace`, `liberado-chat-search`, `liberado-conversation-store`,
-  `liberado-cost`, `liberado-scratchpad`, `liberado-session-store`, `liberado-tool-runtime`,
+  `liberado-cost` (dev), `liberado-scratchpad`, `liberado-session-store`, `liberado-tool-runtime`,
   `liberado-coder-*`, `liberado-dispatch-pack`, `liberado-eval`, `liberado-heuristics-tuner`,
   `liberado-main-agent`, `liberado-acp-bridge`, `liberado-server`, `liberado-test-support`,
-  `liberado-telegram-approvals`.
+  `liberado-telegram-approvals`, `liberado-bootstrap`, `liberado-daemon`, `liberado-config` (dev).
 
 ## Design notes
 

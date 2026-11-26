@@ -28,7 +28,7 @@ dogfood-ready:** interactive coding, durable sessions, and Paseo permission prom
 - Install command: `liberado paseo install`
 - Config example: `config.example/paseo-liberado.json`
 - Bridge source: `crates/acp-bridge/`
-- Scoreboard: [`../roadmap.md`](../roadmap.md) (cross-cutting Paseo items)
+- Status updates: this file's status header, plus the [backlog](backlog.md) for open Paseo items. [`../roadmap.md`](../roadmap.md) is a pointer to the direction and the backlog, not a scoreboard
 
 ---
 
@@ -319,5 +319,5 @@ mapping, and interactive coding (P7.1) are landed; install script dogfood on Win
 
 **Remote story:** P6 complete — separate from ACP comfort.
 
-Update this file’s status header and the Paseo bullets in [`../roadmap.md`](../roadmap.md)
-when phases land.
+Update this file's status header — and the [backlog](backlog.md) rows for open Paseo items —
+when phases land. [`../roadmap.md`](../roadmap.md) is a pointer, not a scoreboard.

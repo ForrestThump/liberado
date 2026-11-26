@@ -259,10 +259,11 @@ Each companion spec already defines its tunables and defaults in a "Tunables (si
 — Decision 14)" table. Those tables are the **authoritative list**; the `crates/config-loader` config
 model mirrors them as typed fields with matching `Default`s. Concretely, the model aggregates:
 - Capability/zone/write-class policy (Decision 4 / concurrency spec) → `policy.toml`.
-- Concurrency: `WINDOW`, `MAX_REACTION_DEPTH`, `RETRY_MAX`.
-- Dispatch: `SMALL_FANOUT`, tiered `CLARIFY_THRESHOLD`, `MAX_CONCURRENT_SUBAGENTS`,
-  `DETACH_SOFT_TIMEOUT`, `guidance_match_floor`, `subagent.isolation`. The dispatcher model is not a
-  tuning key: it is `[roles.dispatcher].model` in `topology.toml`.
+- Concurrency: `window_secs`, `max_reaction_depth`, `retry_max`.
+- Dispatch: `small_fanout`, `clarify_threshold_read` / `clarify_threshold_write`,
+  `max_concurrent_subagents`, `detach_soft_timeout_secs`, `guidance_match_floor`,
+  `subagent_isolation`. The dispatcher model is not a tuning key: it is
+  `[roles.dispatcher].model` in `topology.toml`.
 - Context policy: `max_goals`, `max_decisions`, `decision_recency_days`.
 - Capture/inbox: paths, settle windows, flags, `ambient_sweep_schedule`, ignore globs.
 - Maintenance/git: commit schedule, `stignore_machine_dirs`, maintenance schedule, prune/merge policy.

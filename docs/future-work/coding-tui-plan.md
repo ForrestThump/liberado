@@ -65,7 +65,7 @@ authorization, new wire events, the loop scheduler).
 | Chat context compaction | `liberado-main-agent` (CH3, 2026-07-23) | Persisted rolling-summary markers — the pattern goal sessions will reuse |
 | Subagent delegation path | face `delegate` → hub → dispatch pack | Capability-narrowed child sessions, no `AskHuman` on delegated sessions (D-e) |
 | Evals | `heuristics-tuner` `TUNER_LAYER=coder` + curriculum | Mock curriculum in CI; live tiers opt-in |
-| **vtcode: already excised** | — | **Zero** workspace crates depend on vtcode. The `VTCODE_BACKEND` const, the `config.example/tuning.toml` comment, and the doc references are gone as of 2026-11-20; only this file still names them. What is left is the external `liberado-pr-dispatch-mcp` legacy backend (separate repo) |
+| **vtcode: no dependency, not yet scrubbed from the docs** | — | **Zero** workspace crates depend on vtcode. The `VTCODE_BACKEND` const and the `config.example/tuning.toml` comment are gone (re-checked 2026-11-26). Doc mentions remain in `docs/spec/architecture/overview.md`, `docs/spec/architecture/agentic-loops.md`, `crates/coder-runner/ARCHITECTURE.md`, `crates/tui/ROADMAP.md`, `docs/future-work/tui-maturity-roadmap.md`, `docs/future-work/rust-native-agentic-coder-plan.md`, and this file. The generated `docs/CATALOG.md` and the `docs/future-work/archive/` records still carry the name as history. Rust comments in `executor` and `main-agent` cite VTCode as a peer or a failure mode. What is left as code is the external `liberado-pr-dispatch-mcp` legacy backend (separate repo) |
 
 ### The gaps (what this plan builds)
 
@@ -347,10 +347,15 @@ S2 makes it visible; S3 makes it safe against real repos; S4 makes it reversible
   events added here will make a future WebUI goal view mostly free).
 - **No auto-merge, ever.** Gate approval returns work to the *human*; publication stays
   draft-PR/proposal-gated (Decision 14).
-- **vtcode doc cleanup** was done. The `VTCODE_BACKEND` const, the `coder-core/ARCHITECTURE.md`
-  mention, and the stale `config.example/tuning.toml` comment are gone. The remaining reference is
-  in `rust-native-agentic-coder-plan.md`, plus the historical
-  `archive/pr-dispatch-vtcode-no-write-finding.md` status line.
+- **vtcode doc cleanup** was partial. The `VTCODE_BACKEND` const and the stale
+  `config.example/tuning.toml` comment are gone, and no workspace crate depends on vtcode. The
+  `coder-core/ARCHITECTURE.md` line that called a vtcode wrapper "existing" was wrong — there is no
+  vtcode wrapper in this repository — and is now corrected. Live mentions also remain in
+  `docs/spec/architecture/overview.md`, `docs/spec/architecture/agentic-loops.md`,
+  `crates/coder-runner/ARCHITECTURE.md`, `crates/tui/ROADMAP.md`,
+  `docs/future-work/tui-maturity-roadmap.md`, and `docs/future-work/rust-native-agentic-coder-plan.md`.
+  The generated `docs/CATALOG.md` row and the historical
+  `archive/pr-dispatch-vtcode-no-write-finding.md` status line stay.
 
 ## Docs this plan updates when slices land
 

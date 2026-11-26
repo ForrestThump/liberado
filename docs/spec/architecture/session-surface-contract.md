@@ -122,10 +122,10 @@ therefore make immediately answerable:
 | See an awaiting prompt | ✅ (`AwaitingPrompt`, input box goes "hot") | ⚠️ the parked-session panel shows "awaiting input" as a status |
 | Answer | ✅ (`post_goal_message`) | ❌ |
 | Distinguish 403 / 409-parked / 409-finished / 404 | ✅ *as of 2026-07-14* — writing this document is what found that it **did not**: `403` fell through to a generic `"server returned 403"`, and `409` was hardcoded to *"this session has finished"*, which is a **lie for a parked session**. The exact bug that had just been fixed in the API was still sitting in the client. | ❌ |
-| Cancel | ✅ | ⚠️ the parked-session panel cancels a goal session; a chat turn still has no cancel |
+| Cancel | ✅ | ✅ the chat turn cancels with `POST /api/conversations/{id}/cancel` (`api::cancel_conversation_turn`); the parked-session panel cancels a goal session with `POST /api/goals/{id}/cancel` |
 | Fork from any message | ✅ (`f` at the cursor) | ❌ |
 | Start a session | ✅ (`/spawn`) | ⚠️ the agent creator makes an agent chat; there is no general session start |
-| Render `parked` honestly | ⚠️ coloured in the switcher, and answering one now says so — but there is still **no affordance** telling you what to do about it | ❌ unknown status |
+| Render `parked` honestly | ⚠️ coloured in the switcher, and answering one now says so — but there is still **no affordance** telling you what to do about it | ⚠️ the parked-session panel renders the literal status (`awaiting input` or `parked`) and offers a cancel control (`POST /api/goals/{id}/cancel`), but no answer or resume affordance |
 
 That row is the argument for writing this document down. A contract stated once is checkable; a
 contract that lives implicitly in one surface's source cannot be checked, even by the surface that
@@ -141,8 +141,10 @@ rather than narrowing it. The spec already fell out. This document *is* it.
   waiting for you and cannot be answered until it is resumed"*. The status was added by E6 and no
   surface learned what it means. (Same shape as the bug where the API told a parked session it "had
   already finished" — a state nobody taught the system to describe.)
-- **The WebUI has no session view**, which is what blocks E5-b (the deep link into a session from the
-  out-of-band ping). See [`../../future-work/archive/one-execution-engine-live-test.md`](../../future-work/archive/one-execution-engine-live-test.md) § E5-b.
+- **The WebUI has no `/api/sessions` view**, which is what blocks E5-b (the deep link into a session
+  from the out-of-band ping). It does have a conversation list (`GET /api/conversations`) and a
+  parked-session panel, so the gap is a session *page*, not a session list. See
+  [`../../future-work/archive/one-execution-engine-live-test.md`](../../future-work/archive/one-execution-engine-live-test.md) § E5-b.
 - **`public_base_url` does not exist in config**, and deliberately should not until there is a page to
   link to — an unused config key is a lie about what the system can do.
 

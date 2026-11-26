@@ -259,7 +259,7 @@ CARGO_TARGET_DIR=target/liberado-invoke cargo run --locked --quiet -p liberado-c
   deletes `target/mutants/` after each crate. Not for CI.
 - **`--in-place` is still needed on Linux** when leftover `turbovault/` or `turbomcp/`
   directories exist as local clones. `cargo-mutants` copies the workspace to a temp dir
-  and those extra trees do not survive the copy. The git+tag pins in `Cargo.toml` do not
+  and those extra trees do not survive the copy. The git+rev pins in `Cargo.toml` do not
   need the directories. Pass `--in-place` alongside the timeout flags (same as Windows).
   This is now unconditional in the CLI's generated command.
 

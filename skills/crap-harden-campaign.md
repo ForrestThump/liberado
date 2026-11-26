@@ -13,11 +13,11 @@
 git status --short
 git branch --show-current
 git log origin/main..HEAD --oneline
-cargo metadata --locked          # resolves git+tag forks from Cargo.lock
+cargo metadata --locked          # resolves git+rev forks from Cargo.lock
 ```
 
 Leftover `turbovault/` and `turbomcp/` directories are gitignored and are not
-required. Never junction them into a worktree. Confirm the git+tag pins:
+required. Never junction them into a worktree. Confirm the git+rev pins:
 
 ```bash
 cargo metadata --locked

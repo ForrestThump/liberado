@@ -58,8 +58,10 @@ and **hands back** the structured artifact in one event — no second "structuri
 - Depends on: `liberado-common` (`Report`/`Outcome`/`ToolCall`), `liberado-provider`,
   `liberado-notify`, `liberado-scratchpad`, `liberado-tool-runtime`.
 - Depended on by: `liberado-orchestrator` (drives `execute()`), `liberado-main-agent`,
-  `liberado-dispatch-pack`, `liberado-coder-agent`, `liberado-coder-tools`, `liberado-config`,
-  `liberado-heuristics-tuner`, `liberado-acp-bridge`, `liberado-server`, `liberado-test-support`.
+  `liberado-dispatch-pack` (dev), `liberado-coder-agent`, `liberado-coder-tools`,
+  `liberado-bootstrap`, `liberado-config` (dev), `liberado-daemon` (dev),
+  `liberado-heuristics-tuner`, `liberado-acp-bridge`, `liberado-server`, `liberado-test-support`
+  (dev).
   This crate is **MCP-agnostic** — it knows the `ToolRuntime` trait, not turbomcp.
 
 ## Tests

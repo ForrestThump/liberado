@@ -237,8 +237,8 @@ In order of strength:
    `from_tuning(&Tuning)` and `with_*` overrides. A new field then flows to every consumer by
    default, and shadowing becomes something you must write on purpose.
 2. **`#[serde(deny_unknown_fields)]`** on config and payload structs, so a key nothing reads is an
-   error rather than silence. It is now used across the tree — 24 occurrences, 9 of them on config
-   and payload structs (re-counted 2026-11-20).
+   error rather than silence. It is now used across the tree — 24 occurrences (re-counted
+   2026-11-20).
 3. **A field-equality test.** Build the tuning with every field non-default, convert, serialize both
    sides, and assert every key present in both agrees — with a documented exception list. It
    enumerates fields rather than naming them, so it cannot go stale.

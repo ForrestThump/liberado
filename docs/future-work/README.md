@@ -12,8 +12,8 @@ Do not edit the tables by hand — update document frontmatter and re-run genera
 
 | Doc | Role |
 |-----|------|
-| **[roadmap.md](../roadmap.md)** | **Living scoreboard** — open work in priority order |
-| [backlog.md](backlog.md) | **Pick-from-here backlog** — only place agents should take next implementation items |
+| **[roadmap.md](../roadmap.md)** | Pointer to [direction.md](../direction.md) and the backlog. Not the queue. |
+| **[backlog.md](backlog.md)** | **The implementation queue** — the only place agents take next implementation items. Start here. |
 | [archive/](archive/README.md) | Finished plans, closed audits — **not current truth** |
 | [CATALOG.md](../CATALOG.md) | Repository-wide document catalog |
 
@@ -60,4 +60,4 @@ archive/ only after its useful facts live in spec, Rustdoc, or an ADR.
 | [turbovault-modules-integration-roadmap.md](turbovault-modules-integration-roadmap.md) | draft | plan |
 | [turbovault-vault-events-plugin-plan.md](turbovault-vault-events-plugin-plan.md) | draft | plan |
 
-Start every planning session at [roadmap.md](../roadmap.md).
+Start every planning session at [backlog.md](backlog.md). [roadmap.md](../roadmap.md) is a pointer to the direction and the backlog, not the queue.

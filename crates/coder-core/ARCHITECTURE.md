@@ -17,7 +17,7 @@ It exists so several surfaces can share one vocabulary:
 - future TUI/CLI/WebUI coding sessions;
 - sandbox implementations;
 - eval and `heuristics-tuner` scenarios;
-- migration backends such as the existing vtcode wrapper.
+- migration backends that wrap another harness (none in this repository today).
 
 ## Surface
 

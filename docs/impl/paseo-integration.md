@@ -63,9 +63,9 @@
 ## Prerequisites (Windows)
 
 1. **Rust toolchain** matching `rust-toolchain.toml` (workspace builds `liberado-acp`).
-2. **No sibling checkouts are needed.** Cargo fetches the `turbovault*` and `turbomcp*` forks by
-   git tag (`liberado-2026-11-10` and `liberado-2026-08-27`). A local clone in `turbovault/` or
-   `turbomcp/` is not required to build.
+2. **No sibling checkouts are needed.** Cargo fetches the ForrestThump forks by git rev (commit
+   SHA), pinned to the merge commits that landed each fork's jiff migration. A local clone in
+   `turbovault/` or `turbomcp/` is not required to build.
 
 3. An LLM API key in the environment (any one). **Prefer OpenRouter** so the model
    picker gets `author/model` ids (`deepseek/deepseek-v4-pro`, …) from live `GET /models`:
