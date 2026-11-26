@@ -44,7 +44,7 @@
 
 use std::path::{Path, PathBuf};
 
-use chrono::{DateTime, Utc};
+use crate::UtcStamp;
 use serde::{Deserialize, Serialize};
 
 /// File name under the data dir. Append-only JSONL, one decision per line, same shape as the
@@ -64,7 +64,7 @@ pub enum ApprovalDecision {
 pub struct ApprovalRecord {
     pub proposal_id: String,
     pub decision: ApprovalDecision,
-    pub at: DateTime<Utc>,
+    pub at: UtcStamp,
     /// Which authenticated surface recorded it — `"telegram"`, `"webui"`, `"tui"`. Audit only; the ledger's
     /// security comes from *where it lives*, not from this string, which a caller chooses freely.
     pub by: String,
@@ -105,7 +105,7 @@ impl ApprovalLedger {
         let record = ApprovalRecord {
             proposal_id: proposal_id.to_string(),
             decision,
-            at: Utc::now(),
+            at: UtcStamp::now(),
             by: by.to_string(),
         };
         let mut line = serde_json::to_string(&record)

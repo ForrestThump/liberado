@@ -1,6 +1,6 @@
 //! Split from `tests.rs` for module-health boundaries.
 
-use chrono::Utc;
+use liberado_common::UtcStamp;
 use liberado_conversation_store::{Author, ConversationStore, MessageNode, NewNode, StoreError};
 use liberado_provider::Message;
 use liberado_session::SessionStatus;
@@ -38,7 +38,7 @@ fn chat_header(id: Ulid) -> SessionHeader {
         visibility: Visibility::default(),
         grant: Default::default(),
         status: SessionStatus::Pending,
-        created_at: Utc::now(),
+        created_at: UtcStamp::now(),
         finished_at: None,
         result: None,
         awaiting_input: false,
@@ -57,7 +57,7 @@ fn user_message_node(id: Ulid, conversation: Ulid, parent: Option<Ulid>) -> Mess
         parent_id: parent,
         conversation_id: conversation,
         author: Author::User,
-        created_at: Utc::now(),
+        created_at: UtcStamp::now(),
         message: Message::user("x"),
         model: None,
         reasoning: None,

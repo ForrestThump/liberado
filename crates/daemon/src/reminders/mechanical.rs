@@ -1,7 +1,8 @@
 //! Title, body, kind, and source for cron-originated reminder rows.
 
-use chrono::{DateTime, Utc};
+use jiff::tz::TimeZone;
 
+use liberado_common::UtcStamp;
 use liberado_outbox::{
     EVENT_LIST, EVENT_START, HABIT, JOB_ERROR, OutboxSource, TASK_DUE, TASK_LIST, copy,
 };
@@ -26,7 +27,7 @@ pub fn from_text(
     job: &JobRequest,
     text: &str,
     catch_up: bool,
-    fire_at: DateTime<Utc>,
+    fire_at: UtcStamp,
     zone: &str,
 ) -> MechanicalReminder {
     let source = OutboxSource::Schedule {
@@ -95,14 +96,14 @@ fn apply_catch_up_copy(
     source: &OutboxSource,
     title: String,
     body: String,
-    fire_at: DateTime<Utc>,
+    fire_at: UtcStamp,
     zone_name: &str,
     catch_up: bool,
 ) -> (String, String) {
     if !catch_up {
         return (title, body);
     }
-    let zone: chrono_tz::Tz = zone_name.parse().unwrap_or(chrono_tz::UTC);
+    let zone = TimeZone::get(zone_name).unwrap_or(TimeZone::UTC);
     match (kind, source) {
         (TASK_DUE, OutboxSource::VaultNote { path, label, text }) => (
             copy::task_due_title(label, text),

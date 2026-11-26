@@ -5,8 +5,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use async_trait::async_trait;
-use chrono::Utc;
-use chrono::{NaiveDate, NaiveDateTime};
+use jiff::civil::{Date, DateTime};
+use liberado_common::UtcStamp;
 use liberado_config::{UnmappedPolicy, WeeklySpendingConfig};
 use liberado_notify::web_push::keys_from_parts;
 use liberado_outbox::{NewSubscription, Outbox};
@@ -25,15 +25,26 @@ const UA_PUBLIC: &str =
     "BCVxsr7N_eNgVRqvHtD0zTZsEc6-VV-JvLexhqUzORcxaOzi6-AYWXvTBHm4bjyPjs7Vd8pZGH6SRpkNtoIAiw4";
 const AUTH: &str = "BTBZMqHH6r4Tts7J_aSIgg";
 
-fn at(year: i32, month: u32, day: u32, hour: u32, minute: u32) -> NaiveDateTime {
-    NaiveDate::from_ymd_opt(year, month, day)
-        .expect("date")
-        .and_hms_opt(hour, minute, 0)
-        .expect("time")
+fn at(year: i32, month: u32, day: u32, hour: u32, minute: u32) -> DateTime {
+    DateTime::new(
+        i16::try_from(year).expect("year"),
+        i8::try_from(month).expect("month"),
+        i8::try_from(day).expect("day"),
+        i8::try_from(hour).expect("hour"),
+        i8::try_from(minute).expect("minute"),
+        0,
+        0,
+    )
+    .expect("time")
 }
 
-fn day(year: i32, month: u32, day: u32) -> NaiveDate {
-    NaiveDate::from_ymd_opt(year, month, day).expect("date")
+fn day(year: i32, month: u32, day: u32) -> Date {
+    Date::new(
+        i16::try_from(year).expect("year"),
+        i8::try_from(month).expect("month"),
+        i8::try_from(day).expect("day"),
+    )
+    .expect("date")
 }
 
 struct FixedSource {
@@ -68,8 +79,8 @@ impl FixedSource {
 impl SpendingSource for FixedSource {
     async fn spending(
         &self,
-        _start: NaiveDate,
-        _end: NaiveDate,
+        _start: Date,
+        _end: Date,
         _exclude: &[String],
     ) -> Result<Vec<CategorySpend>, String> {
         self.calls.fetch_add(1, Ordering::SeqCst);
@@ -479,7 +490,7 @@ fn opened(with_keys: bool) -> Opened {
 fn subscribe(opened: &Opened, endpoint: &str) {
     opened
         .outbox
-        .upsert_subscription(&phone(endpoint), Utc::now())
+        .upsert_subscription(&phone(endpoint), UtcStamp::now())
         .expect("subscribe");
 }
 

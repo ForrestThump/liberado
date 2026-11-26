@@ -61,6 +61,7 @@ pub mod redact;
 pub mod risk_waiver;
 pub mod session_grants;
 mod sweeping;
+pub mod utc_stamp;
 
 pub use capability::CONSEQUENCE_GATE;
 pub use capability::{
@@ -86,6 +87,7 @@ pub use frontmatter::{
     FRONTMATTER_FENCE, body_after_frontmatter, extract_frontmatter, render_note,
 };
 pub use guidance::{GuidanceHit, ToolGuidanceSource};
+pub use jiff::civil::Weekday;
 pub use local_time::{
     DEFAULT_TIMEZONE, UnknownTimezone, UserTimezone, context_line as local_time_context_line,
     with_context as local_time_with_context,
@@ -105,3 +107,6 @@ pub use proposal::{
 pub use provenance::{HUMAN_SOURCE, PROVENANCE_KEY, WriteProvenance};
 pub use redact::redact_secrets;
 pub use risk_waiver::{Guard, RiskWaiver, RiskWaiverSet, WaiverTarget};
+pub use utc_stamp::{
+    Rfc3339Seconds, UtcStamp, duration_days, format_rfc3339, format_zoned_rfc3339,
+};

@@ -1,4 +1,5 @@
 use super::*;
+use liberado_common::UtcStamp;
 use serde_json::json;
 
 fn row(id: &str, title: &str, created_at: &str, mode: &str, profile: &str, creator: bool) -> Value {
@@ -102,12 +103,8 @@ fn same_timestamp_breaks_ties_by_id() {
 
 #[test]
 fn auto_si_fractional_digits_are_not_chronological_as_wire_text() {
-    let older = chrono::DateTime::parse_from_rfc3339("2026-02-01T00:00:00.100Z")
-        .unwrap()
-        .with_timezone(&chrono::Utc);
-    let newer = chrono::DateTime::parse_from_rfc3339("2026-02-01T00:00:00.100001Z")
-        .unwrap()
-        .with_timezone(&chrono::Utc);
+    let older = "2026-02-01T00:00:00.100Z".parse::<UtcStamp>().unwrap();
+    let newer = "2026-02-01T00:00:00.100001Z".parse::<UtcStamp>().unwrap();
     let older_text = serde_json::to_value(older).unwrap();
     let newer_text = serde_json::to_value(newer).unwrap();
     assert_eq!(older_text, json!("2026-02-01T00:00:00.100Z"));

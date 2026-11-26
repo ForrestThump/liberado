@@ -1,5 +1,6 @@
 //! Reminder outbox wiring — kept out of `lib.rs` so cyclomatic complexity stays under its ratchet.
 
+use jiff::SignedDuration;
 use std::sync::Arc;
 
 use liberado_config::Config;
@@ -48,7 +49,7 @@ pub fn cron_source_with_catch_up(
         .reminders
         .once_within_secs()
         .unwrap_or(6 * 3600);
-    let window = chrono::Duration::seconds(i64::try_from(secs).unwrap_or(21_600));
+    let window = SignedDuration::from_secs(i64::try_from(secs).unwrap_or(21_600));
     let store = Arc::new(OutboxScheduleCursor::new(outbox));
     let floor = Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
     cron_source.with_catch_up(liberado_cron::CatchUpSettings {

@@ -8,7 +8,7 @@ use super::{
     TaskEventKind, TaskLedger, WorkerPort, WorkerRunRequest, WorkerRunResult, WorkerStatus,
     tasks_root_from_worktree,
 };
-use chrono::Utc;
+use liberado_common::UtcStamp;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -106,7 +106,7 @@ impl ControlPlaneSupervisor {
         let repair_revision = requested_revision.or_else(|| record.head_revision.clone());
 
         let fail_evt = TaskEvent::new(
-            format!("evt-cifail-{}", Utc::now().timestamp_millis()),
+            format!("evt-cifail-{}", UtcStamp::now().unix_millis()),
             &record.task_id,
             TaskEventKind::CiFailed {
                 run_id: None,
@@ -129,7 +129,7 @@ impl ControlPlaneSupervisor {
                 ControlPlaneError::Protocol("resumable task omitted its session id".into())
             })?;
             let handle = RunHandle::new(
-                format!("run-kickback-{}", Utc::now().timestamp_millis()),
+                format!("run-kickback-{}", UtcStamp::now().unix_millis()),
                 self.worker.id(),
                 &updated_record.task_id,
                 updated_record.worktree.clone(),

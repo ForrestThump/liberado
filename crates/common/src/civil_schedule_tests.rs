@@ -1,4 +1,4 @@
-use chrono::Weekday;
+use jiff::civil::Weekday;
 
 use super::{CivilSchedule, civil_english, compile_cron, parse_civil, parse_compiled_cron};
 
@@ -10,7 +10,7 @@ fn spec(days: &[&str], at: &str) -> CivilSchedule {
 #[test]
 fn tuesday_at_eight_compiles_and_reads_back() {
     let parsed = spec(&["tue"], "20:00");
-    assert_eq!(parsed.days, vec![Weekday::Tue]);
+    assert_eq!(parsed.days, vec![Weekday::Tuesday]);
     assert_eq!((parsed.hour, parsed.minute, parsed.second), (20, 0, 0));
     let expr = compile_cron(&parsed);
     assert_eq!(expr, "0 0 20 * * 3 *");
@@ -26,7 +26,10 @@ fn day_aliases_and_order_round_trip_to_the_same_spec() {
     let left = spec(&["Friday", "mon", "Tues"], "08:05:09");
     let right = spec(&["monday", "tues", "fri"], "8:05:09");
     assert_eq!(left, right);
-    assert_eq!(left.days, vec![Weekday::Mon, Weekday::Tue, Weekday::Fri]);
+    assert_eq!(
+        left.days,
+        vec![Weekday::Monday, Weekday::Tuesday, Weekday::Friday]
+    );
     assert_eq!(parse_compiled_cron(&compile_cron(&left)), Some(left));
 }
 

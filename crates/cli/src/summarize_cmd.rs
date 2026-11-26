@@ -3,7 +3,7 @@
 //! Native command for summarizing loose JSON/JSONL compare artifacts. It reads
 //! records so foreign harnesses do not need Liberado's trace schema.
 
-use chrono::{DateTime, FixedOffset};
+use jiff::Timestamp;
 use liberado_common::process::std_command;
 use regex::Regex;
 use serde_json::Value;
@@ -25,12 +25,13 @@ fn text(value: Option<&Value>) -> String {
         .unwrap_or_default()
 }
 
-fn time(value: Option<&Value>) -> Option<DateTime<FixedOffset>> {
-    DateTime::parse_from_rfc3339(value?.as_str()?.replace('Z', "+00:00").as_str()).ok()
+fn time(value: Option<&Value>) -> Option<Timestamp> {
+    value?.as_str()?.replace('Z', "+00:00").parse().ok()
 }
 
-fn duration(a: Option<DateTime<FixedOffset>>, b: Option<DateTime<FixedOffset>>) -> Option<f64> {
-    Some((b? - a?).num_milliseconds() as f64 / 1000.0)
+fn duration(a: Option<Timestamp>, b: Option<Timestamp>) -> Option<f64> {
+    let delta = b?.duration_since(a?);
+    Some(delta.as_millis() as f64 / 1000.0)
 }
 
 fn duration_text(value: Option<f64>) -> String {

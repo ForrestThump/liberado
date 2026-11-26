@@ -6,7 +6,7 @@ use liberado_session::{SessionEvent, SessionEventKind};
 fn checkpoint(id: &str, label: &str, hash: &str) -> SessionEvent {
     SessionEvent {
         session_id: "s1".into(),
-        at: chrono::Utc::now(),
+        at: UtcStamp::now(),
         kind: SessionEventKind::Checkpoint {
             id: id.into(),
             label: label.into(),
@@ -18,7 +18,7 @@ fn checkpoint(id: &str, label: &str, hash: &str) -> SessionEvent {
 fn token_event() -> SessionEvent {
     SessionEvent {
         session_id: "s1".into(),
-        at: chrono::Utc::now(),
+        at: UtcStamp::now(),
         kind: SessionEventKind::Token { text: "hi".into() },
     }
 }
@@ -90,7 +90,7 @@ fn rewind_checkpoint_no_checkpoints_errors() {
 // ── the HTTP handler itself ─────────────────────────────────────────────────────────
 
 use axum::{Router, body::Body, http::Request};
-use liberado_common::{CapabilityCatalog, CapabilitySet};
+use liberado_common::{CapabilityCatalog, CapabilitySet, UtcStamp};
 use liberado_session::{GoalSessionHub, GoalSessionStore, SessionRecordStore};
 use std::time::Instant;
 use tower::ServiceExt;

@@ -17,6 +17,7 @@ coding = [
 ]
 
 [dependencies]
+jiff = { workspace = true }
 liberado-coder-agent = { workspace = true, optional = true }
 liberado-coder-core = { workspace = true, optional = true }
 liberado-common = { workspace = true }
@@ -32,7 +33,6 @@ liberado-executor = { workspace = true }
 liberado-mcp = { workspace = true }
 liberado-provider = { workspace = true }
 liberado-provider-openai-compat = { workspace = true }
-chrono = { workspace = true }
 tracing = { workspace = true }
 
 [dev-dependencies]

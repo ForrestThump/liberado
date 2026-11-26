@@ -1,4 +1,5 @@
-use chrono::{DateTime, Duration, Utc};
+use jiff::SignedDuration;
+use liberado_common::UtcStamp;
 use rusqlite::{OptionalExtension, params};
 use serde::Serialize;
 
@@ -16,7 +17,7 @@ pub struct NewReminder {
     pub target: String,
     pub title: String,
     pub body: String,
-    pub due_at: DateTime<Utc>,
+    pub due_at: UtcStamp,
     pub catch_up: bool,
     pub kind: Option<String>,
     pub source: Option<OutboxSource>,
@@ -49,7 +50,7 @@ pub struct OutboxCounts {
 }
 
 impl Outbox {
-    pub fn enqueue(&self, row: &NewReminder, now: DateTime<Utc>) -> Result<EnqueueOutcome> {
+    pub fn enqueue(&self, row: &NewReminder, now: UtcStamp) -> Result<EnqueueOutcome> {
         insert_reminder(&self.lock(), row, now)
     }
 }
@@ -57,7 +58,7 @@ impl Outbox {
 pub(crate) fn insert_reminder(
     conn: &rusqlite::Connection,
     row: &NewReminder,
-    now: DateTime<Utc>,
+    now: UtcStamp,
 ) -> Result<EnqueueOutcome> {
     let token = new_token();
     let hash = hash_token(&token);
@@ -94,7 +95,7 @@ pub(crate) fn insert_reminder(
 }
 
 impl Outbox {
-    pub fn due_rows(&self, now: DateTime<Utc>, max_catchup: u32) -> Result<Vec<OpenRow>> {
+    pub fn due_rows(&self, now: UtcStamp, max_catchup: u32) -> Result<Vec<OpenRow>> {
         let when = stamp(now);
         let conn = self.lock();
         let mut stmt = conn.prepare(
@@ -123,8 +124,8 @@ impl Outbox {
         Ok(normal)
     }
 
-    pub fn lease(&self, ids: &[i64], now: DateTime<Utc>) -> Result<()> {
-        let until = stamp(now + Duration::minutes(2));
+    pub fn lease(&self, ids: &[i64], now: UtcStamp) -> Result<()> {
+        let until = stamp(now + SignedDuration::from_mins(2));
         let conn = self.lock();
         let tx = conn.unchecked_transaction()?;
         for id in ids {
@@ -166,7 +167,7 @@ impl Outbox {
         Ok(())
     }
 
-    pub fn mark_accepted(&self, ids: &[i64], now: DateTime<Utc>) -> Result<()> {
+    pub fn mark_accepted(&self, ids: &[i64], now: UtcStamp) -> Result<()> {
         let when = stamp(now);
         let conn = self.lock();
         let tx = conn.unchecked_transaction()?;
@@ -187,7 +188,7 @@ impl Outbox {
         &self,
         ids: &[i64],
         message: &str,
-        now: DateTime<Utc>,
+        now: UtcStamp,
         max_attempts: i64,
     ) -> Result<()> {
         let conn = self.lock();
@@ -200,7 +201,7 @@ impl Outbox {
             if attempts >= max_attempts {
                 finish_dead(&tx, *id, message, now)?;
             } else {
-                let next = stamp(now + Duration::seconds(backoff_secs(attempts)));
+                let next = stamp(now + SignedDuration::from_secs(backoff_secs(attempts)));
                 tx.execute(
                     "UPDATE outbox
                      SET state = 'failed', next_attempt_at = ?1, lease_until = NULL, last_error = ?2
@@ -213,7 +214,7 @@ impl Outbox {
         Ok(())
     }
 
-    pub fn mark_dead(&self, ids: &[i64], message: &str, now: DateTime<Utc>) -> Result<()> {
+    pub fn mark_dead(&self, ids: &[i64], message: &str, now: UtcStamp) -> Result<()> {
         let conn = self.lock();
         let tx = conn.unchecked_transaction()?;
         for id in ids {
@@ -223,7 +224,7 @@ impl Outbox {
         Ok(())
     }
 
-    pub fn retry(&self, id: i64, now: DateTime<Utc>) -> Result<bool> {
+    pub fn retry(&self, id: i64, now: UtcStamp) -> Result<bool> {
         let when = stamp(now);
         let changed = self.lock().execute(
             "UPDATE outbox
@@ -235,7 +236,7 @@ impl Outbox {
         Ok(changed == 1)
     }
 
-    pub fn counts(&self, now: DateTime<Utc>) -> Result<OutboxCounts> {
+    pub fn counts(&self, now: UtcStamp) -> Result<OutboxCounts> {
         let conn = self.lock();
         let pending = count_states(&conn, &["pending", "delivering"])?;
         let failed = count_states(&conn, &["failed"])?;
@@ -284,8 +285,8 @@ impl Outbox {
             .map_err(Into::into)
     }
 
-    pub fn prune(&self, now: DateTime<Utc>) -> Result<usize> {
-        let cutoff = stamp(now - Duration::days(30));
+    pub fn prune(&self, now: UtcStamp) -> Result<usize> {
+        let cutoff = stamp(now - liberado_common::duration_days(30));
         let changed = self.lock().execute(
             "DELETE FROM outbox
              WHERE state IN ('delivered', 'dead') AND finished_at IS NOT NULL AND finished_at < ?1",
@@ -312,7 +313,7 @@ impl Outbox {
 
     /// `Ok(true)` when this call set `acked_at`. A bad token, a missing row, and
     /// a row that was already acked return `Ok(false)`.
-    pub fn ack(&self, id: i64, token: &str, now: DateTime<Utc>) -> Result<bool> {
+    pub fn ack(&self, id: i64, token: &str, now: UtcStamp) -> Result<bool> {
         if !self.push_token_matches(id, token)? {
             return Ok(false);
         }
@@ -360,7 +361,7 @@ fn finish_dead(
     tx: &rusqlite::Transaction<'_>,
     id: i64,
     message: &str,
-    now: DateTime<Utc>,
+    now: UtcStamp,
 ) -> Result<()> {
     tx.execute(
         "UPDATE outbox
@@ -384,9 +385,9 @@ fn count_states(conn: &rusqlite::Connection, states: &[&str]) -> Result<u64> {
     Ok(total)
 }
 
-fn age_secs(created: &str, now: DateTime<Utc>) -> Result<u64> {
+fn age_secs(created: &str, now: UtcStamp) -> Result<u64> {
     let at = parse_stamp(created)?;
-    Ok(now.signed_duration_since(at).num_seconds().max(0) as u64)
+    Ok(now.duration_since(at).as_secs().max(0) as u64)
 }
 
 fn backoff_secs(attempts: i64) -> i64 {

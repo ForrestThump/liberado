@@ -36,7 +36,7 @@ dependencies = [
  "accesskit",
  "accesskit_consumer 0.36.0",
  "atspi-common",
- "phf 0.13.1",
+ "phf",
  "serde",
  "zvariant",
 ]
@@ -959,7 +959,7 @@ version = "3.9.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6dee98b0db6a962de883bf5d20362dee4d7ca0d12fe39a7c6c73c844e1cd7c1f"
 dependencies = [
- "darling 0.20.11",
+ "darling 0.23.0",
  "ident_case",
  "prettyplease",
  "proc-macro2",
@@ -1262,30 +1262,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "chrono"
-version = "0.4.45"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1aa79e62e7697b8e29b513a68abacf485adcd1fe8284a4316c5ae868e6633327"
-dependencies = [
- "iana-time-zone",
- "js-sys",
- "num-traits",
- "serde",
- "wasm-bindgen",
- "windows-link",
-]
-
-[[package]]
-name = "chrono-tz"
-version = "0.10.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a6139a8597ed92cf816dfb33f5dd6cf0bb93a6adc938f11039f371bc5bcd26c3"
-dependencies = [
- "chrono",
- "phf 0.12.1",
-]
-
-[[package]]
 name = "ciborium"
 version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1387,7 +1363,7 @@ checksum = "af491d569909a7e4dee0ad7db7f5341fef5c614d5b8ec8cf765732aba3cff681"
 dependencies = [
  "serde",
  "termcolor",
- "unicode-width 0.1.14",
+ "unicode-width 0.2.0",
 ]
 
 [[package]]
@@ -1417,7 +1393,7 @@ version = "3.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "faf9468729b8cbcea668e36183cb69d317348c2e08e994829fb56ebfdfbaac34"
 dependencies = [
- "windows-sys 0.48.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1712,17 +1688,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9481c1c90cbf2ac953f07c8d4a58aa3945c425b7185c9154d67a65e4230da511"
 dependencies = [
  "cfg-if",
-]
-
-[[package]]
-name = "cron"
-version = "0.12.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6f8c3e73077b4b4a6ab1ea5047c37c57aee77657bc8ecd6f29b0af082d0b0c07"
-dependencies = [
- "chrono",
- "nom 7.1.3",
- "once_cell",
 ]
 
 [[package]]
@@ -3293,9 +3258,9 @@ checksum = "aa9a19cbb55df58761df49b23516a86d432839add4af60fc256da840f66ed35b"
 
 [[package]]
 name = "form_urlencoded"
-version = "1.2.2"
+version = "1.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cb4cb245038516f5f85277875cdaa4f7d2c9a0fa0468de06ed190163b1581fcf"
+checksum = "afa489199eaffb1211795df1c6236ce1ad0d41a6fa45250add73e3b02420f06e"
 dependencies = [
  "percent-encoding",
 ]
@@ -4925,30 +4890,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "iana-time-zone"
-version = "0.1.65"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e31bc9ad994ba00e440a8aa5c9ef0ec67d5cb5e5cb0cc7f8b744a35b389cc470"
-dependencies = [
- "android_system_properties",
- "core-foundation-sys",
- "iana-time-zone-haiku",
- "js-sys",
- "log",
- "wasm-bindgen",
- "windows-core",
-]
-
-[[package]]
-name = "iana-time-zone-haiku"
-version = "0.1.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f31827a206f56af32e590ba56d5d2d085f558508192593743f16b2306495269f"
-dependencies = [
- "cc",
-]
-
-[[package]]
 name = "icu_collections"
 version = "2.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5247,10 +5188,12 @@ dependencies = [
  "jiff-core",
  "jiff-static",
  "jiff-tzdb-platform",
+ "js-sys",
  "log",
  "portable-atomic",
  "portable-atomic-util",
  "serde_core",
+ "wasm-bindgen",
  "windows-link",
 ]
 
@@ -5261,6 +5204,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7feca88439efe53da3754500c1851dedf3cb36c524dd5cf8225cc0794de95d09"
 dependencies = [
  "defmt",
+]
+
+[[package]]
+name = "jiff-cron"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fa4804a5e6441082f7b8f2e840c639e489902aba5533c1e95c2fb7f0ab23d96c"
+dependencies = [
+ "jiff",
+ "phf",
+ "winnow 1.0.3",
 ]
 
 [[package]]
@@ -5516,7 +5470,6 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "chat-client-contract",
- "chrono",
  "futures",
  "liberado-bootstrap",
  "liberado-coder-agent",
@@ -5561,7 +5514,7 @@ name = "liberado-bootstrap"
 version = "0.1.0"
 dependencies = [
  "async-trait",
- "chrono",
+ "jiff",
  "liberado-coder-agent",
  "liberado-coder-core",
  "liberado-common",
@@ -5589,7 +5542,6 @@ dependencies = [
 name = "liberado-chat-search"
 version = "0.1.0"
 dependencies = [
- "chrono",
  "liberado-conversation-store",
  "liberado-provider",
  "liberado-session-store",
@@ -5621,9 +5573,9 @@ name = "liberado-cli"
 version = "0.1.0"
 dependencies = [
  "chat-client-contract",
- "chrono",
  "fs4",
  "futures",
+ "jiff",
  "liberado-coder-core",
  "liberado-common",
  "liberado-config",
@@ -5652,7 +5604,6 @@ name = "liberado-coder-agent"
 version = "0.1.0"
 dependencies = [
  "async-trait",
- "chrono",
  "liberado-coder-core",
  "liberado-coder-sandbox",
  "liberado-coder-tools",
@@ -5674,7 +5625,6 @@ name = "liberado-coder-core"
 version = "0.1.0"
 dependencies = [
  "async-trait",
- "chrono",
  "fs4",
  "libc",
  "liberado-common",
@@ -5762,9 +5712,8 @@ name = "liberado-common"
 version = "0.1.0"
 dependencies = [
  "async-trait",
- "chrono",
- "chrono-tz",
  "hmac",
+ "jiff",
  "liberado-config-loader",
  "proptest",
  "rand 0.8.6",
@@ -5805,7 +5754,7 @@ dependencies = [
 name = "liberado-config-loader"
 version = "0.1.0"
 dependencies = [
- "cron",
+ "jiff-cron",
  "liberado-common",
  "proptest",
  "serde",
@@ -5822,9 +5771,9 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "chat-client-contract",
- "chrono",
- "cron",
  "futures",
+ "jiff",
+ "jiff-cron",
  "liberado-common",
  "reqwest 0.12.28",
  "serde",
@@ -5840,8 +5789,8 @@ name = "liberado-conversation-store"
 version = "0.1.0"
 dependencies = [
  "async-trait",
- "chrono",
  "futures",
+ "liberado-common",
  "liberado-provider",
  "liberado-session",
  "serde",
@@ -5871,9 +5820,8 @@ name = "liberado-cron"
 version = "0.1.0"
 dependencies = [
  "async-trait",
- "chrono",
- "chrono-tz",
- "cron",
+ "jiff",
+ "jiff-cron",
  "liberado-common",
  "serde_json",
  "thiserror 2.0.18",
@@ -5886,9 +5834,8 @@ name = "liberado-daemon"
 version = "0.1.0"
 dependencies = [
  "async-trait",
- "chrono",
- "chrono-tz",
  "glob",
+ "jiff",
  "liberado-common",
  "liberado-config",
  "liberado-config-loader",
@@ -5969,7 +5916,6 @@ name = "liberado-executor"
 version = "0.1.0"
 dependencies = [
  "async-trait",
- "chrono",
  "futures",
  "liberado-common",
  "liberado-notify",
@@ -5990,7 +5936,6 @@ dependencies = [
 name = "liberado-harness-eval"
 version = "0.1.0"
 dependencies = [
- "chrono",
  "liberado-coder-core",
  "liberado-common",
  "notify",
@@ -6008,7 +5953,6 @@ name = "liberado-heuristics-tuner"
 version = "0.1.0"
 dependencies = [
  "async-trait",
- "chrono",
  "liberado-coder-agent",
  "liberado-coder-core",
  "liberado-common",
@@ -6034,8 +5978,8 @@ name = "liberado-main-agent"
 version = "0.1.0"
 dependencies = [
  "async-trait",
- "chrono",
  "futures",
+ "jiff",
  "liberado-agent-workspace",
  "liberado-common",
  "liberado-config-loader",
@@ -6141,7 +6085,6 @@ name = "liberado-memory-store"
 version = "0.1.0"
 dependencies = [
  "async-trait",
- "chrono",
  "liberado-common",
  "liberado-vault",
  "serde",
@@ -6169,7 +6112,6 @@ dependencies = [
  "async-trait",
  "aws-lc-rs",
  "base64 0.22.1",
- "chrono",
  "liberado-common",
  "liberado-messaging",
  "liberado-outbox",
@@ -6186,7 +6128,7 @@ dependencies = [
 name = "liberado-operator-dogfood-mcp"
 version = "0.1.0"
 dependencies = [
- "chrono",
+ "liberado-common",
  "reqwest 0.12.28",
  "serde_json",
  "tokio",
@@ -6219,7 +6161,7 @@ name = "liberado-orchestrator"
 version = "0.1.0"
 dependencies = [
  "async-trait",
- "chrono",
+ "jiff",
  "liberado-common",
  "liberado-executor",
  "liberado-notify",
@@ -6240,8 +6182,8 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
- "chrono",
- "chrono-tz",
+ "jiff",
+ "liberado-common",
  "rand 0.8.6",
  "rusqlite",
  "serde",
@@ -6329,9 +6271,9 @@ dependencies = [
  "axum",
  "base64 0.22.1",
  "chat-client-contract",
- "chrono",
  "futures",
  "http-body-util",
+ "jiff",
  "liberado-bootstrap",
  "liberado-chat-search",
  "liberado-coder-agent",
@@ -6384,7 +6326,7 @@ name = "liberado-session"
 version = "0.1.0"
 dependencies = [
  "async-trait",
- "chrono",
+ "jiff",
  "liberado-common",
  "proptest",
  "serde",
@@ -6400,7 +6342,6 @@ name = "liberado-session-store"
 version = "0.1.0"
 dependencies = [
  "async-trait",
- "chrono",
  "futures",
  "liberado-common",
  "liberado-conversation-store",
@@ -6447,7 +6388,7 @@ name = "liberado-telegram-approvals"
 version = "0.1.0"
 dependencies = [
  "async-trait",
- "chrono",
+ "jiff",
  "liberado-common",
  "liberado-config-loader",
  "liberado-daemon",
@@ -6511,10 +6452,10 @@ name = "liberado-tui"
 version = "0.1.0"
 dependencies = [
  "chat-client-contract",
- "chrono",
  "crossterm",
  "ctrlc",
  "futures",
+ "jiff",
  "liberado-commands",
  "liberado-markdown",
  "liberado-theme",
@@ -6552,9 +6493,9 @@ name = "liberado-webui"
 version = "0.1.0"
 dependencies = [
  "chat-client-contract",
- "chrono",
  "dioxus",
  "getrandom 0.2.17",
+ "jiff",
  "js-sys",
  "liberado-commands",
  "liberado-theme",
@@ -8041,21 +7982,12 @@ dependencies = [
 
 [[package]]
 name = "phf"
-version = "0.12.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "913273894cec178f401a31ec4b656318d95473527be05c0752cc41cdc32be8b7"
-dependencies = [
- "phf_shared 0.12.1",
-]
-
-[[package]]
-name = "phf"
 version = "0.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c1562dc717473dbaa4c1f85a36410e03c047b2e7df7f45ee938fbef64ae7fadf"
 dependencies = [
  "phf_macros",
- "phf_shared 0.13.1",
+ "phf_shared",
  "serde",
 ]
 
@@ -8066,7 +7998,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "135ace3a761e564ec88c03a77317a7c6b80bb7f7135ef2544dbe054243b89737"
 dependencies = [
  "fastrand",
- "phf_shared 0.13.1",
+ "phf_shared",
 ]
 
 [[package]]
@@ -8076,19 +8008,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "812f032b54b1e759ccd5f8b6677695d5268c588701effba24601f6932f8269ef"
 dependencies = [
  "phf_generator",
- "phf_shared 0.13.1",
+ "phf_shared",
  "proc-macro2",
  "quote",
  "syn 2.0.118",
-]
-
-[[package]]
-name = "phf_shared"
-version = "0.12.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "06005508882fb681fd97892ecff4b7fd0fee13ef1aa569f8695dae7ab9099981"
-dependencies = [
- "siphasher",
 ]
 
 [[package]]
@@ -8340,7 +8263,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b570b25f7617e43d59005d0990ccb79e950a423952cea19671b7a876da390adf"
 dependencies = [
  "anyhow",
- "itertools 0.13.0",
+ "itertools 0.14.0",
  "proc-macro2",
  "quote",
  "syn 2.0.118",
@@ -9342,8 +9265,8 @@ version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a2b42f36aa1cd011945615b92222f6bf73c599a102a300334cd7f8dbeec726cc"
 dependencies = [
- "chrono",
  "dyn-clone",
+ "jiff",
  "ref-cast",
  "schemars_derive",
  "serde",
@@ -9669,7 +9592,7 @@ version = "3.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32824fab5e16e6c4d86dc1ba84489390419a39f97699852b66480bb87d297ed8"
 dependencies = [
- "dirs 5.0.1",
+ "dirs 6.0.0",
 ]
 
 [[package]]
@@ -10173,7 +10096,7 @@ name = "sysmap-core"
 version = "0.1.0"
 dependencies = [
  "cargo_metadata",
- "chrono",
+ "liberado-common",
  "serde",
  "serde_json",
  "tempfile",
@@ -11005,8 +10928,9 @@ dependencies = [
 [[package]]
 name = "turbomcp"
 version = "3.1.5"
-source = "git+https://github.com/ForrestThump/turbomcp?tag=liberado-2026-08-27#d5d9a9f8321f07b9693e9869b8afebfecc049e71"
+source = "git+https://github.com/ForrestThump/turbomcp?rev=b7774c963adaf31999b2e6db7d7715c59b724646#b7774c963adaf31999b2e6db7d7715c59b724646"
 dependencies = [
+ "jiff",
  "schemars",
  "serde",
  "serde_json",
@@ -11026,9 +10950,8 @@ dependencies = [
 [[package]]
 name = "turbomcp-client"
 version = "3.1.5"
-source = "git+https://github.com/ForrestThump/turbomcp?tag=liberado-2026-08-27#d5d9a9f8321f07b9693e9869b8afebfecc049e71"
+source = "git+https://github.com/ForrestThump/turbomcp?rev=b7774c963adaf31999b2e6db7d7715c59b724646#b7774c963adaf31999b2e6db7d7715c59b724646"
 dependencies = [
- "chrono",
  "futures",
  "futures-util",
  "parking_lot",
@@ -11049,11 +10972,11 @@ dependencies = [
 [[package]]
 name = "turbomcp-core"
 version = "3.1.5"
-source = "git+https://github.com/ForrestThump/turbomcp?tag=liberado-2026-08-27#d5d9a9f8321f07b9693e9869b8afebfecc049e71"
+source = "git+https://github.com/ForrestThump/turbomcp?rev=b7774c963adaf31999b2e6db7d7715c59b724646#b7774c963adaf31999b2e6db7d7715c59b724646"
 dependencies = [
  "base64 0.22.1",
- "chrono",
  "hashbrown 0.17.1",
+ "jiff",
  "rkyv",
  "serde",
  "serde_json",
@@ -11065,7 +10988,7 @@ dependencies = [
 [[package]]
 name = "turbomcp-http"
 version = "3.1.5"
-source = "git+https://github.com/ForrestThump/turbomcp?tag=liberado-2026-08-27#d5d9a9f8321f07b9693e9869b8afebfecc049e71"
+source = "git+https://github.com/ForrestThump/turbomcp?rev=b7774c963adaf31999b2e6db7d7715c59b724646#b7774c963adaf31999b2e6db7d7715c59b724646"
 dependencies = [
  "bytes",
  "fastrand",
@@ -11083,7 +11006,7 @@ dependencies = [
 [[package]]
 name = "turbomcp-macros"
 version = "3.1.5"
-source = "git+https://github.com/ForrestThump/turbomcp?tag=liberado-2026-08-27#d5d9a9f8321f07b9693e9869b8afebfecc049e71"
+source = "git+https://github.com/ForrestThump/turbomcp?rev=b7774c963adaf31999b2e6db7d7715c59b724646#b7774c963adaf31999b2e6db7d7715c59b724646"
 dependencies = [
  "proc-macro-crate",
  "proc-macro2",
@@ -11098,17 +11021,17 @@ dependencies = [
 [[package]]
 name = "turbomcp-protocol"
 version = "3.1.5"
-source = "git+https://github.com/ForrestThump/turbomcp?tag=liberado-2026-08-27#d5d9a9f8321f07b9693e9869b8afebfecc049e71"
+source = "git+https://github.com/ForrestThump/turbomcp?rev=b7774c963adaf31999b2e6db7d7715c59b724646#b7774c963adaf31999b2e6db7d7715c59b724646"
 dependencies = [
  "arc-swap",
  "bytes",
- "chrono",
  "ciborium",
  "compact_str 0.9.1",
  "crossbeam",
  "dashmap",
  "flate2",
  "futures",
+ "jiff",
  "parking_lot",
  "percent-encoding",
  "pin-project-lite",
@@ -11133,7 +11056,7 @@ dependencies = [
 [[package]]
 name = "turbomcp-server"
 version = "3.1.5"
-source = "git+https://github.com/ForrestThump/turbomcp?tag=liberado-2026-08-27#d5d9a9f8321f07b9693e9869b8afebfecc049e71"
+source = "git+https://github.com/ForrestThump/turbomcp?rev=b7774c963adaf31999b2e6db7d7715c59b724646#b7774c963adaf31999b2e6db7d7715c59b724646"
 dependencies = [
  "async-trait",
  "bytes",
@@ -11158,7 +11081,7 @@ dependencies = [
 [[package]]
 name = "turbomcp-stdio"
 version = "3.1.5"
-source = "git+https://github.com/ForrestThump/turbomcp?tag=liberado-2026-08-27#d5d9a9f8321f07b9693e9869b8afebfecc049e71"
+source = "git+https://github.com/ForrestThump/turbomcp?rev=b7774c963adaf31999b2e6db7d7715c59b724646#b7774c963adaf31999b2e6db7d7715c59b724646"
 dependencies = [
  "bytes",
  "futures",
@@ -11175,7 +11098,7 @@ dependencies = [
 [[package]]
 name = "turbomcp-telemetry"
 version = "3.1.5"
-source = "git+https://github.com/ForrestThump/turbomcp?tag=liberado-2026-08-27#d5d9a9f8321f07b9693e9869b8afebfecc049e71"
+source = "git+https://github.com/ForrestThump/turbomcp?rev=b7774c963adaf31999b2e6db7d7715c59b724646#b7774c963adaf31999b2e6db7d7715c59b724646"
 dependencies = [
  "futures-util",
  "http",
@@ -11200,16 +11123,16 @@ dependencies = [
 [[package]]
 name = "turbomcp-transport"
 version = "3.1.5"
-source = "git+https://github.com/ForrestThump/turbomcp?tag=liberado-2026-08-27#d5d9a9f8321f07b9693e9869b8afebfecc049e71"
+source = "git+https://github.com/ForrestThump/turbomcp?rev=b7774c963adaf31999b2e6db7d7715c59b724646#b7774c963adaf31999b2e6db7d7715c59b724646"
 dependencies = [
  "ahash",
  "anyhow",
  "arc-swap",
  "bytes",
- "chrono",
  "dashmap",
  "fastrand",
  "futures",
+ "jiff",
  "parking_lot",
  "pin-project-lite",
  "rand 0.9.4",
@@ -11233,7 +11156,7 @@ dependencies = [
 [[package]]
 name = "turbomcp-transport-traits"
 version = "3.1.5"
-source = "git+https://github.com/ForrestThump/turbomcp?tag=liberado-2026-08-27#d5d9a9f8321f07b9693e9869b8afebfecc049e71"
+source = "git+https://github.com/ForrestThump/turbomcp?rev=b7774c963adaf31999b2e6db7d7715c59b724646#b7774c963adaf31999b2e6db7d7715c59b724646"
 dependencies = [
  "bytes",
  "serde",
@@ -11246,7 +11169,7 @@ dependencies = [
 [[package]]
 name = "turbomcp-types"
 version = "3.1.5"
-source = "git+https://github.com/ForrestThump/turbomcp?tag=liberado-2026-08-27#d5d9a9f8321f07b9693e9869b8afebfecc049e71"
+source = "git+https://github.com/ForrestThump/turbomcp?rev=b7774c963adaf31999b2e6db7d7715c59b724646#b7774c963adaf31999b2e6db7d7715c59b724646"
 dependencies = [
  "serde",
  "serde_json",
@@ -11255,7 +11178,7 @@ dependencies = [
 [[package]]
 name = "turbovault"
 version = "1.6.0"
-source = "git+https://github.com/ForrestThump/turbovault?tag=liberado-2026-11-10#260dc271735b8db206788296fdca6f15f1fc5430"
+source = "git+https://github.com/ForrestThump/turbovault?rev=179ded6003e05071b6609bbc8a5edbef04dc5fa9#179ded6003e05071b6609bbc8a5edbef04dc5fa9"
 dependencies = [
  "anyhow",
  "clap",
@@ -11284,9 +11207,9 @@ dependencies = [
 [[package]]
 name = "turbovault-audit"
 version = "1.6.0"
-source = "git+https://github.com/ForrestThump/turbovault?tag=liberado-2026-11-10#260dc271735b8db206788296fdca6f15f1fc5430"
+source = "git+https://github.com/ForrestThump/turbovault?rev=179ded6003e05071b6609bbc8a5edbef04dc5fa9#179ded6003e05071b6609bbc8a5edbef04dc5fa9"
 dependencies = [
- "chrono",
+ "jiff",
  "log",
  "serde",
  "serde_json",
@@ -11301,9 +11224,8 @@ dependencies = [
 [[package]]
 name = "turbovault-batch"
 version = "1.6.0"
-source = "git+https://github.com/ForrestThump/turbovault?tag=liberado-2026-11-10#260dc271735b8db206788296fdca6f15f1fc5430"
+source = "git+https://github.com/ForrestThump/turbovault?rev=179ded6003e05071b6609bbc8a5edbef04dc5fa9#179ded6003e05071b6609bbc8a5edbef04dc5fa9"
 dependencies = [
- "chrono",
  "schemars",
  "serde",
  "serde_json",
@@ -11316,9 +11238,9 @@ dependencies = [
 [[package]]
 name = "turbovault-core"
 version = "1.6.0"
-source = "git+https://github.com/ForrestThump/turbovault?tag=liberado-2026-11-10#260dc271735b8db206788296fdca6f15f1fc5430"
+source = "git+https://github.com/ForrestThump/turbovault?rev=179ded6003e05071b6609bbc8a5edbef04dc5fa9#179ded6003e05071b6609bbc8a5edbef04dc5fa9"
 dependencies = [
- "chrono",
+ "jiff",
  "log",
  "parking_lot",
  "serde",
@@ -11335,9 +11257,8 @@ dependencies = [
 [[package]]
 name = "turbovault-export"
 version = "1.6.0"
-source = "git+https://github.com/ForrestThump/turbovault?tag=liberado-2026-11-10#260dc271735b8db206788296fdca6f15f1fc5430"
+source = "git+https://github.com/ForrestThump/turbovault?rev=179ded6003e05071b6609bbc8a5edbef04dc5fa9#179ded6003e05071b6609bbc8a5edbef04dc5fa9"
 dependencies = [
- "chrono",
  "serde",
  "serde_json",
  "turbovault-core",
@@ -11346,7 +11267,7 @@ dependencies = [
 [[package]]
 name = "turbovault-git"
 version = "1.6.0"
-source = "git+https://github.com/ForrestThump/turbovault?tag=liberado-2026-11-10#260dc271735b8db206788296fdca6f15f1fc5430"
+source = "git+https://github.com/ForrestThump/turbovault?rev=179ded6003e05071b6609bbc8a5edbef04dc5fa9#179ded6003e05071b6609bbc8a5edbef04dc5fa9"
 dependencies = [
  "fs4",
  "git2",
@@ -11360,7 +11281,7 @@ dependencies = [
 [[package]]
 name = "turbovault-graph"
 version = "1.6.0"
-source = "git+https://github.com/ForrestThump/turbovault?tag=liberado-2026-11-10#260dc271735b8db206788296fdca6f15f1fc5430"
+source = "git+https://github.com/ForrestThump/turbovault?rev=179ded6003e05071b6609bbc8a5edbef04dc5fa9#179ded6003e05071b6609bbc8a5edbef04dc5fa9"
 dependencies = [
  "anyhow",
  "dashmap",
@@ -11375,7 +11296,7 @@ dependencies = [
 [[package]]
 name = "turbovault-parser"
 version = "1.6.0"
-source = "git+https://github.com/ForrestThump/turbovault?tag=liberado-2026-11-10#260dc271735b8db206788296fdca6f15f1fc5430"
+source = "git+https://github.com/ForrestThump/turbovault?rev=179ded6003e05071b6609bbc8a5edbef04dc5fa9#179ded6003e05071b6609bbc8a5edbef04dc5fa9"
 dependencies = [
  "log",
  "pulldown-cmark",
@@ -11389,7 +11310,7 @@ dependencies = [
 [[package]]
 name = "turbovault-plugin-api"
 version = "1.6.0"
-source = "git+https://github.com/ForrestThump/turbovault?tag=liberado-2026-11-10#260dc271735b8db206788296fdca6f15f1fc5430"
+source = "git+https://github.com/ForrestThump/turbovault?rev=179ded6003e05071b6609bbc8a5edbef04dc5fa9#179ded6003e05071b6609bbc8a5edbef04dc5fa9"
 dependencies = [
  "async-trait",
  "serde",
@@ -11402,10 +11323,10 @@ dependencies = [
 [[package]]
 name = "turbovault-plugin-tasks"
 version = "1.6.0"
-source = "git+https://github.com/ForrestThump/turbovault?tag=liberado-2026-11-10#260dc271735b8db206788296fdca6f15f1fc5430"
+source = "git+https://github.com/ForrestThump/turbovault?rev=179ded6003e05071b6609bbc8a5edbef04dc5fa9#179ded6003e05071b6609bbc8a5edbef04dc5fa9"
 dependencies = [
  "async-trait",
- "chrono",
+ "jiff",
  "serde",
  "serde_json",
  "tokio",
@@ -11418,11 +11339,11 @@ dependencies = [
 [[package]]
 name = "turbovault-tools"
 version = "1.6.0"
-source = "git+https://github.com/ForrestThump/turbovault?tag=liberado-2026-11-10#260dc271735b8db206788296fdca6f15f1fc5430"
+source = "git+https://github.com/ForrestThump/turbovault?rev=179ded6003e05071b6609bbc8a5edbef04dc5fa9#179ded6003e05071b6609bbc8a5edbef04dc5fa9"
 dependencies = [
  "anyhow",
- "chrono",
  "futures",
+ "jiff",
  "log",
  "regex",
  "serde",
@@ -11450,7 +11371,7 @@ dependencies = [
 [[package]]
 name = "turbovault-vault"
 version = "1.6.0"
-source = "git+https://github.com/ForrestThump/turbovault?tag=liberado-2026-11-10#260dc271735b8db206788296fdca6f15f1fc5430"
+source = "git+https://github.com/ForrestThump/turbovault?rev=179ded6003e05071b6609bbc8a5edbef04dc5fa9#179ded6003e05071b6609bbc8a5edbef04dc5fa9"
 dependencies = [
  "anyhow",
  "dashmap",
@@ -11479,11 +11400,10 @@ dependencies = [
 [[package]]
 name = "turbovault-vector"
 version = "1.6.0"
-source = "git+https://github.com/ForrestThump/turbovault?tag=liberado-2026-11-10#260dc271735b8db206788296fdca6f15f1fc5430"
+source = "git+https://github.com/ForrestThump/turbovault?rev=179ded6003e05071b6609bbc8a5edbef04dc5fa9#179ded6003e05071b6609bbc8a5edbef04dc5fa9"
 dependencies = [
  "anyhow",
  "async-trait",
- "chrono",
  "fastembed",
  "rusqlite",
  "serde",
@@ -11718,9 +11638,9 @@ dependencies = [
 
 [[package]]
 name = "url"
-version = "2.5.8"
+version = "2.5.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ff67a8a4397373c3ef660812acab3268222035010ab8680ec4215f38ba3d0eed"
+checksum = "f00cd2407bb42c0ef17be88d4cf020f5cceffd121665bac9b8b9493a369b3b1a"
 dependencies = [
  "form_urlencoded",
  "idna",
@@ -12497,7 +12417,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.48.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

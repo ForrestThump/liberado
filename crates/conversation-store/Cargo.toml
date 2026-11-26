@@ -13,9 +13,9 @@ liberado-provider = { workspace = true }
 # For `SessionGrant` on the conversation header: a conversation IS a session (D7), so its authority
 # is a session attribute. `store` sits above `kernel`, so this is a downward dependency.
 liberado-session = { workspace = true }
+liberado-common = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-chrono = { workspace = true }
 thiserror = { workspace = true }
 async-trait = { workspace = true }
 ulid = { workspace = true }

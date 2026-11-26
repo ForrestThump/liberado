@@ -1,6 +1,8 @@
 //! Token-scoped tray actions: same transitions as owner complete and snooze,
 //! refused without the row's push token, and still closed on the owner routes.
 
+use jiff::SignedDuration;
+use liberado_common::UtcStamp;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -9,7 +11,6 @@ use axum::{
     body::Body,
     http::{Request, StatusCode},
 };
-use chrono::{Duration, SecondsFormat, Utc};
 use liberado_outbox::{EnqueueOutcome, NewReminder, Outbox, OutboxSource, RES_COMPLETED, TASK_DUE};
 use tower::ServiceExt;
 
@@ -84,7 +85,7 @@ struct Delivered {
 }
 
 fn deliver_row(outbox: &Outbox, row: NewReminder) -> Delivered {
-    let now = Utc::now();
+    let now = UtcStamp::now();
     let id = match outbox.enqueue(&row, now).unwrap() {
         liberado_outbox::EnqueueOutcome::Inserted(id) => id,
         liberado_outbox::EnqueueOutcome::Duplicate => panic!("duplicate row"),
@@ -102,7 +103,7 @@ fn deliver_row(outbox: &Outbox, row: NewReminder) -> Delivered {
 }
 
 fn vault_task(key: &str, text: &str) -> NewReminder {
-    let now = Utc::now();
+    let now = UtcStamp::now();
     NewReminder {
         idempotency_key: key.into(),
         channel: "webpush".into(),
@@ -205,14 +206,14 @@ async fn action_snooze_matches_owner_snooze_and_detail_shows_it() {
 
     let record = outbox.fetch_record(delivered.id).unwrap().unwrap();
     assert_eq!(record.resolution.as_deref(), Some("snoozed"));
-    let after = Utc::now();
+    let after = UtcStamp::now();
     assert!(
         outbox.due_rows(after, 10).unwrap().is_empty(),
         "snoozed follow-up must not deliver before its due_at"
     );
-    let too_soon = after + Duration::minutes(14);
+    let too_soon = after + SignedDuration::from_mins(14);
     assert!(outbox.due_rows(too_soon, 10).unwrap().is_empty());
-    let fire = after + Duration::minutes(15) + Duration::seconds(2);
+    let fire = after + SignedDuration::from_mins(15) + SignedDuration::from_secs(2);
     let rows = outbox.due_rows(fire, 10).unwrap();
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].title, "Snoozed: Due now: Call dentist");
@@ -364,7 +365,7 @@ async fn already_resolved_is_409_and_unsupported_kind_is_400() {
     );
     assert!(
         outbox
-            .due_rows(Utc::now() + Duration::hours(1), 10)
+            .due_rows(UtcStamp::now() + SignedDuration::from_hours(1), 10)
             .unwrap()
             .is_empty()
     );
@@ -397,8 +398,8 @@ async fn owner_detail_still_requires_auth_on_the_production_shape() {
 #[tokio::test(flavor = "current_thread")]
 async fn tray_snooze_follow_up_uses_action_time_and_log_hides_the_task() {
     let outbox = open_outbox();
-    let now = Utc::now();
-    let due = now - Duration::minutes(45);
+    let now = UtcStamp::now();
+    let due = now - SignedDuration::from_mins(45);
     let EnqueueOutcome::Inserted(id) = outbox
         .enqueue(
             &NewReminder {
@@ -424,7 +425,7 @@ async fn tray_snooze_follow_up_uses_action_time_and_log_hides_the_task() {
     };
     let original = outbox.fetch_record(id).unwrap().unwrap().due_at;
     let token = outbox
-        .due_rows(Utc::now(), 10)
+        .due_rows(UtcStamp::now(), 10)
         .unwrap()
         .into_iter()
         .find(|row| row.id == id)
@@ -432,7 +433,7 @@ async fn tray_snooze_follow_up_uses_action_time_and_log_hides_the_task() {
         .token;
     let app = action_app(outbox.clone(), PathBuf::from("/tmp/v")).await;
     let session = liberado_notify::log_capture::Capture::arm();
-    let start = Utc::now();
+    let start = UtcStamp::now();
     let response = app
         .oneshot(post_json(
             "/api/outbox/action",
@@ -440,23 +441,23 @@ async fn tray_snooze_follow_up_uses_action_time_and_log_hides_the_task() {
         ))
         .await
         .unwrap();
-    let end = Utc::now();
+    let end = UtcStamp::now();
     assert_eq!(response.status(), StatusCode::OK);
     let follow = outbox
         .due_at_by_idempotency(&format!("snooze/{id}"))
         .unwrap()
         .unwrap();
-    let lower = start + Duration::minutes(15) - Duration::seconds(2);
-    let upper = end + Duration::minutes(15) + Duration::seconds(2);
+    let lower = start + SignedDuration::from_mins(15) - SignedDuration::from_secs(2);
+    let upper = end + SignedDuration::from_mins(15) + SignedDuration::from_secs(2);
     assert!(
         follow >= lower && follow <= upper,
         "follow-up due {follow} not in [{lower}, {upper}]"
     );
-    assert!(start.signed_duration_since(original) > Duration::minutes(30));
-    assert_ne!(follow, original + Duration::minutes(15));
+    assert!(start.duration_since(original) > SignedDuration::from_mins(30));
+    assert_ne!(follow, original + SignedDuration::from_mins(15));
     let text = session.text();
-    let prior = original.to_rfc3339_opts(SecondsFormat::Secs, true);
-    let new_due = follow.to_rfc3339_opts(SecondsFormat::Secs, true);
+    let prior = original.to_rfc3339_opts(liberado_common::Rfc3339Seconds::Secs, true);
+    let new_due = follow.to_rfc3339_opts(liberado_common::Rfc3339Seconds::Secs, true);
     assert!(text.contains("action=snooze"), "{text}");
     assert!(text.contains("via=tray"), "{text}");
     assert!(text.contains(&format!("row_id={id}")), "{text}");

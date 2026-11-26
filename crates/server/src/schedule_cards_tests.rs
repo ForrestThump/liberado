@@ -2,7 +2,6 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use axum::http::StatusCode;
-use chrono::Timelike;
 use liberado_common::{
     Capability, DecisionVia, Proposal, ProposalStatus, ProposedAction, ToolCall,
 };
@@ -386,7 +385,10 @@ goal = "ping"
         assert_eq!(row["weekday"], fire.weekday_name());
         assert_eq!(row["display"], fire.display());
         assert_eq!(row["utc"], fire.utc.to_rfc3339());
-        assert_eq!(row["local"], fire.local.to_rfc3339());
+        assert_eq!(
+            row["local"],
+            liberado_common::format_zoned_rfc3339(&fire.local)
+        );
     }
 }
 
@@ -422,7 +424,10 @@ goal = "bins"
     assert_eq!(shown.len(), computed.len());
     for (row, fire) in shown.iter().zip(computed) {
         assert_eq!(row["utc"], fire.utc.to_rfc3339());
-        assert_eq!(row["local"], fire.local.to_rfc3339());
+        assert_eq!(
+            row["local"],
+            liberado_common::format_zoned_rfc3339(&fire.local)
+        );
         assert_eq!(fire.local.hour(), 20);
         assert_eq!(fire.weekday_name(), "Tuesday");
     }

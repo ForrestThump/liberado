@@ -4,10 +4,10 @@
 //! sends one payload. An optional `Topic` collapses a repeat of the same week.
 //! 2xx is acceptance. 404 and 410 mean the subscription is gone.
 
+use liberado_common::UtcStamp;
 use std::time::Duration;
 
 use aws_lc_rs::rand::{SecureRandom, SystemRandom};
-use chrono::{DateTime, SecondsFormat, Utc};
 use serde::Serialize;
 
 use super::aesgcm::{self, SealParts};
@@ -82,7 +82,7 @@ pub struct ReminderPushInput {
     pub rows: Vec<(i64, String)>,
     pub kind: String,
     pub outbox_id: Option<i64>,
-    pub due_at: Option<DateTime<Utc>>,
+    pub due_at: Option<UtcStamp>,
     pub late: bool,
     pub source: Option<serde_json::Value>,
     pub items: Vec<(i64, String, String)>,
@@ -124,7 +124,7 @@ pub fn reminder_payload(input: &ReminderPushInput) -> String {
         "url": input.url(),
         "kind": input.kind,
         "outbox_id": input.outbox_id,
-        "due_at": input.due_at.map(|at| at.to_rfc3339_opts(SecondsFormat::Secs, true)),
+        "due_at": input.due_at.map(|at| at.to_rfc3339_opts(liberado_common::Rfc3339Seconds::Secs, true)),
         "late": input.late,
     });
     if let Some(source) = &input.source {
@@ -178,7 +178,7 @@ pub async fn post_push(
     request: PushRequest<'_>,
     attempt: PushAttemptIds<'_>,
 ) -> PushDelivery {
-    let attempt_at = Utc::now();
+    let attempt_at = UtcStamp::now();
     match post(keys, &request).await {
         Ok(status) => {
             let class = super::attempt::classify(status);
@@ -288,7 +288,6 @@ pub(crate) fn origin_of(endpoint: &str) -> Result<String, String> {
 
 #[cfg(test)]
 mod tests {
-    use chrono::TimeZone;
     use liberado_outbox::{
         DIGEST, EVENT_LIST, EVENT_START, HABIT, JOB_ERROR, OutboxSource, REMINDER, TASK_DUE,
         TASK_LIST, TEST,
@@ -318,7 +317,7 @@ mod tests {
             rows: vec![(1, "tok".into())],
             kind: kind.into(),
             outbox_id: Some(1),
-            due_at: Some(Utc.with_ymd_and_hms(2026, 11, 1, 20, 0, 0).unwrap()),
+            due_at: Some(UtcStamp::from_civil_utc(2026, 11, 1, 20, 0, 0).unwrap()),
             late: false,
             source: None,
             items: Vec::new(),
@@ -397,7 +396,7 @@ mod tests {
             rows: vec![(42, "ab".into())],
             kind: TASK_DUE.into(),
             outbox_id: Some(42),
-            due_at: Some(Utc.with_ymd_and_hms(2026, 11, 1, 20, 0, 0).unwrap()),
+            due_at: Some(UtcStamp::from_civil_utc(2026, 11, 1, 20, 0, 0).unwrap()),
             late: false,
             source: Some(serde_json::json!({
                 "type": "vault_note",
@@ -506,7 +505,7 @@ mod tests {
             rows: vec![(42, "tok".into())],
             kind: TASK_DUE.into(),
             outbox_id: Some(42),
-            due_at: Some(Utc.with_ymd_and_hms(2026, 11, 1, 20, 0, 0).unwrap()),
+            due_at: Some(UtcStamp::from_civil_utc(2026, 11, 1, 20, 0, 0).unwrap()),
             late: false,
             source: Some(
                 serde_json::to_value(OutboxSource::VaultNote {
@@ -612,7 +611,7 @@ mod tests {
             rows: vec![(7, "t".into())],
             kind: EVENT_START.into(),
             outbox_id: Some(7),
-            due_at: Some(Utc.with_ymd_and_hms(2026, 11, 1, 15, 0, 0).unwrap()),
+            due_at: Some(UtcStamp::from_civil_utc(2026, 11, 1, 15, 0, 0).unwrap()),
             late: false,
             source: None,
             items: Vec::new(),

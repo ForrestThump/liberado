@@ -1,7 +1,6 @@
 use super::*;
 use crate::format::relative_time;
 use crossterm::event::{MouseButton, MouseEventKind};
-
 fn test_app() -> App {
     let mut app = App::new("http://127.0.0.1:4201".to_string(), ThemeRegistry::new());
     // Never persist theme changes to the user's real config during tests.
@@ -621,13 +620,13 @@ fn pending_load_cleared_on_sse_failed() {
 }
 #[test]
 fn relative_time_now() {
-    let now = chrono::Utc::now().to_rfc3339();
+    let now = jiff::Timestamp::now().to_string();
     let rel = relative_time(&now);
     assert!(rel.ends_with("s ago") || rel == "0s ago");
 }
 #[test]
 fn relative_time_past() {
-    let past = (chrono::Utc::now() - chrono::Duration::minutes(5)).to_rfc3339();
+    let past = (jiff::Timestamp::now() - jiff::SignedDuration::from_mins(5)).to_string();
     assert_eq!(relative_time(&past), "5m ago");
 }
 #[test]
@@ -1916,7 +1915,7 @@ fn scroll_to_chat_cursor_scrolls_down() {
 
 #[test]
 fn relative_time_exactly_60s() {
-    let ts = chrono::Utc::now().to_rfc3339();
+    let ts = jiff::Timestamp::now().to_string();
     assert!(!crate::format::relative_time(&ts).contains("m ago"));
 }
 #[test]

@@ -6,7 +6,7 @@
 
 use super::super::*;
 use super::test_fixtures::*;
-use chrono::Duration;
+use jiff::SignedDuration;
 use liberado_common::UserTimezone;
 use liberado_conversation_store::Author;
 use liberado_provider::{CompletionResponse, Role};
@@ -404,6 +404,6 @@ async fn a_recent_prior_user_message_produces_no_gap_line() {
 fn default_gap_threshold_is_twelve_hours() {
     assert_eq!(
         super::super::turn_clock::default_gap_threshold(),
-        Duration::hours(12)
+        SignedDuration::from_hours(12)
     );
 }

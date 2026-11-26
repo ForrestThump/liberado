@@ -4,6 +4,7 @@
 //! the broken condition under test. Captures JSON result lines under `FORCED_FAIL_OUT` (or a
 //! default next to the test) for PR evidence.
 
+use liberado_common::UtcStamp;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -283,7 +284,7 @@ async fn p1b_fails_when_session_is_failed_terminal() {
         }),
         reactions: json!([{
             "event_type": "WebhookFired",
-            "timestamp": chrono::Utc::now().to_rfc3339(),
+            "timestamp": UtcStamp::now().to_rfc3339(),
             "source": "webhook:conformance",
             "correlation_id": "webhook:conformance:forced-fail-id",
             "path": null,
@@ -436,7 +437,7 @@ async fn p3_fails_when_goal_stream_refuses() {
     let state = Arc::new(Mutex::new(MockState {
         reactions: json!([{
             "event_type": "WebhookFired",
-            "timestamp": chrono::Utc::now().to_rfc3339(),
+            "timestamp": UtcStamp::now().to_rfc3339(),
             "source": "webhook:conformance",
             "correlation_id": "webhook:conformance:forced-fail-id",
             "path": null,

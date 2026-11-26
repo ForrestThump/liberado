@@ -10,7 +10,7 @@ use axum::{
     body::Body,
     http::{Request, StatusCode},
 };
-use chrono::NaiveDate;
+use jiff::civil::Date;
 use liberado_daemon::{CategorySpend, SpendingSource};
 use liberado_session_store::SessionStore;
 use tower::ServiceExt;
@@ -27,8 +27,8 @@ struct CountingSource {
 impl SpendingSource for CountingSource {
     async fn spending(
         &self,
-        _start: NaiveDate,
-        _end: NaiveDate,
+        _start: Date,
+        _end: Date,
         _exclude: &[String],
     ) -> Result<Vec<CategorySpend>, String> {
         self.calls.fetch_add(1, Ordering::SeqCst);

@@ -3,6 +3,7 @@
 //! Note: event vocabulary is currently coding-specialized (`CoderEvent`). Architecture intends a
 //! domain-neutral session event envelope later; until then this module stays thin and local.
 
+use liberado_common::UtcStamp;
 use std::{
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
@@ -55,7 +56,7 @@ pub fn session_id(request: &CoderRunRequest) -> String {
         "{}-attempt-{}-{}",
         safe_segment(&request.task.id),
         request.attempt,
-        chrono::Utc::now().format("%Y%m%dT%H%M%S%.3fZ")
+        UtcStamp::now().strftime("%Y%m%dT%H%M%S%.3fZ")
     )
 }
 
@@ -183,7 +184,7 @@ impl liberado_executor::TurnObserver for TurnTracer {
                 message_count: record.message_count,
                 system_prompt_sha256: record.system_prompt_sha256,
                 system_prompt: first_time.then_some(record.system_prompt).flatten(),
-                at: chrono::Utc::now(),
+                at: UtcStamp::now(),
             },
         );
     }
@@ -220,7 +221,7 @@ impl liberado_executor::TurnObserver for TurnTracer {
                 tool_calls: record.tool_calls,
                 prompt_tokens: record.prompt_tokens,
                 completion_tokens: record.completion_tokens,
-                at: chrono::Utc::now(),
+                at: UtcStamp::now(),
             },
         );
     }
@@ -352,7 +353,7 @@ mod tests {
             tool_calls: calls.iter().map(|s| s.to_string()).collect(),
             prompt_tokens: 10,
             completion_tokens: 2,
-            at: chrono::Utc::now(),
+            at: UtcStamp::now(),
         }
     }
 
@@ -366,7 +367,7 @@ mod tests {
                 name: "read_file".into(),
                 ok: true,
                 result_preview: "fn main() {}".into(),
-                at: chrono::Utc::now(),
+                at: UtcStamp::now(),
             },
         ]);
         let v = to_openai_messages(&t);
@@ -400,7 +401,7 @@ mod tests {
             name: "write_file".into(),
             ok: false,
             result_preview: "PROGRESS GUARD (fatal): stop exploring".into(),
-            at: chrono::Utc::now(),
+            at: UtcStamp::now(),
         }]);
         let v = to_openai_messages(&t);
         let tool_msg = &v["messages"].as_array().unwrap()[1];

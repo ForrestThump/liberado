@@ -1,6 +1,7 @@
 //! Session-layer vault-zone permission requests, split from `grants.rs`.
 
 use super::*;
+use liberado_common::UtcStamp;
 use liberado_common::approval_ledger::ApprovalLedger;
 
 // ── Vault-zone permission request via the chat sessions layer (2026-10-11) ────────────────
@@ -153,7 +154,7 @@ async fn approval_decision_once_then_second_call_raises_again() {
         &mut proposal,
         "once",
         liberado_common::DecisionVia::Webui,
-        chrono::Utc::now(),
+        UtcStamp::now(),
     )
     .unwrap();
     assert!(matches!(
@@ -168,7 +169,7 @@ async fn approval_decision_once_then_second_call_raises_again() {
         &mut proposal2,
         "once",
         liberado_common::DecisionVia::Webui,
-        chrono::Utc::now(),
+        UtcStamp::now(),
     )
     .unwrap();
     assert!(matches!(

@@ -50,7 +50,7 @@ vocabulary every crate compiles against regardless of whether it touches config.
 ## Dependencies
 
 - Depends on: no internal crates. External: `async-trait`, `serde`, `serde_json`, `serde_norway`,
-  `chrono`, `chrono-tz`, `thiserror`, `tokio`, `toml`, `hmac`, `sha2`, `rand`.
+  `jiff`, `thiserror`, `tokio`, `toml`, `hmac`, `sha2`, `rand`.
 - Depended on by: essentially everything (`vault`, `dispatcher`, `executor`, `mcp`, `orchestrator`,
   `daemon`, `provider-*` indirectly).
 

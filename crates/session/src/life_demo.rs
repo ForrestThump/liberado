@@ -783,7 +783,7 @@ mod tests {
     #[tokio::test]
     async fn cancel_parked_session_without_live_host_reaches_cancelled() {
         let store = GoalSessionStore::new();
-        let created = chrono::Utc::now() - chrono::Duration::hours(26);
+        let created = liberado_common::UtcStamp::now() - jiff::SignedDuration::from_hours(26);
         let mut rec = crate::goal::GoalSessionRecord::new(GoalSpec {
             id: Some("parked-orphan".into()),
             description: "orphaned intake question".into(),

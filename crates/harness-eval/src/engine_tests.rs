@@ -76,7 +76,7 @@ fn unpaid_preflight_failure_is_terminal_and_reported() {
     let spec = JobSpec {
         version: JOB_SPEC_VERSION,
         job_id: JobId::new(),
-        submitted_at: Utc::now(),
+        submitted_at: UtcStamp::now(),
         repository: repository.clone(),
         base_revision: "HEAD".to_string(),
         task: TaskBundle::new("task.txt", "test task".to_string()).unwrap(),
@@ -333,7 +333,7 @@ fn collect_results_parses_saved_results_and_flags_missing() {
     let spec = JobSpec {
         version: JOB_SPEC_VERSION,
         job_id: JobId::new(),
-        submitted_at: Utc::now(),
+        submitted_at: UtcStamp::now(),
         repository: PathBuf::from("C:/repo"),
         base_revision: "main".to_string(),
         task: TaskBundle::new("task.txt", "do it".to_string()).unwrap(),
@@ -417,7 +417,7 @@ fn spec_fixture(job_id: &JobId) -> JobSpec {
     JobSpec {
         version: JOB_SPEC_VERSION,
         job_id: job_id.clone(),
-        submitted_at: Utc::now(),
+        submitted_at: UtcStamp::now(),
         repository: PathBuf::from("C:/repo"),
         base_revision: "main".to_string(),
         task: TaskBundle::new("task.txt", "do it".to_string()).unwrap(),

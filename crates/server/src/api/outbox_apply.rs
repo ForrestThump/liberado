@@ -11,7 +11,7 @@ use axum::{
     http::StatusCode,
     response::{IntoResponse, Response},
 };
-use chrono::Utc;
+use liberado_common::UtcStamp;
 use liberado_outbox::{
     OutboxRecord, OutboxSource, OwnerResolveResult, OwnerSnoozeResult, RES_COMPLETED,
     RES_DISMISSED, TASK_DUE,
@@ -70,7 +70,7 @@ pub(crate) async fn apply_complete(
     id: i64,
     via: &'static str,
 ) -> Result<(), ActionFail> {
-    let received_at = Utc::now();
+    let received_at = UtcStamp::now();
     let outbox = match require_outbox(state) {
         Ok(outbox) => outbox,
         Err(err) => {
@@ -93,7 +93,7 @@ async fn finish_complete(
     outbox: &liberado_outbox::Outbox,
     record: OutboxRecord,
     via: &str,
-    received_at: chrono::DateTime<Utc>,
+    received_at: UtcStamp,
 ) -> Result<(), ActionFail> {
     let vault_task = is_vault_task(&record);
     let action = if vault_task { "complete" } else { "dismiss" };
@@ -130,17 +130,17 @@ pub(crate) async fn apply_snooze(
     via: &'static str,
 ) -> Result<String, ActionFail> {
     if minutes <= 0 || minutes > MAX_SNOOZE_MINUTES {
-        outbox_log::log_snooze_stopped(via, id, minutes, Utc::now(), "error");
+        outbox_log::log_snooze_stopped(via, id, minutes, UtcStamp::now(), "error");
         return Err(ActionFail::bad("minutes must be between 1 and 10080"));
     }
     let outbox = match require_outbox(state) {
         Ok(outbox) => outbox,
         Err(err) => {
-            outbox_log::log_snooze_stopped(via, id, minutes, Utc::now(), "error");
+            outbox_log::log_snooze_stopped(via, id, minutes, UtcStamp::now(), "error");
             return Err(err);
         }
     };
-    let now = Utc::now();
+    let now = UtcStamp::now();
     let prior = record_due(outbox, id);
     match outbox.owner_snooze(id, minutes, now) {
         Ok(OwnerSnoozeResult::Applied { follow_up_id }) => {
@@ -168,8 +168,8 @@ fn note_applied_snooze(
     via: &str,
     id: i64,
     minutes: i64,
-    now: chrono::DateTime<Utc>,
-    prior: Option<chrono::DateTime<Utc>>,
+    now: UtcStamp,
+    prior: Option<UtcStamp>,
     outbox: &liberado_outbox::Outbox,
     follow_up_id: i64,
 ) {
@@ -192,7 +192,7 @@ fn note_applied_snooze(
     });
 }
 
-fn record_due(outbox: &liberado_outbox::Outbox, id: i64) -> Option<chrono::DateTime<Utc>> {
+fn record_due(outbox: &liberado_outbox::Outbox, id: i64) -> Option<UtcStamp> {
     outbox
         .fetch_record(id)
         .ok()
@@ -200,7 +200,7 @@ fn record_due(outbox: &liberado_outbox::Outbox, id: i64) -> Option<chrono::DateT
         .map(|record| record.due_at)
 }
 
-fn follow_up_due(outbox: &liberado_outbox::Outbox, id: i64) -> Option<chrono::DateTime<Utc>> {
+fn follow_up_due(outbox: &liberado_outbox::Outbox, id: i64) -> Option<UtcStamp> {
     let key = format!("snooze/{id}");
     outbox.due_at_by_idempotency(&key).ok().flatten()
 }
@@ -242,7 +242,7 @@ fn resolve_claimed(
     id: i64,
     resolution: &str,
 ) -> Result<(), ActionFail> {
-    match outbox.try_resolve(id, resolution, Utc::now()) {
+    match outbox.try_resolve(id, resolution, UtcStamp::now()) {
         Ok(OwnerResolveResult::Applied) => Ok(()),
         Ok(OwnerResolveResult::AlreadyResolved(existing)) => Err(ActionFail::conflict(format!(
             "row already resolved as {existing}"
@@ -278,7 +278,7 @@ fn record_recurring_tap(
     let Some(OutboxSource::VaultNote { path, .. }) = &record.source else {
         return Err(ActionFail::internal("vault task missing source"));
     };
-    let now = Utc::now();
+    let now = UtcStamp::now();
     let zone = super::outbox_detail::operator_zone(state);
     let row = liberado_outbox::liberado_tap_completion(path, identity, record.id, now, &zone);
     outbox
@@ -301,7 +301,7 @@ fn snooze_notice(state: &AppState, outbox: &liberado_outbox::Outbox, id: i64) ->
 
 fn done_local_date(state: &AppState) -> String {
     let zone = super::outbox_detail::operator_zone(state);
-    liberado_outbox::local_date_of(Utc::now(), &zone)
+    liberado_outbox::local_date_of(UtcStamp::now(), &zone)
 }
 
 async fn complete_vault_task(

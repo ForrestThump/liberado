@@ -14,7 +14,6 @@ role = "store"
 
 [dependencies]
 async-trait = { workspace = true }
-chrono = { workspace = true }
 liberado-common = { workspace = true }
 liberado-conversation-store = { workspace = true }
 liberado-provider = { workspace = true }

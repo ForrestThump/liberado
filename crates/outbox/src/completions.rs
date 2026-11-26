@@ -6,7 +6,9 @@
 
 use std::collections::BTreeMap;
 
-use chrono::{DateTime, Duration, NaiveDate, Utc};
+use jiff::SignedDuration;
+use jiff::civil::Date;
+use liberado_common::UtcStamp;
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::Serialize;
 
@@ -25,7 +27,7 @@ pub const DONE_HINT_MINUTES: i64 = 15;
 /// One completion the tick or a Done tap wants to store.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NewCompletion {
-    pub completed_at: DateTime<Utc>,
+    pub completed_at: UtcStamp,
     pub local_date: String,
     pub precision: String,
     pub source: String,
@@ -33,7 +35,7 @@ pub struct NewCompletion {
     pub task_text: String,
     pub done_date: Option<String>,
     pub outbox_id: Option<i64>,
-    pub detected_at: DateTime<Utc>,
+    pub detected_at: UtcStamp,
 }
 
 /// One stored completion, including a voided row.
@@ -59,7 +61,7 @@ pub struct CompletionDraft {
     pub count: u32,
     pub prior_closed: i64,
     pub hint_text: Option<String>,
-    pub done_date: Option<NaiveDate>,
+    pub done_date: Option<Date>,
 }
 
 /// Live rows to void for one identity.
@@ -76,7 +78,7 @@ pub struct NoteApply<'a> {
     pub counts: &'a BTreeMap<String, TaskCounts>,
     pub completions: &'a [CompletionDraft],
     pub voids: &'a [VoidDraft],
-    pub detected_at: DateTime<Utc>,
+    pub detected_at: UtcStamp,
     pub zone: &'a str,
 }
 
@@ -92,7 +94,7 @@ impl Outbox {
         &self,
         path: &str,
         text: &str,
-        detected_at: DateTime<Utc>,
+        detected_at: UtcStamp,
     ) -> Result<Option<DoneHint>> {
         let conn = self.lock();
         find_done_hint_on(&conn, path, text, detected_at)
@@ -165,7 +167,7 @@ fn insert_draft(
     conn: &Connection,
     path: &str,
     draft: &CompletionDraft,
-    detected_at: DateTime<Utc>,
+    detected_at: UtcStamp,
     zone: &str,
 ) -> Result<()> {
     for _ in 0..draft.count {
@@ -189,7 +191,7 @@ fn hint_for(
     conn: &Connection,
     path: &str,
     draft: &CompletionDraft,
-    detected_at: DateTime<Utc>,
+    detected_at: UtcStamp,
 ) -> Result<Option<DoneHint>> {
     let Some(text) = draft.hint_text.as_deref() else {
         return Ok(None);
@@ -203,7 +205,7 @@ fn hint_for(
 fn row_from_timing(
     path: &str,
     task_text: &str,
-    detected_at: DateTime<Utc>,
+    detected_at: UtcStamp,
     timing: CompletionTiming,
 ) -> NewCompletion {
     NewCompletion {
@@ -224,7 +226,7 @@ fn void_times(
     path: &str,
     task_text: &str,
     count: u32,
-    detected_at: DateTime<Utc>,
+    detected_at: UtcStamp,
 ) -> Result<()> {
     for _ in 0..count {
         void_newest(conn, path, task_text, detected_at)?;
@@ -236,7 +238,7 @@ fn void_newest(
     conn: &Connection,
     path: &str,
     task_text: &str,
-    detected_at: DateTime<Utc>,
+    detected_at: UtcStamp,
 ) -> Result<()> {
     conn.execute(
         "UPDATE task_completions
@@ -277,7 +279,7 @@ fn find_done_hint_on(
     conn: &Connection,
     path: &str,
     text: &str,
-    detected_at: DateTime<Utc>,
+    detected_at: UtcStamp,
 ) -> Result<Option<DoneHint>> {
     let cutoff = hint_cutoff(detected_at);
     let mut stmt = conn.prepare(
@@ -313,9 +315,9 @@ fn find_done_hint_on(
 
 const SOURCE_LIBERADO_RESOLUTION: &str = crate::resolution::RES_COMPLETED;
 
-fn hint_cutoff(detected_at: DateTime<Utc>) -> String {
+fn hint_cutoff(detected_at: UtcStamp) -> String {
     let at = detected_at
-        .checked_sub_signed(Duration::minutes(DONE_HINT_MINUTES))
+        .checked_sub(SignedDuration::from_mins(DONE_HINT_MINUTES))
         .unwrap_or(detected_at);
     stamp(at)
 }
@@ -422,7 +424,7 @@ pub fn liberado_tap_completion(
     path: &str,
     task_text: &str,
     outbox_id: i64,
-    at: DateTime<Utc>,
+    at: UtcStamp,
     zone: &str,
 ) -> NewCompletion {
     NewCompletion {

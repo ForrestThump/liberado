@@ -1,11 +1,11 @@
 //! `liberado-conformance` — Tier 3 live path runner (hand-run on the homelab box for v1).
 
+use liberado_common::UtcStamp;
 use std::env;
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::time::Instant;
 
-use chrono::Utc;
 use liberado_conformance::client::DaemonClient;
 use liberado_conformance::config::ConformanceConfig;
 use liberado_conformance::paths::run_path;
@@ -108,7 +108,7 @@ async fn main() -> ExitCode {
         }
     };
 
-    let started_at = Utc::now();
+    let started_at = UtcStamp::now();
     eprintln!(
         "liberado-conformance: base_url={} paths={:?} budget={}s",
         cfg.base_url,
@@ -130,7 +130,7 @@ async fn main() -> ExitCode {
         results.push(r);
     }
 
-    let finished_at = Utc::now();
+    let finished_at = UtcStamp::now();
     let overall = RunReport::compute_overall(&results, cfg.advisory_counts);
     let report = RunReport {
         started_at: started_at.to_rfc3339(),

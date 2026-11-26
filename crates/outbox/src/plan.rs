@@ -1,6 +1,6 @@
+use jiff::SignedDuration;
+use liberado_common::UtcStamp;
 use std::collections::BTreeMap;
-
-use chrono::{DateTime, Duration, Utc};
 
 use crate::batch::{DeliveryBatch, DeliveryRow};
 use crate::copy::{self, DigestItem};
@@ -105,22 +105,22 @@ pub struct OpenRow {
     pub title: String,
     pub body: String,
     pub catch_up: bool,
-    pub due_at: DateTime<Utc>,
+    pub due_at: UtcStamp,
     pub token: String,
     pub kind: String,
     pub source: Option<crate::source::OutboxSource>,
 }
 
 pub fn in_catchup_window(
-    at: DateTime<Utc>,
-    cursor: DateTime<Utc>,
-    now: DateTime<Utc>,
-    window: Duration,
+    at: UtcStamp,
+    cursor: UtcStamp,
+    now: UtcStamp,
+    window: SignedDuration,
 ) -> bool {
-    at > cursor && at <= now && now.signed_duration_since(at) <= window
+    at > cursor && at <= now && now.duration_since(at) <= window
 }
 
-pub fn coalesce(rows: Vec<OpenRow>, now: DateTime<Utc>, display_zone: &str) -> Vec<DeliveryBatch> {
+pub fn coalesce(rows: Vec<OpenRow>, now: UtcStamp, display_zone: &str) -> Vec<DeliveryBatch> {
     let mut groups: BTreeMap<(String, String), Vec<OpenRow>> = BTreeMap::new();
     for row in rows {
         groups
@@ -139,7 +139,7 @@ fn batches_for(
     channel: String,
     target: String,
     group: Vec<OpenRow>,
-    now: DateTime<Utc>,
+    now: UtcStamp,
     display_zone: &str,
 ) -> Vec<DeliveryBatch> {
     let (digest, singles) = split_overdue(group, now);
@@ -161,11 +161,11 @@ fn batches_for(
     out
 }
 
-fn split_overdue(group: Vec<OpenRow>, now: DateTime<Utc>) -> (Vec<OpenRow>, Vec<OpenRow>) {
+fn split_overdue(group: Vec<OpenRow>, now: UtcStamp) -> (Vec<OpenRow>, Vec<OpenRow>) {
     let mut digest = Vec::new();
     let mut singles = Vec::new();
     for row in group {
-        let late = now.signed_duration_since(row.due_at) > Duration::minutes(5);
+        let late = now.duration_since(row.due_at) > SignedDuration::from_mins(5);
         if row.catch_up || late {
             digest.push(row);
         } else {
@@ -175,7 +175,7 @@ fn split_overdue(group: Vec<OpenRow>, now: DateTime<Utc>) -> (Vec<OpenRow>, Vec<
     (digest, singles)
 }
 
-fn single_batch(row: OpenRow, now: DateTime<Utc>, display_zone: &str) -> DeliveryBatch {
+fn single_batch(row: OpenRow, now: UtcStamp, display_zone: &str) -> DeliveryBatch {
     let id = row.id;
     let (title, body, late) = copy::present_row(&row, now, display_zone);
     DeliveryBatch {
@@ -201,7 +201,7 @@ fn digest_batch(
     channel: &str,
     target: &str,
     rows: Vec<OpenRow>,
-    now: DateTime<Utc>,
+    now: UtcStamp,
     display_zone: &str,
 ) -> DeliveryBatch {
     let count = rows.len();
@@ -322,16 +322,14 @@ mod tests {
 
     #[test]
     fn a_digest_is_only_for_a_catch_up_burst() {
-        let now = DateTime::parse_from_rfc3339("2026-10-29T15:00:00Z")
-            .unwrap()
-            .with_timezone(&Utc);
+        let now = "2026-10-29T15:00:00Z".parse::<UtcStamp>().unwrap();
         let fresh = (1..=4).map(|id| sample(id, false, now)).collect::<Vec<_>>();
         let batches = coalesce(fresh, now, "UTC");
         assert_eq!(batches.len(), 4);
         assert!(batches.iter().all(|batch| batch.rows.len() == 1));
 
         let burst = (1..=4)
-            .map(|id| sample(id, true, now - Duration::minutes(1)))
+            .map(|id| sample(id, true, now - SignedDuration::from_mins(1)))
             .collect::<Vec<_>>();
         let batches = coalesce(burst, now, "UTC");
         assert_eq!(batches.len(), 1);
@@ -340,12 +338,12 @@ mod tests {
         assert_eq!(batches[0].title, "4 missed reminders");
 
         let late = (1..=4)
-            .map(|id| sample(id, false, now - Duration::minutes(10)))
+            .map(|id| sample(id, false, now - SignedDuration::from_mins(10)))
             .collect::<Vec<_>>();
         assert_eq!(coalesce(late, now, "UTC")[0].rows.len(), 4);
     }
 
-    fn sample(id: i64, catch_up: bool, due_at: DateTime<Utc>) -> OpenRow {
+    fn sample(id: i64, catch_up: bool, due_at: UtcStamp) -> OpenRow {
         OpenRow {
             id,
             channel: "webpush".into(),
@@ -362,13 +360,11 @@ mod tests {
 
     #[test]
     fn the_window_rejects_a_stamp_older_than_the_policy_and_keeps_one_inside_it() {
-        let now = DateTime::parse_from_rfc3339("2026-10-29T15:00:00Z")
-            .unwrap()
-            .with_timezone(&Utc);
-        let cursor = now - Duration::hours(8);
-        let window = Duration::hours(6);
-        let old = now - Duration::hours(7);
-        let due = now - Duration::minutes(5);
+        let now = "2026-10-29T15:00:00Z".parse::<UtcStamp>().unwrap();
+        let cursor = now - SignedDuration::from_hours(8);
+        let window = SignedDuration::from_hours(6);
+        let old = now - SignedDuration::from_hours(7);
+        let due = now - SignedDuration::from_mins(5);
         assert!(!in_catchup_window(old, cursor, now, window));
         assert!(in_catchup_window(due, cursor, now, window));
         assert!(!in_catchup_window(due, now, now, window));

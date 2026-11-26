@@ -1,19 +1,19 @@
 //! Upcoming fire times for a cron expression.
 //!
-//! The cron crate evaluates the expression in UTC. This module converts each
-//! instant into `tz` with chrono-tz, so the local weekday and the clock follow
-//! that zone's DST rules. The weekday is chrono's weekday of the local instant.
+//! The expression is evaluated in UTC. Each instant is then shown in `tz`,
+//! so the local weekday and the clock follow that zone's DST rules.
 
 use std::str::FromStr;
 
-use chrono::{DateTime, Datelike, Timelike, Utc, Weekday};
-use chrono_tz::Tz;
+use jiff::Zoned;
+use jiff::tz::TimeZone;
+use liberado_common::{UtcStamp, Weekday};
 
 /// One upcoming fire. `weekday` is the local weekday, not the cron field.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FireInstant {
-    pub utc: DateTime<Utc>,
-    pub local: DateTime<Tz>,
+    pub utc: UtcStamp,
+    pub local: Zoned,
     pub weekday: Weekday,
 }
 
@@ -33,7 +33,7 @@ impl FireInstant {
 ///
 /// An empty `tz` uses `America/Chicago`.
 pub fn next_fires(expr: &str, tz: &str, n: usize) -> Result<Vec<FireInstant>, String> {
-    next_fires_after(expr, tz, n, Utc::now())
+    next_fires_after(expr, tz, n, UtcStamp::now())
 }
 
 /// [`next_fires`] starting strictly after `after`.
@@ -41,33 +41,34 @@ pub fn next_fires_after(
     expr: &str,
     tz: &str,
     n: usize,
-    after: DateTime<Utc>,
+    after: UtcStamp,
 ) -> Result<Vec<FireInstant>, String> {
     if n == 0 {
         return Ok(Vec::new());
     }
     let zone = resolve_tz(tz)?;
-    let schedule = cron::Schedule::from_str(expr.trim()).map_err(|err| err.to_string())?;
+    let schedule = jiff_cron::Schedule::from_str(expr.trim()).map_err(|err| err.to_string())?;
+    let start = after.timestamp().to_zoned(TimeZone::UTC);
     let mut fires = Vec::with_capacity(n);
-    for utc in schedule.after(&after).take(n) {
-        fires.push(stamp(utc, zone));
+    for zoned in schedule.after(start).take(n) {
+        let utc = UtcStamp::from_timestamp(zoned.timestamp());
+        fires.push(stamp(utc, zone.clone()));
     }
     Ok(fires)
 }
 
-fn resolve_tz(tz: &str) -> Result<Tz, String> {
+fn resolve_tz(tz: &str) -> Result<TimeZone, String> {
     let name = tz.trim();
     let name = if name.is_empty() {
         "America/Chicago"
     } else {
         name
     };
-    name.parse::<Tz>()
-        .map_err(|_| format!("unknown timezone '{name}'"))
+    TimeZone::get(name).map_err(|_| format!("unknown timezone '{name}'"))
 }
 
-pub(crate) fn stamp(utc: DateTime<Utc>, zone: Tz) -> FireInstant {
-    let local = utc.with_timezone(&zone);
+pub(crate) fn stamp(utc: UtcStamp, zone: TimeZone) -> FireInstant {
+    let local = utc.timestamp().to_zoned(zone);
     let weekday = local.weekday();
     FireInstant {
         utc,
@@ -76,19 +77,19 @@ pub(crate) fn stamp(utc: DateTime<Utc>, zone: Tz) -> FireInstant {
     }
 }
 
-fn display_local(local: &DateTime<Tz>) -> String {
+fn display_local(local: &Zoned) -> String {
     let (hour, suffix) = twelve_hour(local.hour());
     format!(
         "{weekday} {month} {day}, {hour}:{minute:02} {suffix} {zone}",
         weekday = short_weekday(local.weekday()),
-        month = local.format("%b"),
+        month = local.strftime("%b"),
         day = local.day(),
         minute = local.minute(),
-        zone = local.format("%Z"),
+        zone = local.strftime("%Z"),
     )
 }
 
-fn twelve_hour(hour: u32) -> (u32, &'static str) {
+fn twelve_hour(hour: i8) -> (i8, &'static str) {
     match hour {
         0 => (12, "AM"),
         1..=11 => (hour, "AM"),
@@ -99,25 +100,25 @@ fn twelve_hour(hour: u32) -> (u32, &'static str) {
 
 fn weekday_name(day: Weekday) -> &'static str {
     match day {
-        Weekday::Mon => "Monday",
-        Weekday::Tue => "Tuesday",
-        Weekday::Wed => "Wednesday",
-        Weekday::Thu => "Thursday",
-        Weekday::Fri => "Friday",
-        Weekday::Sat => "Saturday",
-        Weekday::Sun => "Sunday",
+        Weekday::Monday => "Monday",
+        Weekday::Tuesday => "Tuesday",
+        Weekday::Wednesday => "Wednesday",
+        Weekday::Thursday => "Thursday",
+        Weekday::Friday => "Friday",
+        Weekday::Saturday => "Saturday",
+        Weekday::Sunday => "Sunday",
     }
 }
 
 fn short_weekday(day: Weekday) -> &'static str {
     match day {
-        Weekday::Mon => "Mon",
-        Weekday::Tue => "Tue",
-        Weekday::Wed => "Wed",
-        Weekday::Thu => "Thu",
-        Weekday::Fri => "Fri",
-        Weekday::Sat => "Sat",
-        Weekday::Sun => "Sun",
+        Weekday::Monday => "Mon",
+        Weekday::Tuesday => "Tue",
+        Weekday::Wednesday => "Wed",
+        Weekday::Thursday => "Thu",
+        Weekday::Friday => "Fri",
+        Weekday::Saturday => "Sat",
+        Weekday::Sunday => "Sun",
     }
 }
 

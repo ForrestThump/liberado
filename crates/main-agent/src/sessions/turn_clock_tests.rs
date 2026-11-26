@@ -4,7 +4,8 @@
 //! and a provider.
 
 use super::*;
-use chrono::TimeZone;
+use jiff::SignedDuration;
+use liberado_common::UtcStamp;
 use liberado_conversation_store::{Author, Ulid};
 use liberado_provider::{Message, Role};
 
@@ -16,13 +17,13 @@ fn denver() -> UserTimezone {
     UserTimezone::parse("America/Denver").unwrap()
 }
 
-fn utc() -> DateTime<Utc> {
-    Utc.with_ymd_and_hms(2026, 10, 5, 19, 42, 0).unwrap()
+fn utc() -> UtcStamp {
+    UtcStamp::from_civil_utc(2026, 10, 5, 19, 42, 0).unwrap()
 }
 
 /// Build a `MessageNode` for tests. ULID details are irrelevant — the helpers under test only
 /// read `author` and `created_at` — so we mint fresh ids.
-fn node(_index: usize, author: Author, content: &str, created_at: DateTime<Utc>) -> MessageNode {
+fn node(_index: usize, author: Author, content: &str, created_at: UtcStamp) -> MessageNode {
     MessageNode {
         id: Ulid::new(),
         parent_id: None,
@@ -112,7 +113,7 @@ fn frame_user_message_uses_the_configured_zone_not_chicago() {
 fn gap_line_is_omitted_just_under_threshold() {
     // 12h threshold: 11h 59m → no line. The 12h rounding is part of the contract.
     let now = utc();
-    let prev = now - chrono::Duration::hours(11) - chrono::Duration::minutes(59);
+    let prev = now - SignedDuration::from_hours(11) - SignedDuration::from_mins(59);
     let framed = frame_user_message(
         Some(&chicago()),
         now,
@@ -131,7 +132,7 @@ fn gap_line_is_omitted_at_exactly_the_threshold() {
     // check would still be correct for the 11h 59m case above; the boundary test pins the
     // exact inequality, which a `<` mutation would silently flip.
     let now = utc();
-    let prev = now - chrono::Duration::hours(12);
+    let prev = now - SignedDuration::from_hours(12);
     let framed = frame_user_message(
         Some(&chicago()),
         now,
@@ -151,7 +152,7 @@ fn gap_line_appears_just_over_threshold() {
     // 12h 1m → "12 hours 1 minute" gap line (the minutes are part of what makes it strictly
     // over the 12h threshold, so they show).
     let now = utc();
-    let prev = now - chrono::Duration::hours(12) - chrono::Duration::minutes(1);
+    let prev = now - SignedDuration::from_hours(12) - SignedDuration::from_mins(1);
     let framed = frame_user_message(
         Some(&chicago()),
         now,
@@ -180,7 +181,7 @@ fn gap_line_humanizes_multi_day_gaps() {
     // 2026-10-03 is a Saturday. Pin the exact gap line: weekday, no brackets, the humanized
     // gap, and the raw text at the end.
     let now = utc();
-    let prev = Utc.with_ymd_and_hms(2026, 10, 3, 18, 36, 0).unwrap();
+    let prev = UtcStamp::from_civil_utc(2026, 10, 3, 18, 36, 0).unwrap();
     let framed = frame_user_message(
         Some(&chicago()),
         now,
@@ -206,7 +207,7 @@ fn gap_line_humanizes_multi_day_gaps() {
 fn gap_line_uses_days_and_hours_for_two_day_gap() {
     // Exactly 2d 6h after the previous message.
     let now = utc();
-    let prev = now - chrono::Duration::days(2) - chrono::Duration::hours(6);
+    let prev = now - liberado_common::duration_days(2) - SignedDuration::from_hours(6);
     let framed = frame_user_message(
         Some(&chicago()),
         now,
@@ -221,7 +222,7 @@ fn gap_line_uses_days_and_hours_for_two_day_gap() {
 fn gap_line_is_singular_at_one_day_one_hour() {
     // "1 day 1 hour" reads more honestly than "1 days 1 hours" — the pluralization rule.
     let now = utc();
-    let prev = now - chrono::Duration::days(1) - chrono::Duration::hours(1);
+    let prev = now - liberado_common::duration_days(1) - SignedDuration::from_hours(1);
     let framed = frame_user_message(
         Some(&chicago()),
         now,
@@ -255,37 +256,37 @@ fn no_gap_line_on_first_message_in_a_session() {
 fn humanize_gap_unit_boundaries() {
     // Sub-minute → "less than a minute". Re-runs of the same second must not change.
     assert_eq!(
-        humanize_gap(chrono::Duration::seconds(0)),
+        humanize_gap(SignedDuration::from_secs(0)),
         "less than a minute"
     );
     assert_eq!(
-        humanize_gap(chrono::Duration::seconds(59)),
+        humanize_gap(SignedDuration::from_secs(59)),
         "less than a minute"
     );
     // Minutes only.
-    assert_eq!(humanize_gap(chrono::Duration::minutes(1)), "1 minute");
-    assert_eq!(humanize_gap(chrono::Duration::minutes(5)), "5 minutes");
+    assert_eq!(humanize_gap(SignedDuration::from_mins(1)), "1 minute");
+    assert_eq!(humanize_gap(SignedDuration::from_mins(5)), "5 minutes");
     // Hours only.
-    assert_eq!(humanize_gap(chrono::Duration::hours(1)), "1 hour");
-    assert_eq!(humanize_gap(chrono::Duration::hours(5)), "5 hours");
+    assert_eq!(humanize_gap(SignedDuration::from_hours(1)), "1 hour");
+    assert_eq!(humanize_gap(SignedDuration::from_hours(5)), "5 hours");
     // Hours + minutes (so a 1h 5m gap does not round to "1 hour" and lose the minutes that
     // proved the gap is more than an hour).
     assert_eq!(
-        humanize_gap(chrono::Duration::minutes(65)),
+        humanize_gap(SignedDuration::from_mins(65)),
         "1 hour 5 minutes"
     );
     // Day + hour.
-    assert_eq!(humanize_gap(chrono::Duration::days(1)), "1 day");
+    assert_eq!(humanize_gap(liberado_common::duration_days(1)), "1 day");
     assert_eq!(
-        humanize_gap(chrono::Duration::days(2) + chrono::Duration::hours(6)),
+        humanize_gap(liberado_common::duration_days(2) + SignedDuration::from_hours(6)),
         "2 days 6 hours"
     );
     // Day-only at scale.
-    assert_eq!(humanize_gap(chrono::Duration::days(5)), "5 days");
+    assert_eq!(humanize_gap(liberado_common::duration_days(5)), "5 days");
     // Negative durations are clamped to zero (defensive — `compute_gap_line` filters < threshold
     // before reaching here, but the helper alone is callable).
     assert_eq!(
-        humanize_gap(chrono::Duration::seconds(-30)),
+        humanize_gap(SignedDuration::from_secs(-30)),
         "less than a minute"
     );
 }
@@ -296,15 +297,20 @@ fn previous_user_created_at_ignores_compaction_tail_copies() {
     // `nodes.iter().rev().find(User).created_at` would mark every long chat "just now" forever;
     // the helper must skip the named tail author.
     let now = utc();
-    let older_user = now - chrono::Duration::days(2);
+    let older_user = now - liberado_common::duration_days(2);
     let nodes = vec![
         node(1, Author::User, "two days ago", older_user),
-        node(2, Author::Assistant, "ack", now - chrono::Duration::days(2)),
+        node(
+            2,
+            Author::Assistant,
+            "ack",
+            now - liberado_common::duration_days(2),
+        ),
         node(
             3,
             Author::Named("compaction".into()),
             "summary",
-            now - chrono::Duration::hours(1),
+            now - SignedDuration::from_hours(1),
         ),
         node(
             4,
@@ -331,9 +337,9 @@ fn previous_user_created_at_returns_none_for_empty_or_assistant_only() {
 
 #[test]
 fn previous_user_created_at_finds_the_most_recent_user() {
-    let t0 = utc() - chrono::Duration::days(10);
-    let t1 = utc() - chrono::Duration::days(5);
-    let t2 = utc() - chrono::Duration::days(2);
+    let t0 = utc() - liberado_common::duration_days(10);
+    let t1 = utc() - liberado_common::duration_days(5);
+    let t2 = utc() - liberado_common::duration_days(2);
     let nodes = vec![
         node(1, Author::User, "first", t0),
         node(2, Author::Assistant, "reply", t0),
@@ -350,7 +356,7 @@ fn prefix_user_message_dates_only_prefixes_user_messages() {
     // reply, a profile-switch note, the system root, and a compaction marker all pass through
     // untouched.
     let now = utc();
-    let user_at = now - chrono::Duration::days(1);
+    let user_at = now - liberado_common::duration_days(1);
     let nodes = vec![
         node(1, Author::System, "system prompt", now),
         node(2, Author::User, "yesterday", user_at),
@@ -398,7 +404,7 @@ fn prefix_user_message_dates_skips_compaction_tail_copies() {
     // every conversation happened "just now"; the helper must skip the named tail author so the
     // summarizer's `## Timeline` section is the only date the model sees in the kept tail.
     let now = utc();
-    let original_user_at = now - chrono::Duration::days(7);
+    let original_user_at = now - liberado_common::duration_days(7);
     let tail_copy_at = now;
     let nodes = vec![
         node(1, Author::User, "a week ago", original_user_at),
@@ -422,7 +428,7 @@ fn prefix_user_message_dates_uses_the_configured_zone() {
     // Same UTC, different IANA → different prefix. Pins that the helper does not bake in
     // Chicago. The instant is 2026-10-04 19:42 UTC, which is a Sunday in both zones.
     let now = utc();
-    let user_at = now - chrono::Duration::days(1);
+    let user_at = now - liberado_common::duration_days(1);
     let nodes = vec![node(1, Author::User, "hi", user_at)];
 
     let chicago_prefix = prefix_user_message_dates(nodes.clone(), &chicago());

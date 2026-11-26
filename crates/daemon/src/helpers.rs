@@ -1,6 +1,6 @@
 //! Pure helpers shared across daemon lifecycle phases.
 
-use liberado_common::{DEFAULT_POOL, Event, event_source};
+use liberado_common::{DEFAULT_POOL, Event, UtcStamp, event_source};
 use liberado_session::{DomainHint, GoalSpec, SessionOrigin, TerminalKind};
 
 use crate::types::REACTION_DOMAIN;
@@ -26,11 +26,9 @@ pub(crate) fn cron_schedule_name(source: &str) -> Option<&str> {
 }
 
 /// Parse the fire instant from a cron event's correlation id (`cron:{name}:{rfc3339}`).
-pub(crate) fn cron_fire_at(event: &Event) -> chrono::DateTime<chrono::Utc> {
+pub(crate) fn cron_fire_at(event: &Event) -> UtcStamp {
     let tail = event.correlation_id.rsplit(':').next().unwrap_or("");
-    chrono::DateTime::parse_from_rfc3339(tail)
-        .map(|value| value.with_timezone(&chrono::Utc))
-        .unwrap_or_else(|_| chrono::Utc::now())
+    tail.parse::<UtcStamp>().unwrap_or_else(|_| UtcStamp::now())
 }
 
 pub(crate) fn cron_catch_up(data: &serde_json::Value) -> bool {

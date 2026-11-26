@@ -1,12 +1,13 @@
 //! Split from `goals.rs` for module-health boundaries.
 
 use super::*;
+use liberado_common::UtcStamp;
 use liberado_session::{SessionEvent, SessionEventKind};
 
 fn event(kind: SessionEventKind) -> axum::response::sse::Event {
     session_event_to_sse(&SessionEvent {
         session_id: "s1".into(),
-        at: chrono::Utc::now(),
+        at: UtcStamp::now(),
         kind,
     })
 }

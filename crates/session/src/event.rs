@@ -1,13 +1,13 @@
 //! Session event envelope — shared surface vocabulary for coding + life packs.
 
-use chrono::{DateTime, Utc};
+use liberado_common::UtcStamp;
 use serde::{Deserialize, Serialize};
 
 /// One event in a goal session stream (SSE / TUI / WebUI).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SessionEvent {
     pub session_id: String,
-    pub at: DateTime<Utc>,
+    pub at: UtcStamp,
     #[serde(flatten)]
     pub kind: SessionEventKind,
 }
@@ -120,7 +120,7 @@ impl SessionEvent {
     pub fn new(session_id: impl Into<String>, kind: SessionEventKind) -> Self {
         Self {
             session_id: session_id.into(),
-            at: Utc::now(),
+            at: UtcStamp::now(),
             kind,
         }
     }

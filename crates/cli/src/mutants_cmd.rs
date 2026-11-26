@@ -4,7 +4,7 @@
 //! row. Squashing survivors means re-running and appending — never editing prior rows.
 
 use crate::crate_map_cmd::{self, CrateInfo};
-use chrono::Utc;
+use liberado_common::UtcStamp;
 use liberado_common::process::std_command;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -286,7 +286,7 @@ fn record_campaign(
     let campaign = Campaign {
         package: package.clone(),
         commit: Some(commit.clone()),
-        recorded_at: Utc::now().format("%Y-%m-%d").to_string(),
+        recorded_at: UtcStamp::now().strftime("%Y-%m-%d").to_string(),
         command: Some(command),
         tool_version: Some(outcomes.cargo_mutants_version),
         scope,

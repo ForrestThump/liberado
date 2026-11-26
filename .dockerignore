@@ -7,7 +7,7 @@ target/
 
 # Vendored / separate projects that are NOT part of the workspace Rust build.
 # turbovault/ and turbomcp/ leftover clones are gitignored path siblings. Cargo consumes those
-# crates as git+tag pins (`liberado-2026-08-27`), so they must not enter the build context.
+# crates as git+rev pins, so they must not enter the build context.
 turbovault/
 turbomcp/
 liberado-pr-dispatch-mcp/

@@ -1,6 +1,7 @@
 //! Split from `session_store.rs` for module-health boundaries.
 
 use super::*;
+use liberado_common::UtcStamp;
 use std::fs;
 use std::io;
 use tempfile::TempDir;
@@ -371,7 +372,7 @@ fn updates_stamp_rfc3339_timestamps() {
         update_model("stamp", "m2").unwrap();
         let loaded = load("stamp").unwrap().unwrap();
         assert!(
-            chrono::DateTime::parse_from_rfc3339(&loaded.updated_at).is_ok(),
+            &loaded.updated_at.parse::<UtcStamp>().is_ok(),
             "updated_at must stay RFC3339, got {:?}",
             loaded.updated_at
         );

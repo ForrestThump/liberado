@@ -3,9 +3,9 @@
 //! Implements the harness half of `docs/spec/architecture/verifiers.md`. Specs are DTOs from
 //! `liberado-coder-core`; this module executes them and never trusts the model report alone.
 
+use liberado_common::UtcStamp;
 use std::path::{Path, PathBuf};
 
-use chrono::Utc;
 use liberado_coder_core::CommandPolicy;
 use liberado_coder_core::{
     CoderError, CoderEvent, Finding, FindingKind, NamedVerdict, PipelinePolicy, PipelineResult,
@@ -42,7 +42,7 @@ pub async fn run_pipeline(
                 CoderEvent::ValidationFinished {
                     ok: verdict.is_pass(),
                     summary: format!("{}: {}", spec.id(), verdict.summary),
-                    at: Utc::now(),
+                    at: UtcStamp::now(),
                 },
             );
         }

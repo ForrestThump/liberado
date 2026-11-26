@@ -8,8 +8,7 @@ use axum::{
     http::StatusCode,
     response::{IntoResponse, Response},
 };
-use chrono::Utc;
-use liberado_common::UserTimezone;
+use liberado_common::{UserTimezone, UtcStamp};
 use liberado_outbox::{NewSubscription, OutboxSource, TEST, copy};
 use serde::Deserialize;
 use tracing::{info, warn};
@@ -105,7 +104,7 @@ pub async fn upsert_subscription(
             auth: body.keys.auth,
             label: body.label,
         },
-        Utc::now(),
+        UtcStamp::now(),
     ) {
         Ok(id) => {
             let count = outbox.subscription_count().unwrap_or(0);
@@ -186,7 +185,7 @@ pub async fn push_test(State(state): State<Arc<AppState>>, Json(body): Json<Test
             "this device is not subscribed — turn push on for this browser",
         );
     };
-    let now = Utc::now();
+    let now = UtcStamp::now();
     let zone = state
         .config
         .topology
@@ -195,7 +194,7 @@ pub async fn push_test(State(state): State<Arc<AppState>>, Json(body): Json<Test
         .map(|tz| tz.iana_name().to_string())
         .unwrap_or_else(|| UserTimezone::default_zone().iana_name().to_string());
     let target = format!("sub:{}", sub.id);
-    let key = format!("test/{}", now.timestamp());
+    let key = format!("test/{}", now.unix_seconds());
     if let Err(err) = outbox.enqueue(
         &liberado_outbox::NewReminder {
             idempotency_key: key,
@@ -235,7 +234,7 @@ pub async fn retry_outbox(State(state): State<Arc<AppState>>, Path(id): Path<i64
     let Some(outbox) = state.outbox.as_ref() else {
         return fail(StatusCode::SERVICE_UNAVAILABLE, "outbox is not available");
     };
-    match outbox.retry(id, Utc::now()) {
+    match outbox.retry(id, UtcStamp::now()) {
         Ok(true) => StatusCode::NO_CONTENT.into_response(),
         Ok(false) => fail(StatusCode::NOT_FOUND, "row not found or not retriable"),
         Err(err) => fail(StatusCode::BAD_REQUEST, &err.to_string()),
@@ -253,7 +252,7 @@ pub async fn outbox_ack_with_state(
 }
 
 fn note_ack(outbox: &liberado_outbox::Outbox, id: i64, token: &str) {
-    let received_at = Utc::now();
+    let received_at = UtcStamp::now();
     match outbox.ack(id, token, received_at) {
         Ok(true) => outbox_log::log_body_tap_ack(id, received_at),
         Ok(false) => {}

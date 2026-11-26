@@ -5,6 +5,7 @@
 //! same machine-local state sink the conversation store and proposal signing key already use).
 //! Nothing here (or anywhere in this crate) ever writes to a real prompt const.
 
+use liberado_common::UtcStamp;
 use liberado_heuristics_tuner::{
     CoderTunerResult, DEFAULT_CODER_PROMPT_PATH, DEFAULT_CODER_SYSTEM_PROMPT, ExecutorTunerResult,
     Layer, TunerConfig, TunerResult, build_coder_draft_proposal, run_coder_tuner,
@@ -99,7 +100,7 @@ async fn save_dispatcher_result(
 /// writes there. `data_dir()` is the same resolver the daemon uses, so results land where
 /// operators already look.
 async fn prepare_run_dir() -> Result<std::path::PathBuf, Box<dyn std::error::Error>> {
-    let run_timestamp = chrono::Utc::now().format("%Y-%m-%dT%H-%M-%SZ").to_string();
+    let run_timestamp = UtcStamp::now().strftime("%Y-%m-%dT%H-%M-%SZ").to_string();
     let out_dir = liberado_config::data_dir()
         .join("tuner")
         .join(&run_timestamp);

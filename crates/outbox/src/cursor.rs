@@ -1,4 +1,4 @@
-use chrono::{DateTime, Utc};
+use liberado_common::UtcStamp;
 use rusqlite::{OptionalExtension, params};
 
 use crate::error::Result;
@@ -8,7 +8,7 @@ use crate::time::{parse_stamp, stamp};
 impl Outbox {
     /// Insert `now` when the name is new and return the stored instant.
     /// A first call therefore has an empty catch-up window.
-    pub fn ensure_cursor(&self, name: &str, now: DateTime<Utc>) -> Result<DateTime<Utc>> {
+    pub fn ensure_cursor(&self, name: &str, now: UtcStamp) -> Result<UtcStamp> {
         let when = stamp(now);
         let conn = self.lock();
         conn.execute(
@@ -25,7 +25,7 @@ impl Outbox {
     }
 
     /// Move the cursor forward after an enqueue commits. An older instant is ignored.
-    pub fn record_cursor(&self, name: &str, fire: DateTime<Utc>) -> Result<()> {
+    pub fn record_cursor(&self, name: &str, fire: UtcStamp) -> Result<()> {
         let when = stamp(fire);
         self.lock().execute(
             "INSERT INTO schedule_cursor(name, last_fire_utc) VALUES (?1, ?2)
@@ -36,7 +36,7 @@ impl Outbox {
         Ok(())
     }
 
-    pub fn cursor(&self, name: &str) -> Result<Option<DateTime<Utc>>> {
+    pub fn cursor(&self, name: &str) -> Result<Option<UtcStamp>> {
         let stored: Option<String> = self
             .lock()
             .query_row(

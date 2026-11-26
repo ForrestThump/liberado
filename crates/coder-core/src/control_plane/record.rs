@@ -1,6 +1,6 @@
 //! Projected task record: orthogonal evidence, not a single completion status.
 
-use chrono::{DateTime, Utc};
+use liberado_common::UtcStamp;
 use serde::{Deserialize, Serialize};
 
 use super::{ControlPlaneError, TaskEvent, TaskEventKind, WorkerStatus};
@@ -112,8 +112,8 @@ pub struct TaskRecord {
     /// SHA bound when review was last approved or rejected. Not written by `ReadyDecided`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub review_evidence_sha: Option<String>,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
+    pub created_at: UtcStamp,
+    pub updated_at: UtcStamp,
 }
 
 impl TaskRecord {

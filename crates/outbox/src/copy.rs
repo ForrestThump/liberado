@@ -1,7 +1,8 @@
 //! Stand-alone notification title and body copy for push and Telegram.
 
-use chrono::{DateTime, Timelike, Utc};
-use chrono_tz::Tz;
+use jiff::SignedDuration;
+use jiff::tz::TimeZone;
+use liberado_common::UtcStamp;
 
 use crate::kind;
 use crate::plan::OpenRow;
@@ -29,8 +30,8 @@ fn capitalize_word(word: &str) -> String {
         .collect()
 }
 
-pub fn format_time_12h(zone: Tz, at: DateTime<Utc>) -> String {
-    let local = at.with_timezone(&zone);
+pub fn format_time_12h(zone: TimeZone, at: UtcStamp) -> String {
+    let local = at.timestamp().to_zoned(zone);
     let hour = local.hour();
     let minute = local.minute();
     let (hour12, suffix) = match hour {
@@ -42,7 +43,7 @@ pub fn format_time_12h(zone: Tz, at: DateTime<Utc>) -> String {
     format!("{hour12}:{minute:02} {suffix}")
 }
 
-pub fn format_time_12h_for_zone(zone_name: &str, at: DateTime<Utc>) -> String {
+pub fn format_time_12h_for_zone(zone_name: &str, at: UtcStamp) -> String {
     format_time_12h(parse_zone(zone_name), at)
 }
 
@@ -55,7 +56,7 @@ pub fn task_due_title(label: &str, task_text: &str) -> String {
     format!("{prefix}: {}", task_text.trim())
 }
 
-pub fn task_due_body(label: &str, path: &str, at: DateTime<Utc>, zone: Tz, late: bool) -> String {
+pub fn task_due_body(label: &str, path: &str, at: UtcStamp, zone: TimeZone, late: bool) -> String {
     let clock = format_time_12h(zone, at);
     if late {
         return format!("Missed at {clock} · {path}");
@@ -72,7 +73,7 @@ pub fn event_start_title(event_title: &str) -> String {
     format!("Starting now: {}", event_title.trim())
 }
 
-pub fn event_start_body(path: &str, at: DateTime<Utc>, zone: Tz, late: bool) -> String {
+pub fn event_start_body(path: &str, at: UtcStamp, zone: TimeZone, late: bool) -> String {
     let clock = format_time_12h(zone, at);
     if late {
         format!("Missed at {clock} · {path}")
@@ -113,7 +114,7 @@ pub fn job_error_title(schedule_name: &str) -> String {
     format!("{} failed", humanize_schedule_name(schedule_name))
 }
 
-pub fn test_notification_body(zone_name: &str, now: DateTime<Utc>) -> String {
+pub fn test_notification_body(zone_name: &str, now: UtcStamp) -> String {
     let zone = parse_zone(zone_name);
     let clock = format_time_12h(zone, now);
     format!("Test notification from Notifications settings · {clock}")
@@ -123,12 +124,12 @@ pub fn digest_title(count: usize) -> String {
     format!("{count} missed reminders")
 }
 
-pub fn row_is_late(row: &OpenRow, now: DateTime<Utc>) -> bool {
-    row.catch_up || now.signed_duration_since(row.due_at) > chrono::Duration::minutes(5)
+pub fn row_is_late(row: &OpenRow, now: UtcStamp) -> bool {
+    row.catch_up || now.duration_since(row.due_at) > SignedDuration::from_mins(5)
 }
 
 /// Title and body shown for one open row at delivery time (applies late copy when needed).
-pub fn present_row(row: &OpenRow, now: DateTime<Utc>, zone_name: &str) -> (String, String, bool) {
+pub fn present_row(row: &OpenRow, now: UtcStamp, zone_name: &str) -> (String, String, bool) {
     let zone = parse_zone(zone_name);
     let late = row_is_late(row, now);
     if !late {
@@ -138,7 +139,7 @@ pub fn present_row(row: &OpenRow, now: DateTime<Utc>, zone_name: &str) -> (Strin
     (title, body, late)
 }
 
-fn late_copy(row: &OpenRow, zone: Tz, late: bool) -> (String, String) {
+fn late_copy(row: &OpenRow, zone: TimeZone, late: bool) -> (String, String) {
     match row.kind.as_str() {
         kind::TASK_DUE => {
             if let Some(OutboxSource::VaultNote { path, label, text }) = &row.source {
@@ -164,7 +165,7 @@ fn late_copy(row: &OpenRow, zone: Tz, late: bool) -> (String, String) {
     }
 }
 
-pub fn digest_items(rows: &[OpenRow], now: DateTime<Utc>, zone_name: &str) -> Vec<DigestItem> {
+pub fn digest_items(rows: &[OpenRow], now: UtcStamp, zone_name: &str) -> Vec<DigestItem> {
     rows.iter()
         .take(DIGEST_ITEMS_CAP)
         .map(|row| {
@@ -185,27 +186,25 @@ pub struct DigestItem {
     pub title: String,
 }
 
-fn parse_zone(name: &str) -> Tz {
-    name.parse().unwrap_or(chrono_tz::UTC)
+fn parse_zone(name: &str) -> TimeZone {
+    TimeZone::get(name).unwrap_or(TimeZone::UTC)
 }
 
 #[cfg(test)]
 mod tests {
-    use chrono::TimeZone;
-
     use super::*;
     use crate::plan::OpenRow;
 
     #[test]
     fn task_due_copy_uses_operator_zone_and_late_wording() {
-        let zone: Tz = "America/Chicago".parse().unwrap();
-        let at = Utc.with_ymd_and_hms(2026, 11, 1, 20, 0, 0).unwrap();
+        let zone = TimeZone::get("America/Chicago").unwrap();
+        let at = UtcStamp::from_civil_utc(2026, 11, 1, 20, 0, 0).unwrap();
         assert_eq!(
             task_due_title("due", "Call dentist"),
             "Due now: Call dentist"
         );
         assert_eq!(
-            task_due_body("due", "Tasks/Inbox.md", at, zone, false),
+            task_due_body("due", "Tasks/Inbox.md", at, zone.clone(), false),
             "Task due 2:00 PM · Tasks/Inbox.md"
         );
         assert_eq!(
@@ -228,7 +227,7 @@ mod tests {
             title: "Due now: x".into(),
             body: "Task due 1:00 PM · a.md".into(),
             catch_up: false,
-            due_at: Utc.with_ymd_and_hms(2026, 11, 1, 18, 0, 0).unwrap(),
+            due_at: UtcStamp::from_civil_utc(2026, 11, 1, 18, 0, 0).unwrap(),
             token: "t".into(),
             kind: kind::TASK_DUE.into(),
             source: None,

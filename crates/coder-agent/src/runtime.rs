@@ -5,10 +5,10 @@
 //! When the coding pack scopes `crate::completion_gate::LIVE_GATE`, tool start/finish also
 //! mirror onto the goal session stream (dogfood finding #4).
 
+use liberado_common::UtcStamp;
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
-use chrono::Utc;
 use liberado_coder_core::CoderEvent;
 use liberado_coder_tools::CodingToolRuntime;
 use liberado_executor::ToolRuntime;
@@ -71,7 +71,7 @@ impl ToolRuntime for GuardedTracingRuntime {
             CoderEvent::ToolStarted {
                 name: call.name.clone(),
                 args_preview: trace::preview_value(&call.arguments, trace::TRACE_MAX_CHARS),
-                at: Utc::now(),
+                at: UtcStamp::now(),
             },
         );
         emit_live(SessionEventKind::ToolStarted {
@@ -90,7 +90,7 @@ impl ToolRuntime for GuardedTracingRuntime {
                 name: call.name.clone(),
                 ok,
                 result_preview: trace::preview_str(&full_output, trace::TRACE_MAX_CHARS),
-                at: Utc::now(),
+                at: UtcStamp::now(),
             },
         );
         emit_live(SessionEventKind::ToolFinished {
@@ -116,7 +116,7 @@ impl ToolRuntime for GuardedTracingRuntime {
                     CoderEvent::LoopGuardTriggered {
                         guard: "progress_nudge".to_string(),
                         action: "nudge".to_string(),
-                        at: Utc::now(),
+                        at: UtcStamp::now(),
                     },
                 );
                 match result {
@@ -130,7 +130,7 @@ impl ToolRuntime for GuardedTracingRuntime {
                     CoderEvent::LoopGuardTriggered {
                         guard: fatal.guard_name().to_string(),
                         action: "fail_tool".to_string(),
-                        at: Utc::now(),
+                        at: UtcStamp::now(),
                     },
                 );
                 Err(fatal.message())

@@ -10,7 +10,7 @@
 use std::fmt::Write as _;
 use std::sync::Arc;
 
-use chrono::{DateTime, Utc};
+use crate::UtcStamp;
 use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
@@ -141,9 +141,9 @@ pub struct Proposal {
     pub proposed_action: ProposedAction,
     pub rationale: String,
     pub status: ProposalStatus,
-    pub created: DateTime<Utc>,
+    pub created: UtcStamp,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub expires: Option<DateTime<Utc>>,
+    pub expires: Option<UtcStamp>,
     /// Which named dispatcher/executor pool (Decision 18 checkpoint #3) proposed this — so
     /// approval executes it via the *same* pool's authority it was proposed under, never a
     /// different (possibly broader) one. `None` routes to the always-present `"default"` pool,
@@ -194,7 +194,7 @@ pub struct Proposal {
     pub origin: Option<crate::permission::ApprovalOrigin>,
     /// When a human decided. Unsigned workflow field, like `status`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub decided_at: Option<DateTime<Utc>>,
+    pub decided_at: Option<UtcStamp>,
     /// Which surface recorded the decision (`telegram` or `webui`). Unsigned audit field.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub decided_via: Option<crate::permission::DecisionVia>,
@@ -231,7 +231,7 @@ impl Proposal {
             proposed_action,
             rationale: rationale.into(),
             status: ProposalStatus::Pending,
-            created: Utc::now(),
+            created: UtcStamp::now(),
             expires: None,
             // Routes to the "default" pool unless the caller sets it explicitly afterward (see
             // `pool`'s own doc comment) — callers that don't know about pools at all (most
@@ -263,7 +263,7 @@ impl Proposal {
     }
 
     /// Whether this proposal has expired as of `now` (independent of its stored status).
-    pub fn is_expired_at(&self, now: DateTime<Utc>) -> bool {
+    pub fn is_expired_at(&self, now: UtcStamp) -> bool {
         self.expires.is_some_and(|e| now >= e)
     }
 
@@ -744,6 +744,7 @@ mod tests {
 #[cfg(test)]
 mod proptest_tests {
     use super::*;
+    use jiff::SignedDuration;
     use proptest::prelude::*;
     use proptest::strategy::Strategy;
 
@@ -837,7 +838,7 @@ mod proptest_tests {
                 Just(GrantScope::Everywhere),
             ]),
             proptest::option::of(
-                (-3600i64..3600i64).prop_map(|s| chrono::Utc::now() + chrono::Duration::seconds(s)),
+                (-3600i64..3600i64).prop_map(|s| UtcStamp::now() + SignedDuration::from_secs(s)),
             ), // expires
         )
             .prop_map(
@@ -848,7 +849,7 @@ mod proptest_tests {
                     proposed_action: act,
                     rationale: rat,
                     status: st,
-                    created: chrono::Utc::now(),
+                    created: UtcStamp::now(),
                     integrity: String::new(),
                     pool,
                     grant_component: component,

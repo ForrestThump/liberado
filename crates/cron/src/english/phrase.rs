@@ -2,8 +2,8 @@
 //!
 //! Split from `english.rs` so that file stays inside the module-health boundaries.
 
-use chrono::{DateTime, Datelike, Duration, Timelike, Utc, Weekday};
-use liberado_common::UserTimezone;
+use jiff::tz::TimeZone;
+use liberado_common::{UserTimezone, UtcStamp, Weekday};
 
 use super::parse::{Atom, Parsed};
 
@@ -78,7 +78,7 @@ fn every_n(step: u32, one: &str, many: &str) -> String {
     }
 }
 
-pub(super) fn clock_text(spec: &Parsed, timezone: &str, at: DateTime<Utc>) -> Option<String> {
+pub(super) fn clock_text(spec: &Parsed, timezone: &str, at: UtcStamp) -> Option<String> {
     if !spec.month_any || !spec.year_any {
         return None;
     }
@@ -100,7 +100,7 @@ fn day_phrase(
     hour: u32,
     minute: u32,
     zone: &UserTimezone,
-    at: DateTime<Utc>,
+    at: UtcStamp,
 ) -> Option<String> {
     if dow_is_any(&spec.dow) && spec.dom.is_any() {
         return daily_phrase(hour, minute, zone, at);
@@ -121,7 +121,7 @@ fn day_phrase(
     None
 }
 
-fn daily_phrase(hour: u32, minute: u32, zone: &UserTimezone, at: DateTime<Utc>) -> Option<String> {
+fn daily_phrase(hour: u32, minute: u32, zone: &UserTimezone, at: UtcStamp) -> Option<String> {
     let local = local_stamp(zone, at, hour, minute, None, None)?;
     Some(format!(
         "Every day at {}",
@@ -129,18 +129,13 @@ fn daily_phrase(hour: u32, minute: u32, zone: &UserTimezone, at: DateTime<Utc>) 
     ))
 }
 
-fn weekdays_phrase(
-    hour: u32,
-    minute: u32,
-    zone: &UserTimezone,
-    at: DateTime<Utc>,
-) -> Option<String> {
+fn weekdays_phrase(hour: u32, minute: u32, zone: &UserTimezone, at: UtcStamp) -> Option<String> {
     let days = [
-        Weekday::Mon,
-        Weekday::Tue,
-        Weekday::Wed,
-        Weekday::Thu,
-        Weekday::Fri,
+        Weekday::Monday,
+        Weekday::Tuesday,
+        Weekday::Wednesday,
+        Weekday::Thursday,
+        Weekday::Friday,
     ];
     let mut local_days = Vec::with_capacity(days.len());
     let mut clock = None;
@@ -171,7 +166,7 @@ fn one_weekday_phrase(
     hour: u32,
     minute: u32,
     zone: &UserTimezone,
-    at: DateTime<Utc>,
+    at: UtcStamp,
 ) -> Option<String> {
     let utc_day = weekday_from_cron(dow)?;
     let local = local_stamp(zone, at, hour, minute, Some(utc_day), None)?;
@@ -187,7 +182,7 @@ fn dom_phrase(
     hour: u32,
     minute: u32,
     zone: &UserTimezone,
-    at: DateTime<Utc>,
+    at: UtcStamp,
 ) -> Option<String> {
     let local = local_stamp(zone, at, hour, minute, None, Some(dom))?;
     if local.day != dom {
@@ -202,7 +197,7 @@ fn dom_phrase(
 
 fn local_stamp(
     zone: &UserTimezone,
-    at: DateTime<Utc>,
+    at: UtcStamp,
     hour: u32,
     minute: u32,
     utc_dow: Option<Weekday>,
@@ -211,30 +206,35 @@ fn local_stamp(
     let instant = matching_utc(at, hour, minute, utc_dow, utc_dom)?;
     let local = zone.at(instant);
     Some(LocalStamp {
-        hour: local.hour(),
-        minute: local.minute(),
+        hour: local.hour() as u32,
+        minute: local.minute() as u32,
         weekday: local.weekday(),
-        day: local.day(),
+        day: local.day() as u32,
     })
 }
 
 fn matching_utc(
-    at: DateTime<Utc>,
+    at: UtcStamp,
     hour: u32,
     minute: u32,
     utc_dow: Option<Weekday>,
     utc_dom: Option<u32>,
-) -> Option<DateTime<Utc>> {
-    let start = at.date_naive();
-    (0..370).find_map(|offset| {
-        let date = start.checked_add_signed(Duration::days(offset))?;
+) -> Option<UtcStamp> {
+    let start = at.timestamp().to_zoned(TimeZone::UTC).date();
+    let hour = hour as i8;
+    let minute = minute as i8;
+    (0i64..370).find_map(|offset| {
+        let date = start.checked_add(jiff::Span::new().days(offset)).ok()?;
         if utc_dow.is_some_and(|day| date.weekday() != day) {
             return None;
         }
-        if utc_dom.is_some_and(|dom| date.day() != dom) {
+        if utc_dom.is_some_and(|dom| date.day() as u32 != dom) {
             return None;
         }
-        date.and_hms_opt(hour, minute, 0).map(|time| time.and_utc())
+        jiff::civil::DateTime::new(date.year(), date.month(), date.day(), hour, minute, 0, 0)
+            .ok()
+            .and_then(|civil| civil.to_zoned(TimeZone::UTC).ok())
+            .map(|zoned| UtcStamp::from_timestamp(zoned.timestamp()))
     })
 }
 
@@ -263,27 +263,27 @@ pub(super) fn ordinal(day: u32) -> String {
 }
 
 fn weekday_from_cron(dow: u32) -> Option<Weekday> {
-    match dow {
-        1 => Some(Weekday::Sun),
-        2 => Some(Weekday::Mon),
-        3 => Some(Weekday::Tue),
-        4 => Some(Weekday::Wed),
-        5 => Some(Weekday::Thu),
-        6 => Some(Weekday::Fri),
-        7 => Some(Weekday::Sat),
-        _ => None,
-    }
+    const DAYS: [Weekday; 7] = [
+        Weekday::Sunday,
+        Weekday::Monday,
+        Weekday::Tuesday,
+        Weekday::Wednesday,
+        Weekday::Thursday,
+        Weekday::Friday,
+        Weekday::Saturday,
+    ];
+    DAYS.get(dow.checked_sub(1)? as usize).copied()
 }
 
 fn weekday_name(day: Weekday) -> &'static str {
     match day {
-        Weekday::Sun => "Sunday",
-        Weekday::Mon => "Monday",
-        Weekday::Tue => "Tuesday",
-        Weekday::Wed => "Wednesday",
-        Weekday::Thu => "Thursday",
-        Weekday::Fri => "Friday",
-        Weekday::Sat => "Saturday",
+        Weekday::Sunday => "Sunday",
+        Weekday::Monday => "Monday",
+        Weekday::Tuesday => "Tuesday",
+        Weekday::Wednesday => "Wednesday",
+        Weekday::Thursday => "Thursday",
+        Weekday::Friday => "Friday",
+        Weekday::Saturday => "Saturday",
     }
 }
 

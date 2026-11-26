@@ -4,9 +4,9 @@
 //! linked from the parent chat by `correlation_id` (and optional `parent_conversation` in the
 //! header). These are **ops/debug artifacts**, never injected into model context.
 
+use liberado_common::UtcStamp;
 use std::path::{Path, PathBuf};
 
-use chrono::Utc;
 use serde_json::{Value, json};
 
 /// Directory for delegation journals (under the liberado data dir).
@@ -91,7 +91,7 @@ pub fn start_record(
     model: Option<&str>,
 ) -> Value {
     json!({
-        "ts": Utc::now().to_rfc3339(),
+        "ts": UtcStamp::now().to_rfc3339(),
         "kind": "start",
         "correlation_id": correlation_id,
         "parent_conversation": parent_conversation,
@@ -108,7 +108,7 @@ pub fn start_record(
 
 pub fn disposition_record(summary: &str, model: Option<&str>) -> Value {
     json!({
-        "ts": Utc::now().to_rfc3339(),
+        "ts": UtcStamp::now().to_rfc3339(),
         "kind": "disposition",
         "model": model,
         "summary": summary,

@@ -12,7 +12,7 @@ repository.workspace = true
 dioxus = { version = "0.7", default-features = false, features = ["macro", "hooks", "html", "signals"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
-chrono = { workspace = true }
+jiff = { workspace = true }
 reqwest = { version = "0.12", default-features = false, features = ["json"] }
 pulldown-cmark = "0.13.6"
 chat-client-contract = { workspace = true }
@@ -23,9 +23,10 @@ liberado-theme = { workspace = true }
 urlencoding = "2"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
+jiff = { workspace = true, features = ["js"] }
 dioxus = { version = "0.7", default-features = false, features = ["macro", "hooks", "html", "signals", "web", "launch"] }
 getrandom = { version = "0.2", features = ["js"] }
-web-sys = { version = "0.3", features = ["console", "Window", "Location", "EventSource", "MessageEvent", "Document", "HtmlDocument", "DomRect", "Element", "HtmlElement", "HtmlTextAreaElement", "CssStyleDeclaration", "Storage", "Request", "RequestInit", "RequestCredentials", "Headers", "ErrorEvent", "PromiseRejectionEvent", "Event", "EventTarget", "History", "MediaQueryList", "Navigator", "Clipboard", "Node", "Selection", "KeyboardEvent"] }
+web-sys = { version = "0.3", features = ["console", "Window", "Location", "EventSource", "MessageEvent", "Document", "HtmlDocument", "DomRect", "Element", "HtmlElement", "HtmlTextAreaElement", "CssStyleDeclaration", "Storage", "Request", "RequestInit", "RequestCredentials", "Headers", "ErrorEvent", "PromiseRejectionEvent", "Event", "EventTarget", "History", "MediaQueryList", "Navigator", "Clipboard", "Node", "Selection", "KeyboardEvent", "MouseEvent"] }
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
 # Only for `Reflect::set` — web-sys has no binding for `RequestInit.keepalive`, which the

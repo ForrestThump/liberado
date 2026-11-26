@@ -1,4 +1,4 @@
-use chrono::Utc;
+use liberado_common::UtcStamp;
 use liberado_conversation_store::{
     Author, ChatMetaUpdate, ConversationStore, NewConversation, NewNode,
 };
@@ -9,7 +9,7 @@ use super::*;
 use crate::{NewSession, SessionStore};
 
 fn sample(id: &str, name: &str) -> UserProject {
-    let now = Utc::now();
+    let now = UtcStamp::now();
     UserProject {
         id: id.into(),
         name: name.into(),

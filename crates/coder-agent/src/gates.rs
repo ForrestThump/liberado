@@ -4,10 +4,9 @@
 //! validation re-run, and mapping progress fatals to terminal errors. They intentionally do **not**
 //! go through model-facing command policy.
 
-use chrono::Utc;
 use liberado_coder_core::{CoderCommandConfig, CoderError, CoderEvent, CoderRunRequest};
 use liberado_coder_sandbox::CommandRequest;
-use liberado_common::Outcome;
+use liberado_common::{Outcome, UtcStamp};
 
 use crate::progress::ProgressFatal;
 use crate::trace::{self, EventLog};
@@ -39,14 +38,14 @@ pub async fn fail_with_progress_fatal(
         CoderEvent::LoopGuardTriggered {
             guard: fatal.guard_name().to_string(),
             action: "fail_run".to_string(),
-            at: Utc::now(),
+            at: UtcStamp::now(),
         },
     );
     trace::push_event(
         events,
         CoderEvent::SessionFinished {
             outcome: Outcome::Failed,
-            at: Utc::now(),
+            at: UtcStamp::now(),
         },
     );
     let _ = trace::write_trace(request, session_id, trace::snapshot_events(events), None).await;

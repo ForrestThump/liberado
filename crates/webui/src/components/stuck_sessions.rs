@@ -5,8 +5,8 @@
 //! finish parked store records that have no live cancel token.
 
 use dioxus::prelude::*;
+use jiff::Timestamp;
 
-use chrono::{DateTime, Utc};
 use serde::Deserialize;
 
 /// Minimal wire shape of a goal session row (fields the panel needs).
@@ -70,11 +70,11 @@ fn age_label(created_at: Option<&str>) -> String {
     let Some(raw) = created_at else {
         return "age unknown".into();
     };
-    let Ok(dt) = DateTime::parse_from_rfc3339(raw) else {
+    let Ok(dt) = raw.parse::<Timestamp>() else {
         return raw.to_string();
     };
-    let created: DateTime<Utc> = dt.with_timezone(&Utc);
-    let secs = (Utc::now() - created).num_seconds().max(0);
+    let created: Timestamp = dt;
+    let secs = Timestamp::now().duration_since(created).as_secs().max(0);
     if secs < 60 {
         format!("{secs}s")
     } else if secs < 3600 {
@@ -95,6 +95,7 @@ fn short_id(id: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{age_label, cancel_accepted, short_id};
+    use jiff::{SignedDuration, Timestamp};
 
     /// A missing timestamp reads as "age unknown" — never an empty label or a crash.
     #[test]
@@ -114,26 +115,26 @@ mod tests {
     #[test]
     fn age_bands_choose_the_unit() {
         // 45 seconds ago → "45s"
-        let raw = (chrono::Utc::now() - chrono::Duration::seconds(45)).to_rfc3339();
+        let raw = (Timestamp::now() - SignedDuration::from_secs(45)).to_string();
         assert_eq!(age_label(Some(&raw)), "45s");
 
         // 5 minutes ago → "5m"
-        let raw = (chrono::Utc::now() - chrono::Duration::minutes(5)).to_rfc3339();
+        let raw = (Timestamp::now() - SignedDuration::from_mins(5)).to_string();
         assert_eq!(age_label(Some(&raw)), "5m");
 
         // 3 hours ago → "3h"
-        let raw = (chrono::Utc::now() - chrono::Duration::hours(3)).to_rfc3339();
+        let raw = (Timestamp::now() - SignedDuration::from_hours(3)).to_string();
         assert_eq!(age_label(Some(&raw)), "3h");
 
         // 2 days ago → "2d"
-        let raw = (chrono::Utc::now() - chrono::Duration::days(2)).to_rfc3339();
+        let raw = (Timestamp::now() - SignedDuration::from_hours(48)).to_string();
         assert_eq!(age_label(Some(&raw)), "2d");
     }
 
     /// A timestamp from the future (clock skew) must not produce a negative age label.
     #[test]
     fn future_timestamp_clamps_to_zero() {
-        let raw = (chrono::Utc::now() + chrono::Duration::minutes(1)).to_rfc3339();
+        let raw = (Timestamp::now() + SignedDuration::from_mins(1)).to_string();
         assert_eq!(age_label(Some(&raw)), "0s");
     }
 
@@ -141,7 +142,7 @@ mod tests {
     /// comparisons must be strict or the unit drifts by exactly one.
     #[test]
     fn band_boundaries_fall_up() {
-        let at = |secs: i64| (chrono::Utc::now() - chrono::Duration::seconds(secs)).to_rfc3339();
+        let at = |secs: i64| (Timestamp::now() - SignedDuration::from_secs(secs)).to_string();
         assert_eq!(age_label(Some(&at(60))), "1m");
         assert_eq!(age_label(Some(&at(3600))), "1h");
         assert_eq!(age_label(Some(&at(86_400))), "1d");

@@ -7,7 +7,7 @@ use axum::{
     body::Body,
     http::{Request, StatusCode},
 };
-use chrono::{TimeZone, Utc};
+use liberado_common::UtcStamp;
 use liberado_outbox::{Outbox, liberado_tap_completion};
 use tower::ServiceExt;
 
@@ -54,7 +54,7 @@ fn anon_get(uri: &str) -> Request<Body> {
 async fn completions_require_a_session_and_return_stored_rows() {
     let dir = tempfile::tempdir().unwrap();
     let outbox = Arc::new(Outbox::open(&dir.path().join("liberado.db")).unwrap());
-    let when = Utc.with_ymd_and_hms(2026, 11, 10, 15, 0, 0).unwrap();
+    let when = UtcStamp::from_civil_utc(2026, 11, 10, 15, 0, 0).unwrap();
     let row = liberado_tap_completion("Home.md", "Call dentist", 4, when, "UTC");
     assert!(outbox.insert_completion(&row).unwrap());
     let app = app(outbox).await;

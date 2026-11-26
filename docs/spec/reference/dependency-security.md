@@ -24,11 +24,6 @@ cargo-vet before any job may compile a build script or procedural macro.
 a heap buffer overflow in zlib `gz_vacate`. The build script is the same
 9463-byte file as in 1.1.31. The exemption is still debt, not an audit.
 
-`deny.toml` ignores RUSTSEC-2026-0543 and RUSTSEC-2026-0555 for this PR
-only. `chrono` and `chrono-tz` are unmaintained, every version is affected,
-and no replacement is published. The jiff migration PR removes these two
-ignores. They are not a vulnerability waiver.
-
 `deny.toml` allows the build script `rustls@0.23.46`. The vet exemption
 in `supply-chain/config.toml` names the same version. 0.23.46 is the
 2026-10-14 security release. It replaces 0.23.45, which cargo-deny
@@ -44,9 +39,10 @@ The build script is the same file as in 0.13.5 (9313 bytes, byte-identical).
 The exemption is still debt, not an audit.
 
 The 2026-10 TLS and Tokio advisories moved four exemptions to the patched
-versions. No exemption was added and no criteria changed; each one names a
-release that fixes the advisory cargo-deny reports against the version it
-replaced.
+versions. The 2026-11 `url` advisory moved two more. No exemption was added
+and no criteria changed; each one names a release that fixes the advisory
+cargo-deny reports against the version it replaced, or the companion release
+that the patched version requires.
 
 | Crate | Was | Now | Advisory |
 |---|---|---|---|
@@ -55,10 +51,21 @@ replaced.
 | `webpki-roots` | 1.0.8 | 1.0.11 | RUSTSEC-2026-0381, bundled emSign roots |
 | `webpki-root-certs` | 1.0.8 | 1.0.11 | RUSTSEC-2026-0383, bundled emSign roots |
 | `tokio` | 1.52.3 | 1.53.3 | RUSTSEC-2026-0386, `AsyncFd::new` I/O safety |
+| `url` | 2.5.8 | 2.5.9 | RUSTSEC-2026-0592, stack overflow in `Url::origin()` on nested `blob:` URLs |
+| `form_urlencoded` | 1.2.2 | 1.2.3 | Required companion for `url` 2.5.9; no advisory of its own |
 
 `tokio` is pinned to 1.53.3, the first release in the 1.53 line that carries
 the fix, rather than the newest 1.54. The smaller step is the one the lockfile
 can carry on its own.
+
+`url` 2.5.9 clears RUSTSEC-2026-0592, a stack overflow in `Url::origin()` on
+nested `blob:` URLs. The advisory covers `url` up to and including 2.5.8 and
+is fixed in 2.5.9. `form_urlencoded` 1.2.3 is the required companion for
+`url` 2.5.9, which depends on it, and has no advisory of its own. The two vet
+exemptions moved with the lockfile. No exemption was added, no criteria
+changed, and no `deny.toml` ignore was added. Neither crate has a build
+script, so `deny.toml` needs no new `[bans.build].allow-build-scripts` entry.
+Both exemptions are still debt, not audits.
 
 RUSTSEC-2026-0459 (CVE-2026-119375) is a vulnerability in SQLite before
 3.54.0. `libsqlite3-sys` 0.37.0 bundles 3.51.3. `libsqlite3-sys` 0.39.1
@@ -78,25 +85,28 @@ stays in the graph for other crates, so 0.12.2 is an added exemption with
 the same `safe-to-deploy` criteria. `hashbrown` 0.17.1, which 0.12.2 uses,
 was already exempt. This exemption is debt, not an audit.
 
-`turbovault*` is pinned to tag `liberado-2026-11-10`
-(`260dc271735b8db206788296fdca6f15f1fc5430`). That tag's
+`turbovault*` is pinned to commit `179ded6003e05071b6609bbc8a5edbef04dc5fa9`,
+the merge commit that landed the fork's jiff migration (pull request #6, into
+`main`). That commit's
 `turbovault-vector` requires `rusqlite` 0.41.1 with the `bundled` feature,
-so the graph has one `libsqlite3-sys`, 0.39.1. The previous tag,
-`liberado-2026-10-15`, required `rusqlite` ^0.39 and kept `libsqlite3-sys`
-0.37.0 in the graph. The git-SHA vet exemptions for the TurboVault crates
-moved from `69a217a5` to `260dc271`. The criteria stay `safe-to-deploy`.
-The exemptions are still debt, not audits. TurboVault's own lockfile on
-this commit also bumps its transitive crates. Liberado resolves those
-crates from the published requirements, and this bump did not add a new
+so the graph has one `libsqlite3-sys`, 0.39.1. The previous pin, tag
+`liberado-2026-11-10` (`260dc271`), required `rusqlite` ^0.39 and kept
+`libsqlite3-sys` 0.37.0 in the graph. The git-SHA vet exemptions for the
+TurboVault crates moved from `260dc271` to `179ded6`. The criteria stay
+`safe-to-deploy`. The exemptions are still debt, not audits. TurboVault's own
+lockfile on this commit also bumps its transitive crates. Liberado resolves
+those crates from the published requirements, and this bump did not add a new
 crates.io version to Liberado's graph.
 
 GitHub Actions use full commit SHAs. Dependabot proposes Action SHA changes.
-`turbovault*` and `turbomcp*` are git+tag pins on the public ForrestThump forks.
-`turbovault*` is pinned to `tag = "liberado-2026-11-10"` and `turbomcp*` stays
-on `tag = "liberado-2026-08-27"`. `Cargo.lock` records the resolved commit SHA.
-Update tags, lockfile entries, and matching cargo-vet exemptions together after
-reviewing the fork diff. Checkout credentials are never persisted into a
-compiling job.
+`turbovault*` and `turbomcp*` are the ForrestThump forks, pinned by commit SHA
+at the merge commits that landed their jiff migrations: `179ded6` for
+turbovault (pull request #6, into `main`) and `b7774c9` for turbomcp (pull
+request #4, into `develop`). Those merges carry the same change this
+branch carries: `chrono` and `chrono-tz` are gone and `jiff` replaces them.
+Every pin is one `rev` per fork in the root manifest, so a bump is one
+search-and-replace per SHA. The forks publish no `liberado-*` tag for these
+merges; if one appears, swap each `rev` for the tag.
 
 The cargo-vet exemption set is the accepted graph at the time this gate was
 introduced. It is debt, not an audit claim. New exemptions may not be added

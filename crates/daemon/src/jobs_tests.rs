@@ -35,10 +35,7 @@ fn job(kind: &str) -> JobRequest {
 
 fn idle_tick() -> crate::vault_pings::ReminderTick {
     crate::vault_pings::ReminderTick {
-        now: chrono::NaiveDate::from_ymd_opt(2026, 9, 29)
-            .expect("date")
-            .and_hms_opt(12, 0, 0)
-            .expect("time"),
+        now: jiff::civil::DateTime::new(2026, 9, 29, 12, 0, 0, 0).expect("time"),
         settings: liberado_config::VaultRemindersConfig::default(),
         state_path: std::path::PathBuf::from("vault-reminder-fires.json"),
         zone: "UTC".into(),
@@ -50,7 +47,7 @@ fn execute(dir: &std::path::Path, request: &JobRequest) -> JobEffect {
     execute_on(
         dir,
         request,
-        zone.now().date_naive(),
+        zone.now().date(),
         zone.iana_name(),
         &idle_tick(),
         false,
@@ -212,7 +209,7 @@ async fn an_event_ping_uses_the_reminder_channel_and_not_the_sticky_notifier() {
     let today = liberado_common::UserTimezone::parse("America/Chicago")
         .expect("zone")
         .now()
-        .date_naive();
+        .date();
     std::fs::write(
         calendar.join("dentist.md"),
         format!(
@@ -267,7 +264,7 @@ fn event_ping_message_names_the_zone_for_a_fixed_day() {
         "---\ntitle: Dentist\ndate: 2026-09-28\nstartTime: 09:00\nendTime: 10:00\n---\n",
     )
     .unwrap();
-    let today = chrono::NaiveDate::from_ymd_opt(2026, 9, 28).expect("date");
+    let today = jiff::civil::Date::new(2026, 9, 28).expect("date");
     let message = match execute_on(
         dir.path(),
         &job("event-ping"),
@@ -397,7 +394,7 @@ async fn startup_jobs_cover_quiet_remind_continue_and_outbox_rows() {
 
     daemon.run_startup_jobs();
 
-    let now = chrono::Utc::now();
+    let now = liberado_common::UtcStamp::now();
     let counts = outbox.counts(now).expect("counts");
     assert!(
         counts.pending >= 1,
