@@ -4,7 +4,7 @@
 //! These tests drive that decision. A DOM runner is not part of `cargo test`.
 
 use super::{
-    ChatMsg, LATEST_SLACK_PX, TranscriptJump, TranscriptStick, apply_history, is_reader_key,
+    ChatMsg, LATEST_SLACK_PX, READER_KEYS, TranscriptJump, TranscriptStick, apply_history,
     max_scroll_top, payload_owns_bottom, scroll_top_to_apply, viewport_shows_latest,
 };
 
@@ -333,10 +333,13 @@ fn the_refresh_for_the_sent_conversation_is_a_refresh_before_the_stream_reports_
 #[test]
 fn the_keys_that_page_the_transcript_are_reader_gestures() {
     for key in ["PageUp", "PageDown", "Home", "End", "ArrowUp", "ArrowDown"] {
-        assert!(is_reader_key(key), "{key} moves the transcript");
+        assert!(READER_KEYS.contains(&key), "{key} moves the transcript");
     }
     for key in ["a", "Enter", "Tab", "Escape", "Shift"] {
-        assert!(!is_reader_key(key), "{key} does not move the transcript");
+        assert!(
+            !READER_KEYS.contains(&key),
+            "{key} does not move the transcript"
+        );
     }
 }
 

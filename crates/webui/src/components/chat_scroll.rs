@@ -175,12 +175,9 @@ impl TranscriptStick {
 ///
 /// A reader who pages up with the keyboard is reading an earlier message, so the
 /// key is the reader's own move — the same release a wheel or a touch gives.
-pub(super) fn is_reader_key(key: &str) -> bool {
-    matches!(
-        key,
-        "PageUp" | "PageDown" | "Home" | "End" | "ArrowUp" | "ArrowDown"
-    )
-}
+#[cfg(any(target_arch = "wasm32", test))]
+pub(super) const READER_KEYS: [&str; 6] =
+    ["PageUp", "PageDown", "Home", "End", "ArrowUp", "ArrowDown"];
 
 /// Whether a loaded history payload takes the bottom of the pane.
 ///
@@ -268,7 +265,14 @@ thread_local! {
 
 pub(super) fn schedule_scroll_to_latest(follow: Signal<TranscriptStick>) {
     #[cfg(target_arch = "wasm32")]
-    schedule_scroll_to_latest_wasm(follow);
+    {
+        // The listener effect can run before the pane is in the document. A later
+        // jump retries the attach, so scrolling up still clears the pin.
+        attach_scroll_listener(follow, true);
+        if apply_latest() != Apply::Already {
+            retry_latest_on_frame(follow);
+        }
+    }
     #[cfg(not(target_arch = "wasm32"))]
     {
         let _ = follow;
@@ -277,20 +281,10 @@ pub(super) fn schedule_scroll_to_latest(follow: Signal<TranscriptStick>) {
 
 fn install_transcript_scroll_listener(follow: Signal<TranscriptStick>) {
     #[cfg(target_arch = "wasm32")]
-    install_transcript_scroll_listener_wasm(follow);
+    attach_scroll_listener(follow, true);
     #[cfg(not(target_arch = "wasm32"))]
     {
         let _ = follow;
-    }
-}
-
-#[cfg(target_arch = "wasm32")]
-fn schedule_scroll_to_latest_wasm(follow: Signal<TranscriptStick>) {
-    // The listener effect can run before the pane is in the document. A later
-    // jump retries the attach, so scrolling up still clears the pin.
-    install_transcript_scroll_listener_wasm(follow);
-    if apply_latest() != Apply::Already {
-        retry_latest_on_frame(follow);
     }
 }
 
@@ -341,35 +335,26 @@ fn apply_latest() -> Apply {
 }
 
 #[cfg(target_arch = "wasm32")]
-fn listener_already_bound() -> bool {
-    let Some(pane) = messages_pane() else {
-        return false;
-    };
-    SCROLL_PANE.with(|cell| match cell.borrow().as_ref() {
-        Some(bound) => bound.is_same_node(Some(&pane)),
-        None => false,
-    })
-}
-
-#[cfg(target_arch = "wasm32")]
-fn install_transcript_scroll_listener_wasm(follow: Signal<TranscriptStick>) {
-    attach_scroll_listener(follow, true);
-}
-
-#[cfg(target_arch = "wasm32")]
 fn attach_scroll_listener(follow: Signal<TranscriptStick>, retry: bool) {
     use wasm_bindgen::JsCast;
     use wasm_bindgen::closure::Closure;
 
-    if listener_already_bound() {
-        return;
-    }
     let Some(pane) = messages_pane() else {
         if retry {
             retry_listener_on_frame(follow);
         }
         return;
     };
+    // The listener belongs to the pane it was installed on. A pane that has
+    // been replaced is a different node, so the old listener stays with the old
+    // pane and this one has to be installed again.
+    let already_bound = SCROLL_PANE.with(|cell| match cell.borrow().as_ref() {
+        Some(bound) => bound.is_same_node(Some(&pane)),
+        None => false,
+    });
+    if already_bound {
+        return;
+    }
     let callback = Closure::<dyn FnMut()>::new(move || note_pane_scroll(follow));
     let Ok(_) = pane.add_event_listener_with_callback("scroll", callback.as_ref().unchecked_ref())
     else {
@@ -391,8 +376,17 @@ fn attach_reader_gesture_listeners(pane: &web_sys::Element) {
     use wasm_bindgen::JsCast;
     use wasm_bindgen::closure::Closure;
 
-    for name in ["wheel", "touchmove"] {
-        let callback = Closure::<dyn FnMut()>::new(|| {
+    for name in ["wheel", "touchmove", "keydown"] {
+        let callback = Closure::<dyn FnMut(web_sys::Event)>::new(move |evt: web_sys::Event| {
+            // Paging the transcript with the keyboard is the reader's move, too.
+            // Every other key is not: typing a message must not release the pane.
+            if name == "keydown"
+                && !evt
+                    .dyn_ref::<web_sys::KeyboardEvent>()
+                    .is_some_and(|key| READER_KEYS.contains(&key.key().as_str()))
+            {
+                return;
+            }
             READER_GESTURE_MS.with(|cell| cell.set(js_sys::Date::now()));
         });
         let _ = pane.add_event_listener_with_callback(name, callback.as_ref().unchecked_ref());
@@ -407,14 +401,6 @@ fn attach_reader_gesture_listeners(pane: &web_sys::Element) {
     });
     let _ = pane.add_event_listener_with_callback("mousemove", drag.as_ref().unchecked_ref());
     drag.forget();
-    // Paging the transcript with the keyboard is the reader's move, too.
-    let key = Closure::<dyn FnMut(web_sys::KeyboardEvent)>::new(|evt: web_sys::KeyboardEvent| {
-        if is_reader_key(&evt.key()) {
-            READER_GESTURE_MS.with(|cell| cell.set(js_sys::Date::now()));
-        }
-    });
-    let _ = pane.add_event_listener_with_callback("keydown", key.as_ref().unchecked_ref());
-    key.forget();
 }
 
 /// Whether the scroll being handled was the reader's own.
