@@ -45,9 +45,8 @@ something rather than being in the way.
 - **What each crate is:** [`docs/spec/reference/crate-map.md`](docs/spec/reference/crate-map.md) —
   generated from the manifests; regenerate with `just gen-crate-map`.
 - **Why the layers are what they are:** [`docs/spec/architecture/contracts.md`](docs/spec/architecture/contracts.md).
-- **What is being worked on:** [`docs/future-work/backlog.md`](docs/future-work/backlog.md) — the
-  only implementation queue. [`docs/roadmap.md`](docs/roadmap.md) is a pointer to the backlog and to
-  the direction; it is not the queue.
+- **What is being worked on:** [`docs/roadmap.md`](docs/roadmap.md) — the only implementation queue,
+  and the product direction in the same file.
 
 ## Which docs are true
 
@@ -57,15 +56,13 @@ something rather than being in the way.
 | Path | What it is |
 |---|---|
 | `docs/spec/` | Contracts and reference. Closest to truth; changes with the code. |
-| `docs/direction.md` | Product mission, layers, principles, decision filter. |
-| `docs/future-work/backlog.md` | Open work in priority order. **Start here.** |
-| `docs/roadmap.md` | A pointer to the direction and the backlog. Not the queue. |
+| `docs/roadmap.md` | Product direction and open work, in one file. **Start here.** |
 | `docs/future-work/` | Plans and findings. **Read the status header.** Some are shipped and kept only for the rules or review record they carry. |
 | `docs/future-work/*/archive/` | Finished or abandoned. **Not current truth.** |
 | `docs/validation/` | Mutation-testing records. Historical evidence, not instructions. |
 
 Keep current priorities and branch state out of this file. They change faster than durable agent
-rules and become false guidance after a merge. Use `docs/future-work/backlog.md` for the next item
+rules and become false guidance after a merge. Use `docs/roadmap.md` for the next item
 and the local `current_unmerged_work.md` (repo root, never committed) for live branch dependencies.
 
 The module-level `//!` docs are unusually thorough here and explain *why*, not just what. For "how

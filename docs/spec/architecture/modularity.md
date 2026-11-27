@@ -2,9 +2,8 @@
 
 This page records the concrete moves that turn the three pillars' "modular MCP/hook substrate" into
 reality. It is the engineering companion to [contracts.md](contracts.md) (the narrow-waist
-inventory) and the generated [crate map](../../spec/reference/crate-map.md). Product order is
-[direction.md](../../direction.md); the open implementation queue is the
-[backlog](../../future-work/backlog.md). (The original
+inventory) and the generated [crate map](../../spec/reference/crate-map.md). Product order and
+the open implementation queue are both [roadmap.md](../../roadmap.md). (The original
 [meshify idea](../../future-work/ideas/archive/meshify.md) is annotated — partly landed via traits + config, partly
 rejected; the canonical vocabulary is now kernel · domain packs · stores · surfaces.)
 
@@ -91,9 +90,7 @@ Until then, coding types stay specialized and map to kernel `Report`/`Outcome` a
 
 - [contracts.md](contracts.md) is the inventory of the frozen seams these moves protect; the
   generated [crate map](../../spec/reference/crate-map.md) shows where every crate sits.
-- Product order is [direction.md](../../direction.md) and the open implementation queue is the
-  [backlog](../../future-work/backlog.md), so modularity is verified by shipped behavior rather
-  than asserted. The [roadmap](../../roadmap.md) is only a pointer to those two — it holds no
-  modularity checkpoints and no seam-to-phase map.
+- Product order and the open implementation queue are both [roadmap.md](../../roadmap.md), so
+  modularity is verified by shipped behavior rather than asserted.
 - [Agentic loops](agentic-loops.md) describe kernel vs domain packs and the second-domain reusability
   test.

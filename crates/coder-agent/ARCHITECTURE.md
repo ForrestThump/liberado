@@ -64,7 +64,7 @@ When a coding goal carries `payload.subtasks` (array of `{label, description, su
 Helpers: `coder-sandbox` `merge` module; orchestration in `fanout.rs`. Pack gets hub via
 `CodingSessionPack::attach_hub` after server `Arc`s the hub.
 
-Open product work for this crate lives in [`docs/future-work/backlog.md`](../../docs/future-work/backlog.md), not here.
+Open product work for this crate lives in [`docs/roadmap.md`](../../docs/roadmap.md), not here.
 
 ## Tests (escalation ladder)
 

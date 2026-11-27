@@ -8,8 +8,8 @@ open_items: true
 ---
 
 > **Not the work queue** (2026-09-22). Retained design, not selectable work.
-> The only implementation queue is [`backlog.md`](backlog.md).
-> The work queue is [`backlog.md`](backlog.md). Take the first open row there. This file is not that queue.
+> The only implementation queue is [`roadmap.md`](../roadmap.md).
+> The work queue is [`roadmap.md`](../roadmap.md). This file is not that queue.
 
 # Loops — plan (scheduled recurrence over goals)
 
@@ -152,5 +152,5 @@ checker = content/structure verifiers, cap = 10 passes, human gate = review the 
 
 `agentic-loops.md` (flip the vocabulary table's loop row from "designed" to "built"),
 `overview.md` (crate map row if a module becomes visible; cron row gains "loops ride this"),
-`contracts.md` (only if `LoopSpec`/series types become a public seam), `api.md` (`/api/loops*`). Slice tracking lives in this file: `roadmap.md` is now a pointer to the
-backlog and the direction.
+`contracts.md` (only if `LoopSpec`/series types become a public seam), `api.md` (`/api/loops*`). Slice tracking lives in this file: `roadmap.md` holds the direction and the
+work queue.

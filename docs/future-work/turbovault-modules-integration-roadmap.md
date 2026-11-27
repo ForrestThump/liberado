@@ -8,8 +8,8 @@ open_items: true
 ---
 
 > **Not the work queue** (2026-09-22). Retained design, not selectable work.
-> The only implementation queue is [`backlog.md`](backlog.md).
-> The work queue is [`backlog.md`](backlog.md). Take the first open row there. This file is not that queue.
+> The only implementation queue is [`roadmap.md`](../roadmap.md).
+> The work queue is [`roadmap.md`](../roadmap.md). This file is not that queue.
 
 # TurboVault modules — integration roadmap (umbrella)
 
@@ -22,7 +22,7 @@ daemon working, staying loosely coupled, and minimizing upstream maintainer fric
 **Relationship to other docs**: this is the *umbrella*. The vault-events vertical already has a deep
 implementation plan — [`turbovault-vault-events-plugin-plan.md`](turbovault-vault-events-plugin-plan.md).
 This doc sits above it, tracks **tasks** / **vector** status, defines shared conventions, and ties
-into the backlog ([`backlog.md`](backlog.md)).
+into the work queue ([`roadmap.md`](../roadmap.md)).
 
 > If this conflicts with a newer maintainer comment on #33/#34/#39, the maintainer comment wins —
 > update this file.
@@ -49,7 +49,7 @@ into the backlog ([`backlog.md`](backlog.md)).
 - **None of the three blocks Liberado P1.** The daemon already perceives the vault via its own watcher
   (the `L0` fallback). Modules are a **consolidation + capability + synergy** play. With vector + tasks
   live, Liberado's *remaining* P1 is the phone-grade interfacing loop (W1 / E5-b), not vault storage —
-  see [`backlog.md`](backlog.md). *Don't let module polish derail the daily-driver bar.*
+  see [`roadmap.md`](../roadmap.md). *Don't let module polish derail the daily-driver bar.*
 - **Actual build order diverged productively:** scaffolding + **vector** landed on `develop` first
   (highest capability payoff once the engine existed); **tasks** completed as a clean extraction on
   `feat/plugin-tasks`. **Next module work: land tasks onto `develop`, then `vault_events`.**
@@ -267,8 +267,8 @@ bundle two modules in one PR series.
 
 ## 8. How this reshapes the Liberado roadmap (`roadmap.md`)
 
-This section describes the July 2026 roadmap. It is not the current order. Product direction is
-[`../direction.md`](../direction.md). The queue is [`backlog.md`](backlog.md). The table below is
+This section describes the July 2026 roadmap. It is not the current order. Product direction and
+the queue are [`roadmap.md`](../roadmap.md). The table below is
 kept as a record of how the modules were expected to land against that old page.
 
 | `roadmap.md` item | Effect of the modules |
@@ -283,7 +283,7 @@ kept as a record of how the modules were expected to land against that old page.
 
 **Was wired into [`roadmap.md`](../roadmap.md)** (2026-07-19): cross-cutting TurboVault modules line +
 "Recently landed" entry for live vector/tasks + "What's next" one-screen summary. `docs/roadmap.md`
-is now a pointer to the direction and the backlog, so that line is gone. (Re-checked 2026-11-20.)
+is now the direction and the work queue, so that line is gone. (Re-checked 2026-11-20.)
 
 ---
 
@@ -324,7 +324,7 @@ Extends the vault-events plan's F1–F12 with module-umbrella-level calls.
 
 ## 11. Open questions (need a human call)
 
-1. ~~**Reprioritize `roadmap.md`?**~~ **Done 2026-07-19** — pointer + cross-cutting + what's-next.
+1. ~~**Reprioritize `roadmap.md`?**~~ **Done 2026-07-19** — cross-cutting + what's-next.
 2. **`vector` vs existing `memory-mcp`/`memory-store` / `liberado-qdrant-mcp`** — consolidate, or keep
    separate surfaces (vault semantic search vs agent memory corpus)? Homelab currently has both
    TurboVault vector and `liberado-qdrant-mcp`.

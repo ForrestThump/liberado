@@ -12,26 +12,24 @@ Do not edit the tables by hand — update document frontmatter and re-run genera
 
 | Doc | Role |
 |-----|------|
-| **[roadmap.md](../roadmap.md)** | Pointer to [direction.md](../direction.md) and the backlog. Not the queue. |
-| **[backlog.md](backlog.md)** | **The implementation queue** — the only place agents take next implementation items. Start here. |
+| **[roadmap.md](../roadmap.md)** | **The work queue and the product direction.** The only place agents take next implementation items. Start here. |
 | [archive/](archive/README.md) | Finished plans, closed audits — **not current truth** |
 | [CATALOG.md](../CATALOG.md) | Repository-wide document catalog |
 
 ## Active documents
 
 Only root documents with `status: active` appear here. Active means current:
-the backlog, plus evidence later work has to read. Draft plans are not selectable.
+the roadmap, plus evidence later work has to read. Draft plans are not selectable.
 
 | Document | Kind | Domain | Authority |
 |------|------|--------|-----------|
 | [2026-10-11-vault-write-gate-audit.md](2026-10-11-vault-write-gate-audit.md) | finding | security | evidence |
-| [backlog.md](backlog.md) | plan | product | implementation |
 | [coder-harness-reliability-2026-08.md](coder-harness-reliability-2026-08.md) | finding | coding-harness | evidence |
 | [token-economics-findings-2026-08.md](token-economics-findings-2026-08.md) | finding | token-economics | evidence |
 
 ## Non-active root documents
 
-Draft plans are retained design, not the implementation queue. Move a plan to
+Draft plans are retained design, not the work queue. Move a plan to
 archive/ only after its useful facts live in spec, Rustdoc, or an ADR.
 
 | Doc | Status | Kind |
@@ -60,4 +58,4 @@ archive/ only after its useful facts live in spec, Rustdoc, or an ADR.
 | [turbovault-modules-integration-roadmap.md](turbovault-modules-integration-roadmap.md) | draft | plan |
 | [turbovault-vault-events-plugin-plan.md](turbovault-vault-events-plugin-plan.md) | draft | plan |
 
-Start every planning session at [backlog.md](backlog.md). [roadmap.md](../roadmap.md) is a pointer to the direction and the backlog, not the queue.
+Start every planning session at [roadmap.md](../roadmap.md). It is the only queue: it holds the product direction and the work queue.

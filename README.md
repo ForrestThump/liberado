@@ -12,17 +12,16 @@ Rust-native **personal AI system** and **agentic orchestration** substrate: one 
 | How it works | [docs/spec/architecture/overview.md](docs/spec/architecture/overview.md) |
 | Sessions model | [docs/spec/architecture/sessions.md](docs/spec/architecture/sessions.md) |
 | Frozen seams | [docs/spec/architecture/contracts.md](docs/spec/architecture/contracts.md) |
-| Product direction | [docs/direction.md](docs/direction.md) |
-| What to build next | [docs/future-work/backlog.md](docs/future-work/backlog.md) |
+| Product direction and what to build next | [docs/roadmap.md](docs/roadmap.md) |
 | HTTP/SSE API | [docs/spec/reference/api.md](docs/spec/reference/api.md) |
 | Crate inventory | [docs/spec/reference/crate-map.md](docs/spec/reference/crate-map.md) |
 | Failure-modes checklist | [docs/spec/architecture/failure-modes.md](docs/spec/architecture/failure-modes.md) |
 
 ## Strategy (short)
 
-Personal assistant first. Liberado owns the data, the rules, and reliable delivery: tasks, reminders, budget, and recovery. The coding pack is frozen. The next build work is in the [backlog](docs/future-work/backlog.md); it names the active track and the row order.
+Personal assistant first. Liberado owns the data, the rules, and reliable delivery: tasks, reminders, budget, and recovery. The coding pack is frozen. The next build work is in the [roadmap](docs/roadmap.md); it is the single file that holds the product direction and the work queue.
 
-Direction: [docs/direction.md](docs/direction.md). The July 2026 competitive note is historical: [docs/spec/architecture/positioning.md](docs/spec/architecture/positioning.md).
+The July 2026 competitive note is historical: [docs/spec/architecture/positioning.md](docs/spec/architecture/positioning.md).
 
 ## Development
 
@@ -40,4 +39,4 @@ Nested MCP checkouts (`liberado-*-mcp/`, `turbovault/`, …) may appear for co-d
 
 See [LICENSE](LICENSE).
 
-**Last updated:** 2026-11-20 — strategy follows [docs/direction.md](docs/direction.md). The work queue is the backlog.
+**Last updated:** 2026-11-27 — strategy and the work queue both live in [docs/roadmap.md](docs/roadmap.md).

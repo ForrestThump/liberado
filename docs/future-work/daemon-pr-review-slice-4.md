@@ -8,15 +8,15 @@ open_items: true
 ---
 
 > **Not the work queue** (2026-09-22). Retained design, not selectable work.
-> The only implementation queue is [`backlog.md`](backlog.md).
-> The work queue is [`backlog.md`](backlog.md). Take the first open row there. This file is not that queue.
+> The only implementation queue is [`roadmap.md`](../roadmap.md).
+> The work queue is [`roadmap.md`](../roadmap.md). This file is not that queue.
 
 # Daemon PR review Slice 4 — locked multi-harness plan
 
 **Status**: active. Forrest locked the defaults in this plan on 2026-09-10. OpenCode with the
 named DeepSeek V4 Flash pin later landed on main (PR #253). Cursor local and Grok Build are
 configurable print adapters. Remaining work is Antigravity, free-router, and webhooks. Open
-implementation work still enters through [the backlog](backlog.md).
+implementation work still enters through [the roadmap](../roadmap.md).
 
 This plan refines [the daemon PR review kickoff](daemon-pr-review-kickoff.md). It adds one ordered
 fallback route: Codex, then OpenCode, then Grok Build. Human merge remains the hard gate. Liberado

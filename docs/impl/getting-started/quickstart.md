@@ -114,5 +114,4 @@ target/release/liberado chat 01HZTURNABC…
   config knob, and which ones still need a rebuild
 - [`docs/spec/architecture/overview.md`](../../spec/architecture/overview.md) —
   what the daemon actually does
-- [`docs/direction.md`](../../direction.md) — product direction
-- [`docs/future-work/backlog.md`](../../future-work/backlog.md) — what to build next
+- [`docs/roadmap.md`](../../roadmap.md) — product direction and what to build next

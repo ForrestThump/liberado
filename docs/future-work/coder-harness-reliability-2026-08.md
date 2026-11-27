@@ -9,7 +9,7 @@ open_items: true
 
 # Coding harness reliability — measurement and fixes, 2026-08
 
-> Evidence, not a work queue. Read this before changing the coding pack. Select the change from [`backlog.md`](backlog.md).
+> Evidence, not a work queue. Read this before changing the coding pack. Select the change from [`roadmap.md`](../roadmap.md).
 
 **Status**: Active. Fixes through PR #119 are on `main`, and later fixes through PR #170 and after are
 too. The measurement is real but incomplete — read

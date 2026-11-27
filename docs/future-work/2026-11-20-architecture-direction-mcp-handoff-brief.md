@@ -7,7 +7,7 @@ canonical_for: architecture-direction-mcp-handoff-brief
 open_items: true
 ---
 
-> **Working proposal, not current authority.** Current product direction is [`docs/direction.md`](../direction.md). This brief does not replace the backlog, accepted ADRs, or the spec. Agents must not treat this file as the implementation queue.
+> **Working proposal, not current authority.** Current product direction and the work queue are [`docs/roadmap.md`](../roadmap.md). This brief does not replace the roadmap, accepted ADRs, or the spec. Agents must not treat this file as the implementation queue.
 
 # Liberado: Architecture Direction and MCP Integration — Handoff Brief
 

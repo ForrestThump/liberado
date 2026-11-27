@@ -8,8 +8,8 @@ open_items: true
 ---
 
 > **Not the work queue** (2026-09-22). Retained design, not selectable work.
-> The only implementation queue is [`backlog.md`](backlog.md).
-> The work queue is [`backlog.md`](backlog.md). Take the first open row there. This file is not that queue.
+> The only implementation queue is [`roadmap.md`](../roadmap.md).
+> The work queue is [`roadmap.md`](../roadmap.md). This file is not that queue.
 
 # Paseo ↔ Liberado integration — ordered gap plan
 
@@ -19,7 +19,7 @@ dogfood-ready:** interactive coding, durable sessions, and Paseo permission prom
 (P4.1), fork productization (Phase 5), and Track B remote access (Phase 6).
 
 **Not a single PR.** One PR-sized slice at a time; mutation evidence for behaviour claims per
-[`backlog.md`](backlog.md).
+[`roadmap.md`](../roadmap.md).
 
 **Related:**
 
@@ -28,7 +28,7 @@ dogfood-ready:** interactive coding, durable sessions, and Paseo permission prom
 - Install command: `liberado paseo install`
 - Config example: `config.example/paseo-liberado.json`
 - Bridge source: `crates/acp-bridge/`
-- Status updates: this file's status header, plus the [backlog](backlog.md) for open Paseo items. [`../roadmap.md`](../roadmap.md) is a pointer to the direction and the backlog, not a scoreboard
+- Status updates: this file's status header, plus the [roadmap](../roadmap.md) for open Paseo items.
 
 ---
 
@@ -319,5 +319,5 @@ mapping, and interactive coding (P7.1) are landed; install script dogfood on Win
 
 **Remote story:** P6 complete — separate from ACP comfort.
 
-Update this file's status header — and the [backlog](backlog.md) rows for open Paseo items —
-when phases land. [`../roadmap.md`](../roadmap.md) is a pointer, not a scoreboard.
+Update this file's status header — and the [roadmap](../roadmap.md) rows for open Paseo items —
+when phases land.

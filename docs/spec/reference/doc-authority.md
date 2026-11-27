@@ -23,9 +23,9 @@ as historical analysis in the future-work archive.
 | What does the program do now? | Code, tests, and crate Rustdoc |
 | What must remain true across crates? | `docs/spec/reference` and `docs/spec/architecture/contracts.md` |
 | Why was this design selected? | Accepted ADR under `docs/decisions/` |
-| What should an agent implement next? | `docs/future-work/backlog.md` only |
-| What is the product mission and strategic direction? | `docs/direction.md` |
-| What is the broader direction and status snapshot? | `docs/direction.md`. `docs/roadmap.md` only points there and at the backlog. |
+| What should an agent implement next? | `docs/roadmap.md` only |
+| What is the product mission and strategic direction? | `docs/roadmap.md` |
+| What is the broader direction and status snapshot? | `docs/roadmap.md`. It holds the direction and the work queue. |
 | What did an experiment prove? | Dated validation/evidence record under `docs/validation/` |
 | What might we do later? | Proposed plan or idea under `docs/future-work/` |
 | What happened before? | `docs/future-work/archive/` and git history |
@@ -108,13 +108,13 @@ When a plan is finished:
 1. Move current behavior and invariants into Rustdoc, tests, or a normative specification.
 2. Move the durable design choice into an ADR.
 3. Move measurements into a dated evidence record under `docs/validation/`.
-4. Remove completed items from `backlog.md`.
+4. Remove completed items from `roadmap.md`.
 5. Archive the full plan under `docs/future-work/archive/` if investigation history remains useful.
 6. Delete from the working tree only if every useful fact already lives elsewhere (git still retains it).
 
 A completed plan must not stay in the active index only because one paragraph is useful. Extract that paragraph first.
 
-The generated future-work index lists root documents with `status: active` only. Active means the backlog and evidence a later change has to read. A draft plan is retained design: it stays in the non-active table, and it is not selectable. Move it to `archive/` only after the useful facts live in spec, Rustdoc, or an ADR.
+The generated future-work index lists root documents with `status: active` only. Active means the roadmap and evidence a later change has to read. A draft plan is retained design: it stays in the non-active table, and it is not selectable. Move it to `archive/` only after the useful facts live in spec, Rustdoc, or an ADR.
 
 ## ADRs
 

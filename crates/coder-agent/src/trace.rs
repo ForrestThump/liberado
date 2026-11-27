@@ -36,11 +36,12 @@ pub fn snapshot_events(events: &EventLog) -> Vec<CoderEvent> {
 /// dropped the part that explains the run. Two of thirty results in the one real trace on disk hit
 /// that ceiling — including the `run_command` calls, which is where failures live.
 ///
-/// A constant rather than a setting, deliberately. `docs/future-work/backlog.md` records seven
-/// settings that parsed, validated and reached nothing because a consumer hardcoded a literal;
-/// `CoderRunConfig` is built by thirteen separate initializers, so an eighth knob here buys
-/// tunability nobody asked for at the cost of the exact failure that band F exists to stop. Raise
-/// this number if a real trace is truncating something you needed.
+/// A constant rather than a setting, deliberately.
+/// `docs/future-work/coder-harness-reliability-2026-08.md` records seven settings that parsed,
+/// validated and reached nothing because a consumer hardcoded a literal; `CoderRunConfig` is built
+/// by thirteen separate initializers, so an eighth knob here buys tunability nobody asked for at
+/// the cost of the exact failure that band F exists to stop. Raise this number if a real trace is
+/// truncating something you needed.
 pub const TRACE_MAX_CHARS: usize = 20_000;
 
 pub fn preview_value(value: &Value, max_chars: usize) -> String {

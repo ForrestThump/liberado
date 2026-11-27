@@ -146,12 +146,11 @@ fn generate_future_work_readme(docs: &[Document]) -> String {
         "# Future Work", "", "Index of forward-looking work. **Generated** by `liberado docs metadata generate`.",
         "Do not edit the tables by hand — update document frontmatter and re-run generate.", "",
         "| Doc | Role |", "|-----|------|",
-        "| **[roadmap.md](../roadmap.md)** | Pointer to [direction.md](../direction.md) and the backlog. Not the queue. |",
-        "| **[backlog.md](backlog.md)** | **The implementation queue** — the only place agents take next implementation items. Start here. |",
+        "| **[roadmap.md](../roadmap.md)** | **The work queue and the product direction.** The only place agents take next implementation items. Start here. |",
         "| [archive/](archive/README.md) | Finished plans, closed audits — **not current truth** |",
         "| [CATALOG.md](../CATALOG.md) | Repository-wide document catalog |", "", "## Active documents", "",
         "Only root documents with `status: active` appear here. Active means current:",
-        "the backlog, plus evidence later work has to read. Draft plans are not selectable.", "",
+        "the roadmap, plus evidence later work has to read. Draft plans are not selectable.", "",
         "| Document | Kind | Domain | Authority |", "|------|------|--------|-----------|",
     ].into_iter().map(str::to_owned).collect::<Vec<_>>();
     if active.is_empty() {
@@ -171,7 +170,7 @@ fn generate_future_work_readme(docs: &[Document]) -> String {
             "",
             "## Non-active root documents",
             "",
-            "Draft plans are retained design, not the implementation queue. Move a plan to",
+            "Draft plans are retained design, not the work queue. Move a plan to",
             "archive/ only after its useful facts live in spec, Rustdoc, or an ADR.",
             "",
             "| Doc | Status | Kind |",
@@ -194,7 +193,7 @@ fn generate_future_work_readme(docs: &[Document]) -> String {
     lines.extend(
         [
             "",
-            "Start every planning session at [backlog.md](backlog.md). [roadmap.md](../roadmap.md) is a pointer to the direction and the backlog, not the queue.",
+            "Start every planning session at [roadmap.md](../roadmap.md). It is the only queue: it holds the product direction and the work queue.",
             "",
         ]
         .into_iter()
@@ -921,22 +920,36 @@ mod tests {
             "non-future-work must not appear: {readme}"
         );
         assert!(readme.contains("## Active documents"), "{readme}");
-        // The generated index must point agents at the backlog, not at the roadmap.
+        // The generated index must point agents at the roadmap: it is the only queue.
         assert!(
-            readme.contains("Start every planning session at [backlog.md](backlog.md)."),
+            readme.contains("Start every planning session at [roadmap.md](../roadmap.md)."),
             "{readme}"
         );
         assert!(
             readme.contains(
+                "It is the only queue: it holds the product direction and the work queue."
+            ),
+            "{readme}"
+        );
+        assert!(
+            readme.contains("**The work queue and the product direction.**"),
+            "{readme}"
+        );
+        assert!(
+            !readme.contains("| **[backlog.md](backlog.md)** |"),
+            "the backlog is archived; it is not a live root queue file: {readme}"
+        );
+        assert!(
+            !readme.contains("Start every planning session at [backlog.md](backlog.md)."),
+            "{readme}"
+        );
+        assert!(
+            !readme.contains(
                 "Pointer to [direction.md](../direction.md) and the backlog. Not the queue."
             ),
             "{readme}"
         );
         assert!(!readme.contains("Living scoreboard"), "{readme}");
-        assert!(
-            !readme.contains("Start every planning session at [roadmap.md]"),
-            "{readme}"
-        );
     }
 
     // ── exact_file ──────────────────────────────────────────────────────

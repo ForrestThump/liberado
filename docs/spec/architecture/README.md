@@ -10,11 +10,11 @@ Living description of **how Liberado works today**. Historical plans belong in [
 | [modularity.md](modularity.md) | Seam plan and “could someone use just this crate?” |
 | [failure-modes.md](failure-modes.md) | Seven recurring bug classes (read before safety PRs) |
 | [agentic-loops.md](agentic-loops.md) | Kernel vs domain packs; goals, verifiers, subagents |
-| [positioning.md](positioning.md) | Historical competitive note. Current direction is [direction.md](../../direction.md). |
+| [positioning.md](positioning.md) | Historical competitive note. Current direction and the work queue are [roadmap.md](../../roadmap.md). |
 | [channels-and-interactivity.md](channels-and-interactivity.md) | Surfaces, AskHuman, messaging seams |
 | [session-surface-contract.md](session-surface-contract.md) | How surfaces should treat sessions |
 | [verifiers.md](verifiers.md) | Completeness gates / CI-in-the-loop sketch |
 
 **Crate-level docs:** [reference/crate-map.md](../../spec/reference/crate-map.md) and `crates/*/ARCHITECTURE.md`.
 
-**Related:** [../README.md](../README.md) for decision log and detailed specs; [../../direction.md](../../direction.md) for product direction; [../../future-work/backlog.md](../../future-work/backlog.md) for open work. [../../roadmap.md](../../roadmap.md) points at those two.
+**Related:** [../README.md](../README.md) for decision log and detailed specs; [../../roadmap.md](../../roadmap.md) for product direction and the open work queue.

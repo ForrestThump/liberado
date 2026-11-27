@@ -131,7 +131,7 @@ plan look OK?" — that's what presenting the plan for approval is for.
   a "Recommended sequencing" close. See `docs/future-work/archive/hygiene-audit-2026-07-02.md` and
   `docs/future-work/archive/hardening-audit-2026-07-02.md` for the concrete shape. **This matters beyond the current
   conversation**: it's what lets a differently-scoped session (or a different agent entirely) resume the
-  backlog without re-deriving it, and it survives context compaction that a chat transcript doesn't.
+  work queue without re-deriving it, and it survives context compaction that a chat transcript doesn't.
 - **Cross-link related docs both directions.** When this session's work re-confirmed an already-recorded
   finding in `crate-modularity-audit.md`, both docs were updated with a link to the other — not just the
   new one.
@@ -203,11 +203,11 @@ Don't duplicate what already exists elsewhere — this doc is process, not archi
 | Question | Where |
 |---|---|
 | What is this system, at a high level? | `docs/spec/architecture/overview.md` |
-| Why does it exist / how does it compare to alternatives? | `docs/direction.md` (current). `docs/spec/architecture/positioning.md` is historical. |
+| Why does it exist / how does it compare to alternatives? | `docs/roadmap.md` (current). `docs/spec/architecture/positioning.md` is historical. |
 | The seam/modularity plan | `docs/spec/architecture/modularity.md` |
 | How do I build and test it? | Root `AGENTS.md` |
 | How do I run and configure it? | `crates/cli/ARCHITECTURE.md` and `docs/spec/config-spec.md` |
-| What's next? | `docs/future-work/backlog.md`. `docs/roadmap.md` points at `docs/direction.md` and the backlog. |
+| What's next? | `docs/roadmap.md`. It holds the direction and the work queue. |
 | Why was decision N made? | `docs/decisions/ADR-NNNN-*.md` |
 | Per-crate design detail | `crates/<name>/ARCHITECTURE.md` where one exists; the generated `docs/spec/reference/crate-map.md` lists every crate |
 | The chat/SSE API contract | `docs/spec/reference/api.md` |

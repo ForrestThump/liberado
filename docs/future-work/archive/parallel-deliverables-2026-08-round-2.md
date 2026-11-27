@@ -7,7 +7,7 @@ canonical_for: parallel-deliverables-r2
 open_items: false
 ---
 
-> **Archived.** This plan is not current truth. Open work lives in [backlog.md](../backlog.md) and [roadmap.md](../../roadmap.md). See [doc-authority.md](../../spec/reference/doc-authority.md).
+> **Archived.** This plan is not current truth. Open work lives in [roadmap.md](../../roadmap.md). See [doc-authority.md](../../spec/reference/doc-authority.md).
 
 # Five parallel deliverables — round 2
 

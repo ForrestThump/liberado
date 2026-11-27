@@ -1,19 +1,24 @@
 ---
 kind: plan
-status: active
+status: superseded
 authority: implementation
 domain: product
 canonical_for: implementation-backlog
-open_items: true
+superseded_by: ../../roadmap.md
+open_items: false
 ---
+
+> **Archived (2026-11-26).** This is not current truth. The work queue and the product direction
+> live only in [docs/roadmap.md](../../roadmap.md). The text below is kept for the record: it holds
+> the rationale, the done-when text, and the dependency order that the current roadmap links to.
 
 # Backlog — implement in this order
 
-This file is the only queue from which an agent should select implementation work. It contains
+This file *was* the only queue from which an agent should select implementation work. It contains
 open work only. Code, tests, specifications, validation records, and git history describe work
 that has landed.
 
-**Operator note (2026-11-01).** One active track. Polish notifications fully before other substrate
+**Operator note (2026-11-01, historical).** One active track. Polish notifications fully before other substrate
 rows. **[#332](https://github.com/ForrestThump/liberado/pull/332)** (accounts + passkey login) is
 in flight on another branch — the **last** accounts PR. Planned "PR3" (account-owned devices /
 notifications / conversations) is **dropped**; device identity is the push subscription, and
@@ -25,8 +30,8 @@ parallel on `main`. **After #332 merges, take work only from [Active track — n
 The order below is the October 2026 merged roadmap: first-review steps 1–12, plus agent-runtime items
 A0–A10, in the slot-table order 1–14. The reviews are historical evidence:
 
-- [2026-10-opus-review.md](../reviews/2026-10-opus-review.md)
-- [2026-10-opus-agent-runtime.md](../reviews/2026-10-opus-agent-runtime.md)
+- [2026-10-opus-review.md](../../reviews/2026-10-opus-review.md)
+- [2026-10-opus-agent-runtime.md](../../reviews/2026-10-opus-agent-runtime.md)
 
 Where a review and this file disagree, this file wins. The first review's step 3 says "cut the
 gate tax". This queue does not. Use the step 3 title in the table.
@@ -57,7 +62,7 @@ Already landed, and not rows: wire stamp
 [#276](https://github.com/ForrestThump/liberado/pull/276), tunable `agent_profiles`
 [#277](https://github.com/ForrestThump/liberado/pull/277), example `chat-default` hat
 [#278](https://github.com/ForrestThump/liberado/pull/278). Contract:
-[`../spec/architecture/chat-agent-surface-mode.md`](../spec/architecture/chat-agent-surface-mode.md).
+[`../../spec/architecture/chat-agent-surface-mode.md`](../../spec/architecture/chat-agent-surface-mode.md).
 
 ## Active track — notifications polish (after #332)
 
@@ -280,11 +285,11 @@ Replace the hand-written Web Push with a maintained crate, or with `ntfy`. Move 
 
 This is fallback only. For chat, remove one model role. The face calls a small per-profile tool set directly, and `delegate` is only for long goals. Load MCP tool schemas lazily, by profile. Inject a capped `USER.md`-style memory note into each turn.
 
-**A9 is parked.** Do not start Jev or group rooms until A5 and A6 have landed and you have used the mailbox for two weeks. The old JEV1 / CAS5 row lives here. Spec, for when it unparks: [`../spec/architecture/jev-integration.md`](../spec/architecture/jev-integration.md). Confidence-gated advisor only. The dispatcher remains the sole grantor.
+**A9 is parked.** Do not start Jev or group rooms until A5 and A6 have landed and you have used the mailbox for two weeks. The old JEV1 / CAS5 row lives here. Spec, for when it unparks: [`../../spec/architecture/jev-integration.md`](../../spec/architecture/jev-integration.md). Confidence-gated advisor only. The dispatcher remains the sole grantor.
 
 **A9 done when,** after it unparks: a three-agent room answers one human message in at most 2 rounds, with no unbounded replies. Mention routing, 2 rounds, `NO_REPLY`, and a Matrix room with puppets. Jev routing is optional and confidence-gated.
 
-`docs/direction.md` still records the 2026-10-18 decision to build an unpolished Jev prototype, off by default. This queue parks that prototype at A9. Agents select work from this file.
+`docs/future-work/archive/direction.md` still records the 2026-10-18 decision to build an unpolished Jev prototype, off by default. This queue parks that prototype at A9. Agents selected work from this file; the current queue is [docs/roadmap.md](../../roadmap.md).
 
 ### Shorten AGENTS.md
 
@@ -323,7 +328,7 @@ Use the daemon you actually talk to, on current `main`. In the live config:
 - `chat-default` is a Chat hat (`component = "main-agent"`, no domain). It is not listed in `[chat] agent_profiles`.
 - The specialist hats you actually open are listed in `[chat] agent_profiles`. `operator` is the creator hat.
 - `chat-search` stays a commented opt-in until you miss history search. The example is `config.example/policy.toml`.
-- Optional: `[providers.fallback]` on the paid provider. Copy the shape from [`tuning.md`](../spec/reference/tuning.md). The header is `[providers.fallback]`, a table inside the `[[providers]]` entry.
+- Optional: `[providers.fallback]` on the paid provider. Copy the shape from [`tuning.md`](../../spec/reference/tuning.md). The header is `[providers.fallback]`, a table inside the `[[providers]]` entry.
 
 Write one note per issue. Keep the notes locally. Do not commit a scratch log. A note is ready for a PR when it names the behavior you saw and the behavior you want.
 
@@ -335,11 +340,11 @@ Do not start these while the coding pack is frozen. Step 3 is the design for tha
 
 Use one repository and one writer. Start a PR as draft on a branch that is absent from the daemon host, mark it ready, and let the configured checks become green. Prove one clean COMMENT and one blocker COMMENT plus checklist and draft conversion. Restart between GitHub publication and ledger completion, then prove that marker reconciliation creates no duplicate. Push a new commit and prove that it does not run until a new `ready_for_review` transition arms that exact SHA.
 
-Record the image SHA, PR/SHA review keys, GitHub review and checklist IDs, daemon restart evidence, and the absence of a second writer. Do not begin Slice 4 worker fallback until this proof passes. Kickoff: [`daemon-pr-review-kickoff.md`](daemon-pr-review-kickoff.md).
+Record the image SHA, PR/SHA review keys, GitHub review and checklist IDs, daemon restart evidence, and the absence of a second writer. Do not begin Slice 4 worker fallback until this proof passes. Kickoff: [`daemon-pr-review-kickoff.md`](../daemon-pr-review-kickoff.md).
 
 #### 0.7 / C3 — controlled cross-harness baseline
 
-The experiment spec is [`cross-harness-baseline.md`](cross-harness-baseline.md). That file is the authority for what C3 is, what does not close it, the adapter gap, and the published-report bar.
+The experiment spec is [`cross-harness-baseline.md`](../cross-harness-baseline.md). That file is the authority for what C3 is, what does not close it, the adapter gap, and the published-report bar.
 
 Short form: instrument pinned Liberado, Pi, Hermes, and Deep Agents. Use the same task, repository commit, model, provider, sampling settings, and resource limits. Keep each harness's native system prompt and tool schemas. Run repeats where cost permits.
 
@@ -351,11 +356,11 @@ Report:
 - Human repair required.
 - Trace-linked failure classes.
 
-A single comparison without Hermes is evidence, not this baseline. Do not rank harnesses or change `max_turns` from that sample. Runner contract: [`harness-comparisons.md`](../spec/reference/harness-comparisons.md). Cost-lever research: [`harness-study-2026-08.md`](harness-study-2026-08.md).
+A single comparison without Hermes is evidence, not this baseline. Do not rank harnesses or change `max_turns` from that sample. Runner contract: [`harness-comparisons.md`](../../spec/reference/harness-comparisons.md). Cost-lever research: [`harness-study-2026-08.md`](../harness-study-2026-08.md).
 
 #### C5 — completion-gate measurement
 
-Run the same controlled task set as C3 ([`cross-harness-baseline.md`](cross-harness-baseline.md)) with `[coder.gate] enabled` off and on. Measure accepted results, model calls, cost, and repair. The gate costs `1 + fresh_reviewers` model calls per attempt. Keep it default-off until the result supports a change.
+Run the same controlled task set as C3 ([`cross-harness-baseline.md`](../cross-harness-baseline.md)) with `[coder.gate] enabled` off and on. Measure accepted results, model calls, cost, and repair. The gate costs `1 + fresh_reviewers` model calls per attempt. Keep it default-off until the result supports a change.
 
 #### TE1 — deployed token-economics read
 
@@ -366,7 +371,7 @@ Deploy the existing instruments, wait one day, and report:
 - Subagent and direct-execution shares.
 - Total repeated calls.
 
-Use `liberado-cost --json`. This item is measurement only. See [`token-economics-findings-2026-08.md`](token-economics-findings-2026-08.md). The logger is already at info. Do not change the catalogue in this item.
+Use `liberado-cost --json`. This item is measurement only. See [`token-economics-findings-2026-08.md`](../token-economics-findings-2026-08.md). The logger is already at info. Do not change the catalogue in this item.
 
 #### TE2 — tool-catalogue narrowing
 
@@ -374,7 +379,7 @@ Blocked on TE1. Change only the catalogue path that TE1 identifies. Do not rewri
 
 #### C4 — dedicated goal-view panes
 
-Add a role timeline, gate panel, and verifier panel to `crates/tui`. Gate votes already stream but currently render in the joined pane. Follow [`session-surface-contract.md`](../spec/architecture/session-surface-contract.md).
+Add a role timeline, gate panel, and verifier panel to `crates/tui`. Gate votes already stream but currently render in the joined pane. Follow [`session-surface-contract.md`](../../spec/architecture/session-surface-contract.md).
 
 ### Later substrate work (not in the review order)
 
@@ -390,7 +395,7 @@ Diagnose and stop the idle read-error, stream-ended, reconnect loop in `turbomcp
 
 #### E2 — inbox layer
 
-E4 must land first. Implement the two capture surfaces and compare-and-swap clearing defined in [`inbox-spec.md`](../spec/inbox-spec.md). Unflagged notes belong to the schedule; `#now` notes belong to the watcher. Reuse existing provenance and content-hash idempotency.
+E4 must land first. Implement the two capture surfaces and compare-and-swap clearing defined in [`inbox-spec.md`](../../spec/inbox-spec.md). Unflagged notes belong to the schedule; `#now` notes belong to the watcher. Reuse existing provenance and content-hash idempotency.
 
 ### Deferred, not selectable
 
@@ -400,7 +405,7 @@ Focused search is sufficient today. Do not schedule an always-on repository map 
 
 #### Coding-worker control plane
 
-Liberado as scheduler over interchangeable coding CLIs. Draft: [`coding-worker-control-plane.md`](coding-worker-control-plane.md). Do not implement from that file. C3 is the evidence gate, and C3 is parked with the frozen coding pack. The native loop is one worker, not the thing to make dramatically smarter in the meantime.
+Liberado as scheduler over interchangeable coding CLIs. Draft: [`coding-worker-control-plane.md`](../coding-worker-control-plane.md). Do not implement from that file. C3 is the evidence gate, and C3 is parked with the frozen coding pack. The native loop is one worker, not the thing to make dramatically smarter in the meantime.
 
 ## Branch and integration rule
 

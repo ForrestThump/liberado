@@ -46,7 +46,8 @@ finds failures that announce themselves. The seam bug never failed — it succee
 model asked "what went wrong?" would have said "nothing."
 
 **Step 5 is wrong for us right now.** Evals in CI means real inference on every PR, while the
-token-economics rows (**TE1** and **TE2** in the [backlog](../backlog.md), findings in
+token-economics rows (**TE1** and **TE2**, listed under Later in the
+[roadmap](../../roadmap.md), findings in
 [token-economics-findings-2026-08.md](../token-economics-findings-2026-08.md)) are still unpicking a
 56% line item. Note that the live conformance
 suite is deliberately **hand-run on the box**, not CI-gated, for the same reason.
