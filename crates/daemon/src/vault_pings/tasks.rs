@@ -43,11 +43,8 @@ fn collect_tasks(
     config: &TasksConfig,
     out: &mut Vec<OpenTask>,
 ) {
-    let source_lines = task_source_lines(text);
-    for (index, task) in parse_tasks_for_jobs(text).into_iter().enumerate() {
-        if let Some(open_task) =
-            open_task_from_parsed(rel, today, config, &source_lines, index, task)
-        {
+    for task in parse_tasks_for_jobs(text) {
+        if let Some(open_task) = open_task_from_parsed(rel, today, config, task) {
             out.push(open_task);
         }
     }
@@ -62,11 +59,18 @@ pub(super) fn load_tasks_config(root: &Path) -> TasksConfig {
 }
 
 pub(super) fn parse_tasks_for_jobs(text: &str) -> Vec<TaskItem> {
-    let normalized = normalize_task_times_for_parser(text);
+    let normalized = normalize_task_lines_for_parser(text);
     parse_tasks(&normalized)
 }
 
-fn normalize_task_times_for_parser(text: &str) -> String {
+/// Rewrite the task lines the parser cannot read as they are.
+///
+/// TurboVault's parser reads a time of day as its own token, so
+/// `📅 2026-09-28 14:00` and `📅 2026-09-28 🕘 14:00` both parse. Two shapes
+/// need a rewrite: an ISO date-time is one token
+/// (`📅 2026-09-28T14:00`), and a time with seconds is not a time of day the
+/// parser can read (`📅 2026-09-28 14:00:30`).
+fn normalize_task_lines_for_parser(text: &str) -> String {
     text.lines()
         .map(|line| {
             if is_task_line(line.trim_start()) {
@@ -86,14 +90,32 @@ fn normalize_task_line_for_parser(line: &str) -> String {
     while index < parts.len() {
         let token = parts[index];
         out.push(token.to_string());
-        if is_date_marker(token)
-            && let Some((next, rest)) = date_with_optional_clock(&parts, index + 1)
-        {
-            out.push(next.to_string());
-            index = rest;
+        index += 1;
+        if !is_date_marker(token) {
             continue;
         }
-        index += 1;
+        let Some(date) = parts
+            .get(index)
+            .copied()
+            .filter(|token| parse_ymd(token).is_some())
+        else {
+            continue;
+        };
+        match split_iso_datetime(date) {
+            Some((date, time)) => {
+                out.push(date);
+                out.push(time);
+                index += 1;
+            }
+            None => {
+                out.push(date.to_string());
+                index += 1;
+                if let Some(clock) = parts.get(index).and_then(|token| parse_clock(token)) {
+                    out.push(format_hhmm(clock));
+                    index += 1;
+                }
+            }
+        }
     }
     out.join(" ")
 }
@@ -102,27 +124,15 @@ fn is_date_marker(token: &str) -> bool {
     matches!(token, "📅" | "⏳" | "🛫" | "✅" | "❌" | "➕")
 }
 
-fn date_with_optional_clock<'a>(parts: &'a [&str], index: usize) -> Option<(&'a str, usize)> {
-    let date_token = *parts.get(index)?;
-    if let Some((date, clock)) = date_token.split_once('T')
-        && parse_ymd(date).is_some()
-        && parse_clock(clock).is_some()
-    {
-        return Some((date, index + 1));
-    }
-    parse_ymd(date_token)?;
-    if let Some(clock) = parts.get(index + 1)
-        && parse_clock(clock).is_some()
-    {
-        return Some((date_token, index + 2));
-    }
-    Some((date_token, index + 1))
-}
-
-fn task_source_lines(text: &str) -> Vec<&str> {
-    text.lines()
-        .filter(|line| is_task_line(line.trim_start()))
-        .collect()
+/// Split an ISO date-time (`2026-09-28T14:00`) into a date and a time.
+///
+/// The parser reads a time of day as its own token, so the ISO spelling has
+/// to be split before the parser sees it. Seconds are dropped.
+fn split_iso_datetime(token: &str) -> Option<(String, String)> {
+    let (date, time) = token.split_once('T')?;
+    parse_ymd(date)?;
+    let clock = parse_clock(time)?;
+    Some((date.to_string(), format_hhmm(clock)))
 }
 
 fn is_task_line(line: &str) -> bool {
@@ -166,8 +176,6 @@ fn open_task_from_parsed(
     rel: &str,
     today: Date,
     config: &TasksConfig,
-    source_lines: &[&str],
-    index: usize,
     task: TaskItem,
 ) -> Option<OpenTask> {
     if !config.accepts(&task) || !task.status.is_open() {
@@ -181,15 +189,12 @@ fn open_task_from_parsed(
     if matches!(start, Some(date) if date > today) {
         return None;
     }
-    let line = source_lines.get(index).copied().unwrap_or_default();
-    let due_at = clock_after(line, '📅');
-    let scheduled_at = clock_after(line, '⏳');
     Some(OpenTask {
         priority: task_priority(task.priority),
         due: task.due_date.as_ref().and_then(date_from_display),
-        due_at,
+        due_at: task_time(task.due_time.as_deref()),
         scheduled: task.scheduled_date.as_ref().and_then(date_from_display),
-        scheduled_at,
+        scheduled_at: task_time(task.scheduled_time.as_deref()),
         start,
         recurrence: task.recurrence.clone(),
         in_progress: task.status == TaskStatus::InProgress,
@@ -198,24 +203,12 @@ fn open_task_from_parsed(
     })
 }
 
-/// Clock after `emoji` when the value is `YYYY-MM-DD HH:MM` or
-/// `YYYY-MM-DDTHH:MM`. Seconds are ignored. A later word that is not a clock
-/// stays off the label.
-fn clock_after(line: &str, emoji: char) -> Option<Time> {
-    let rest = line.split(emoji).nth(1)?;
-    let mut parts = rest.split_whitespace();
-    let token = parts.next()?;
-    if let Some(clock) = iso_clock(token) {
-        return Some(clock);
-    }
-    let _date = parse_ymd(token)?;
-    parts.next().and_then(parse_clock)
-}
-
-fn iso_clock(token: &str) -> Option<Time> {
-    let (date, clock) = token.split_once('T')?;
-    let _date = parse_ymd(date)?;
-    parse_clock(clock)
+/// The time of day TurboVault found for a date.
+///
+/// TurboVault reports it as `HH:MM` and leaves it empty when the task has no
+/// time.
+fn task_time(value: Option<&str>) -> Option<Time> {
+    value.and_then(parse_clock)
 }
 
 fn parse_clock(value: &str) -> Option<Time> {
@@ -268,9 +261,11 @@ fn format_task_line(index: usize, task: &OpenTask, today: Date) -> String {
     let mut parts = vec![format!("{index}. {}", task.text)];
     if let Some(due) = task.due {
         parts.push(due_label(due, task.due_at, today));
+    } else if let Some(label) = when_label("due", None, task.due_at) {
+        parts.push(label);
     }
-    if let Some(scheduled) = task.scheduled {
-        parts.push(when_label("scheduled", scheduled, task.scheduled_at));
+    if let Some(label) = when_label("scheduled", task.scheduled, task.scheduled_at) {
+        parts.push(label);
     }
     if let Some(rule) = &task.recurrence {
         parts.push(format!("repeats {rule}"));
@@ -283,7 +278,7 @@ fn format_task_line(index: usize, task: &OpenTask, today: Date) -> String {
 }
 
 fn due_label(due: Date, clock: Option<Time>, today: Date) -> String {
-    let label = when_label("due", due, clock);
+    let label = date_label("due", due, clock);
     if due < today {
         format!("{label} (overdue)")
     } else if due == today {
@@ -293,7 +288,19 @@ fn due_label(due: Date, clock: Option<Time>, today: Date) -> String {
     }
 }
 
-fn when_label(kind: &str, date: Date, clock: Option<Time>) -> String {
+/// The label for a date and the time of day that belongs to it.
+///
+/// A time of day without a date still gets a label: the vault carries
+/// `[dueTime:: 09:00]` on a task that has no due date.
+fn when_label(kind: &str, date: Option<Date>, clock: Option<Time>) -> Option<String> {
+    match (date, clock) {
+        (Some(date), _) => Some(date_label(kind, date, clock)),
+        (None, Some(clock)) => Some(format!("{kind} at {}", format_hhmm(clock))),
+        (None, None) => None,
+    }
+}
+
+fn date_label(kind: &str, date: Date, clock: Option<Time>) -> String {
     match clock {
         Some(time) => format!("{kind} {date} at {}", format_hhmm(time)),
         None => format!("{kind} {date}"),
