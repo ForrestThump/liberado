@@ -109,7 +109,7 @@ pub async fn compute_baseline(
     }
 
     // `git worktree add` does not bring gitignored leftover path-deps (`turbovault/`, `turbomcp/`).
-    // The current root pin is git+tag, so this is a no-op unless the parent manifest still
+    // The current root pin is git+rev, so this is a no-op unless the parent manifest still
     // declares a path dep. Copy, never junction — `worktree remove --force` followed a junction
     // once and emptied the originals.
     let _ = crate::provision_path_deps(opts.project_root, &worktree).await;

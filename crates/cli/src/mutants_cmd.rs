@@ -232,7 +232,7 @@ fn build_mutants_command(package: &str, profile: RunProfile) -> String {
     ];
     // cargo-mutants copies the workspace into %TEMP%; paseo/node_modules symlinks fail on
     // Windows without elevation (os error 1314), and leftover gitignored clones
-    // (turbovault/, turbomcp/) do not survive the copy. The git+tag pins do not need those
+    // (turbovault/, turbomcp/) do not survive the copy. The git+rev pins do not need those
     // directories. In-place avoids both. Recovery ritual lives in skills/mutants-campaign.md
     // — prefer this to a run that never starts.
     parts.extend(["--in-place".into()]);

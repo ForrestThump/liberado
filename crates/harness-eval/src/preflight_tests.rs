@@ -167,7 +167,7 @@ fn preflight_flags_missing_siblings_index_locks_and_disk_space() {
     assert_eq!(credential.expose(), "dummy");
     assert!(!format!("{credential:?}").contains("dummy"));
 
-    // Leftover nested clones are optional; cargo fetches the git+tag pins.
+    // Leftover nested clones are optional; cargo fetches the git+rev pins.
     fs::remove_dir_all(repository.join("turbovault")).unwrap();
     fs::remove_dir_all(repository.join("turbomcp")).unwrap();
     run(&spec, &policy).expect("missing leftover clones must not fail preflight");
