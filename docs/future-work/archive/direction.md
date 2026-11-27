@@ -1,11 +1,16 @@
 ---
 kind: plan
-status: active
+status: superseded
 authority: advisory
 domain: product
 canonical_for: product-direction
-open_items: true
+superseded_by: ../../roadmap.md
+open_items: false
 ---
+
+> **Archived (2026-11-26).** This is not current truth. Product direction and the work queue live
+> only in [docs/roadmap.md](../../roadmap.md). The text below is kept for the record, because it
+> explains why the current direction reads the way it does.
 
 Last edited 2026-11-01. The 2026-10-18 substrate priorities stand where this file does not supersede them.
 
@@ -48,9 +53,9 @@ Would this still be valuable if the owner's preferred hosted assistant were alre
 **Scope smell:** designing multi-user accounts or account-owned devices for a one-person daemon means the chunk grew past "small polish."
 
 ## Re-ranked roadmap (proposal)
-**Now:** finish [#332](https://github.com/ForrestThump/liberado/pull/332) (accounts + passkey login — last accounts PR). Then the **notifications polish** track in [`future-work/backlog.md`](future-work/backlog.md): richer push payload, per-notification WebUI detail, then optional Done/Snooze on the system notification — each step its own PR, lived with on the Pixel before the next.
+**Now:** finish [#332](https://github.com/ForrestThump/liberado/pull/332) (accounts + passkey login — last accounts PR). Then the **notifications polish** track in [`future-work/archive/backlog.md`](backlog.md): richer push payload, per-notification WebUI detail, then optional Done/Snooze on the system notification — each step its own PR, lived with on the Pixel before the next.
 
-**Paused until that track is daily-driver:** the October 2026 substrate queue (control plane, mailbox, outside-agent access, and the rest). Remote reach for an already-running daemon stays **Track B** (Paseo tunnel / remote attach — see [`future-work/paseo-liberado-integration-roadmap.md`](future-work/paseo-liberado-integration-roadmap.md)); borrow auth from the network layer (Tailscale) before adding more app-level auth.
+**Paused until that track is daily-driver:** the October 2026 substrate queue (control plane, mailbox, outside-agent access, and the rest). Remote reach for an already-running daemon stays **Track B** (Paseo tunnel / remote attach — see [`future-work/paseo-liberado-integration-roadmap.md`](../paseo-liberado-integration-roadmap.md)); borrow auth from the network layer (Tailscale) before adding more app-level auth.
 
 **Later / parked:** further WebUI polish beyond notifications, Jev model routing, adaptive or generated UI, extra chat features.
 Fallback kept: native agent loop over rented inference.

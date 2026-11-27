@@ -37,16 +37,17 @@ Authority model: [doc-authority.md](spec/reference/doc-authority.md).
 | [docs/decisions/ADR-0019-turbovault-as-privileged-plugin.md](decisions/ADR-0019-turbovault-as-privileged-plugin.md) | decision | accepted | normative | architecture | adr-0019 |
 | [docs/decisions/ADR-0020-mechanical-schedules.md](decisions/ADR-0020-mechanical-schedules.md) | decision | accepted | normative | architecture | adr-0020 |
 | [docs/decisions/README.md](decisions/README.md) | index | active | advisory | architecture | — |
-| [docs/direction.md](direction.md) | plan | active | advisory | product | product-direction |
 | [docs/future-work/2026-10-11-vault-write-gate-audit.md](future-work/2026-10-11-vault-write-gate-audit.md) | finding | active | evidence | security | vault-write-gate-audit |
 | [docs/future-work/2026-10-11-vault-write-gate-deploy.md](future-work/2026-10-11-vault-write-gate-deploy.md) | runbook | draft | advisory | security | — |
 | [docs/future-work/2026-11-20-architecture-direction-mcp-handoff-brief.md](future-work/2026-11-20-architecture-direction-mcp-handoff-brief.md) | plan | draft | advisory | product | architecture-direction-mcp-handoff-brief |
 | [docs/future-work/README.md](future-work/README.md) | index | active | advisory | — | — |
 | [docs/future-work/archive/acp-bridge-completion-roadmap.md](future-work/archive/acp-bridge-completion-roadmap.md) | plan | superseded | advisory | acp | acp-bridge-completion |
+| [docs/future-work/archive/backlog.md](future-work/archive/backlog.md) | plan | superseded | implementation | product | implementation-backlog |
 | [docs/future-work/archive/chat-search-plan.md](future-work/archive/chat-search-plan.md) | plan | implemented | advisory | chat | chat-search |
 | [docs/future-work/archive/daemon-pr-review-coupling-pass.md](future-work/archive/daemon-pr-review-coupling-pass.md) | finding | historical | advisory | coding-control-plane | daemon-pr-review-coupling-pass |
 | [docs/future-work/archive/daemon-pr-review-kickoff-grok46-critique.md](future-work/archive/daemon-pr-review-kickoff-grok46-critique.md) | finding | historical | advisory | coding-control-plane | daemon-pr-review-kickoff-grok46-critique |
 | [docs/future-work/archive/delegated-work-is-discarded-at-the-seam.md](future-work/archive/delegated-work-is-discarded-at-the-seam.md) | finding | implemented | evidence | delegation | delegated-work-seam |
+| [docs/future-work/archive/direction.md](future-work/archive/direction.md) | plan | superseded | advisory | product | product-direction |
 | [docs/future-work/archive/docs_fixup.md](future-work/archive/docs_fixup.md) | plan | implemented | advisory | docs | docs-lifecycle |
 | [docs/future-work/archive/harness-comparison-redesign-2026-08.md](future-work/archive/harness-comparison-redesign-2026-08.md) | plan | implemented | advisory | coding-harness | harness-comparison-redesign |
 | [docs/future-work/archive/mock-harness-scope.md](future-work/archive/mock-harness-scope.md) | plan | implemented | advisory | correctness | — |
@@ -57,7 +58,6 @@ Authority model: [doc-authority.md](spec/reference/doc-authority.md).
 | [docs/future-work/archive/pr-dispatch-vtcode-no-write-finding.md](future-work/archive/pr-dispatch-vtcode-no-write-finding.md) | finding | historical | advisory | coding-harness | vtcode-no-write |
 | [docs/future-work/archive/property-testing-plan.md](future-work/archive/property-testing-plan.md) | plan | historical | advisory | correctness | — |
 | [docs/future-work/archive/sysmap-generic-core-plan.md](future-work/archive/sysmap-generic-core-plan.md) | plan | implemented | advisory | tooling | — |
-| [docs/future-work/backlog.md](future-work/backlog.md) | plan | active | implementation | product | implementation-backlog |
 | [docs/future-work/cadence-triggered-maintenance-agents.md](future-work/cadence-triggered-maintenance-agents.md) | plan | draft | advisory | ops | cadence-maintenance-agents |
 | [docs/future-work/coder-eval-curriculum.md](future-work/coder-eval-curriculum.md) | plan | draft | advisory | coding-harness | coder-eval-curriculum |
 | [docs/future-work/coder-harness-reliability-2026-08.md](future-work/coder-harness-reliability-2026-08.md) | finding | active | evidence | coding-harness | coder-harness-reliability-2026-08 |
@@ -91,7 +91,7 @@ Authority model: [doc-authority.md](spec/reference/doc-authority.md).
 | [docs/impl/live-conformance.md](impl/live-conformance.md) | runbook | active | implementation | conformance | live-conformance-operation |
 | [docs/reviews/2026-10-opus-agent-runtime.md](reviews/2026-10-opus-agent-runtime.md) | finding | historical | evidence | product | opus-agent-runtime-2026-10 |
 | [docs/reviews/2026-10-opus-review.md](reviews/2026-10-opus-review.md) | finding | historical | evidence | product | opus-review-2026-10 |
-| [docs/roadmap.md](roadmap.md) | plan | active | advisory | product | product-roadmap |
+| [docs/roadmap.md](roadmap.md) | plan | active | implementation | product | product-roadmap |
 | [docs/spec/architecture-decisions.md](spec/architecture-decisions.md) | index | superseded | advisory | architecture | — |
 | [docs/spec/architecture/chat-agent-surface-mode.md](spec/architecture/chat-agent-surface-mode.md) | plan | active | implementation | product | chat-agent-surface-mode |
 | [docs/spec/architecture/jev-integration.md](spec/architecture/jev-integration.md) | plan | draft | advisory | product | jev-integration |

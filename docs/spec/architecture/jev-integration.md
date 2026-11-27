@@ -15,8 +15,7 @@ start it from this plan. This is the phase plan for TypeSafe Jev inside Liberado
 [`chat-agent-surface-mode.md`](chat-agent-surface-mode.md).
 
 **Related**: [`chat-agent-surface-mode.md`](chat-agent-surface-mode.md) (Reading B +
-CAS1–CAS4) · [`../../future-work/backlog.md`](../../future-work/backlog.md) (order 14, A9) ·
-[`../../direction.md`](../../direction.md).
+CAS1–CAS4) · [`../../roadmap.md`](../../roadmap.md) (order 14, A9).
 
 **Create-path note**: addressable Agent-shelf sessions are created by the Agent Creator
 (`POST /api/conversations` with `agent_creator: true`) and the privileged face `create_agent`

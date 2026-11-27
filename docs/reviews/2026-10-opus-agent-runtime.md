@@ -8,11 +8,11 @@ canonical_for: opus-agent-runtime-2026-10
 
 # Liberado agent runtime: a focused second review (October 2026)
 
-> Point-in-time external review of `main` at `f027c155` (October 2026). It is not current truth. Where a claim here disagrees with the backlog, [the backlog](../future-work/backlog.md) wins. The slot table below is the backlog order. Step 3's backlog title is the approved wording, not "cut the gate tax".
+> Point-in-time external review of `main` at `f027c155` (October 2026). It is not current truth. Where a claim here disagrees with the backlog, [the archived backlog](../future-work/archive/backlog.md) wins. The slot table below is the backlog order. Step 3's backlog title is the approved wording, not "cut the gate tax". The current direction and the current work queue are [`docs/roadmap.md`](../roadmap.md).
 
 **Reviewer:** Claude (Anthropic).
 **Scope:** `main` at `f027c155`. This review covers multi-agent work, workers, approvals across
-agents, and how they fit `docs/direction.md`. It adds to `2026-10-opus-review.md` and changes
+agents, and how they fit `docs/future-work/archive/direction.md`. It adds to `2026-10-opus-review.md` and changes
 one point in it. I read the code; I built nothing.
 **Status:** a review artifact. It is not committed.
 

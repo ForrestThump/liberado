@@ -7,7 +7,7 @@ canonical_for: delegated-work-seam
 open_items: false
 ---
 
-> **Archived.** This plan is not current truth. Open work lives in [backlog.md](../backlog.md) and [roadmap.md](../../roadmap.md). See [doc-authority.md](../../spec/reference/doc-authority.md).
+> **Archived.** This plan is not current truth. Open work lives in [roadmap.md](../../roadmap.md). See [doc-authority.md](../../spec/reference/doc-authority.md).
 
 # A delegated subagent's work is discarded at the seam
 

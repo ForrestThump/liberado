@@ -1,19 +1,19 @@
-# Backlog branch workflow
+# Roadmap branch workflow
 
 ## When to use
 
-- Picking up self-scoped work from `docs/future-work/backlog.md`
-- Shipping one backlog item per branch without merging it yet
+- Picking up self-scoped work from `docs/roadmap.md`
+- Shipping one roadmap item per branch without merging it yet
 - Keeping several unmerged agent branches straight without polluting git history
 
 ## Rules (read first)
 
-1. **One item per branch.** Confirm the backlog row is still open (not struck through / not marked Landed) before you start.
-2. **Follow the total order.** Take the first open, unblocked item in the backlog implementation
+1. **One item per branch.** Confirm the roadmap item is still open (not struck through / not marked Landed) before you start.
+2. **Follow the stated order.** Take the first open, unblocked item in the roadmap implementation
    order. Do not select by convenience. Skip only an external wait or access blocker, and record it.
 3. **Declare the integration shape before branching.** Record the base SHA, predecessor, shared
    files, and merge order in `current_unmerged_work.md`.
-4. **Do not edit** `docs/future-work/backlog.md` status rows in the PR or feature branch.
+4. **Do not edit** `docs/roadmap.md` status rows in the PR or feature branch.
 5. **`current_unmerged_work.md` is local only.** It lives at the repo root, is listed in `.git/info/exclude`, and is **never committed**. Update it when you finish or abandon a branch.
 6. **CI-equivalent gates must pass** on the feature branch before you call the item done:
    - `cargo fmt --all --check`
@@ -27,9 +27,7 @@
 ### 1. Pick an open item
 
 ```text
-docs/direction.md        → why
-docs/future-work/backlog.md → what next (one row per PR)
-docs/roadmap.md          → pointer only
+docs/roadmap.md → why and what next (one item per PR)
 ```
 
 Check dependencies: do not start an item that needs an unmerged prerequisite (e.g. 0.6 needs 0.5).
@@ -52,7 +50,7 @@ order in the PR body.
 
 ### 3. Implement and test
 
-- Keep the change focused on the backlog acceptance criteria.
+- Keep the change focused on the roadmap acceptance criteria.
 - Add or extend real tests that fail if the shipped path is broken.
 - For each changed behaviour: mutate production code → test fails → restore.
 - Capture gate logs and mutation evidence under your session scratch dir (not a shared temp path).
@@ -73,7 +71,7 @@ Fix failures before recording the branch as ready.
 
 Edit `current_unmerged_work.md` at the repo root:
 
-| Backlog | Branch | Status |
+| Roadmap item | Branch | Status |
 |---|---|---|
 | **N.N** short title | `feat/...` | Base `<sha>`; predecessor `<item-or-none>`; overlaps `<paths-or-none>`; merge after `<item-or-main>`; implemented, not merged |
 

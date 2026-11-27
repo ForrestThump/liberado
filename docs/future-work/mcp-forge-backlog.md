@@ -8,8 +8,8 @@ open_items: true
 ---
 
 > **Not the work queue** (2026-09-22). Retained design, not selectable work.
-> The only implementation queue is [`backlog.md`](backlog.md).
-> The work queue is [`backlog.md`](backlog.md). Take the first open row there. This file is not that queue.
+> The only implementation queue is [`roadmap.md`](../roadmap.md).
+> The work queue is [`roadmap.md`](../roadmap.md). This file is not that queue.
 
 # mcp-forge backlog — what gets wired in as an independent project vs. built core
 
@@ -19,8 +19,8 @@ open_items: true
 "build tightly coupled into the core crates" *before* building it, instead of defaulting to
 whichever feels easier in the moment.
 
-The "Phase 1/2/3" numbers below are from the July 2026 roadmap. That roadmap is now a pointer
-([`docs/roadmap.md`](../roadmap.md)), so the phase numbers are history, not a live order.
+The "Phase 1/2/3" numbers below are from the July 2026 roadmap. That roadmap is now the
+[roadmap](../roadmap.md), so the phase numbers are history, not a live order.
 
 ## The sorting test
 
@@ -132,7 +132,7 @@ central":
   this backlog's sorting test is grounded in.
 - `docs/future-work/ideas/archive/doomloop_research.md` — the "external working memory" research point behind the
   task-tracking entry above.
-- `docs/direction.md` — the current product direction and the layers it names.
+- `docs/roadmap.md` — the current product direction and the layers it names.
 - `crates/mcp-forge/ARCHITECTURE.md` — the actual mechanism ("wire in via mcp-forge" means this).
 - `docs/spec/architecture/overview.md` — "MCPs vs hooks," the existing decided distinction this backlog
   extends rather than replaces.

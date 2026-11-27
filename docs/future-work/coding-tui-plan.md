@@ -8,12 +8,12 @@ open_items: true
 ---
 
 > **Not the work queue** (2026-09-22). Retained design, not selectable work.
-> The only implementation queue is [`backlog.md`](backlog.md).
-> The work queue is [`backlog.md`](backlog.md). Take the first open row there. This file is not that queue.
+> The only implementation queue is [`roadmap.md`](../roadmap.md).
+> The work queue is [`roadmap.md`](../roadmap.md). This file is not that queue.
 
 # Agentic Coding TUI — Plan (goal-driven session surface + kernel completion gate)
 
-**Status**: plan, 2026-07-31; **updated 2026-08-06; re-checked 2026-11-20**. **S1 (completion gate) landed; S2 (wire events + goal surface) landed — the wire events, `hub.park()`, `/api/goals/{id}/park`, `/api/goals/{id}/diff`, and the TUI goal view are all in the tree; S3 (project auth) landed (#66); S4 (checkpoints + mid-build resume + rewind) landed (#73); S5 (/loop) still unbuilt; S6 (coding fan-out + merge-back) landed (#72); S7 (strategist evals + gate default-on) still open.** ([`roadmap.md`](../roadmap.md) is now a pointer to the backlog; the slice numbers live here.) Pulled forward from
+**Status**: plan, 2026-07-31; **updated 2026-08-06; re-checked 2026-11-20**. **S1 (completion gate) landed; S2 (wire events + goal surface) landed — the wire events, `hub.park()`, `/api/goals/{id}/park`, `/api/goals/{id}/diff`, and the TUI goal view are all in the tree; S3 (project auth) landed (#66); S4 (checkpoints + mid-build resume + rewind) landed (#73); S5 (/loop) still unbuilt; S6 (coding fan-out + merge-back) landed (#72); S7 (strategist evals + gate default-on) still open.** ([`roadmap.md`](../roadmap.md) holds the direction and the work queue; the slice numbers live here.) Pulled forward from
 Priority 3 by owner decision (2026-07-24): the daily-driver automation work continues in parallel;
 this is the chosen frontend-adjacent track because the TUI already exists and the engine underneath
 it is done.
@@ -362,5 +362,5 @@ S2 makes it visible; S3 makes it safe against real repos; S4 makes it reversible
 `agentic-loops.md` (gate row in the kernel table), `verifiers.md` (gate as the critic layer's
 generalization), `session-surface-contract.md` (goal-view conformance rows), `overview.md` (crate
 map: `completion_gate` module, checkpoint service), `reference/api.md` (`/api/projects`,
-`/api/loops*`, park/resume/rewind/diff endpoints). Slice tracking lives in this file: `roadmap.md` is
-now a pointer to the backlog and the direction.
+`/api/loops*`, park/resume/rewind/diff endpoints). Slice tracking lives in this file: `roadmap.md`
+holds the direction and the work queue.

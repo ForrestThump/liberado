@@ -8,7 +8,7 @@ canonical_for: opus-review-2026-10
 
 # Liberado: an outside review (October 2026)
 
-> Point-in-time external review of `main` at `f027c155` (October 2026). It is not current truth. Where a claim here disagrees with the backlog, [the backlog](../future-work/backlog.md) wins, including step 3 (this text says "cut the gate tax"; the backlog does not).
+> Point-in-time external review of `main` at `f027c155` (October 2026). It is not current truth. Where a claim here disagrees with the backlog, [the archived backlog](../future-work/archive/backlog.md) wins, including step 3 (this text says "cut the gate tax"; the backlog does not). The current direction and the current work queue are [`docs/roadmap.md`](../roadmap.md); the "reduce `roadmap.md` to a pointer" advice below was superseded on 2026-11-26.
 
 **Reviewer:** Claude (Anthropic), not part of the Grok model family that wrote the code.
 **Scope:** `main` at `f027c155` (2026-10-20), plus open PR #317. I read the code, docs, CI, and
@@ -22,7 +22,7 @@ history. I built nothing and changed nothing. Line numbers refer to that commit.
 - **The code mass does not match the direction.** There are 322,000 lines of Rust in 58 crates,
   written in four months. About 90,000 lines are the coding pack. About 1,200 lines are the
   reminder engine (`crates/daemon/src/vault_pings/`). Tasks and reminders are the first
-  priority in `docs/direction.md`, yet only about 3% of commits touch them.
+  priority in `docs/future-work/archive/direction.md`, yet only about 3% of commits touch them.
 - **The first-priority feature is not reliable.** A timed reminder fires only if the tick runs
   in the exact same local minute. The reminder is marked "sent" before delivery. Delivery runs
   as a detached task and only logs a warning if it fails. Cron has no catch-up after a restart.
@@ -43,8 +43,8 @@ history. I built nothing and changed nothing. Line numbers refer to that commit.
   MCP connectors must be public HTTPS, and localhost needs a tunnel. You must choose between a
   hardened public endpoint, a local client (OpenMausBot, Claude Desktop, Codex) on the tailnet,
   or no Grok Bot access.
-- **The docs give agents the wrong work.** `docs/direction.md` says "substrate first". But
-  `docs/roadmap.md` (snapshot 2026-09-22), `docs/future-work/backlog.md`, `README.md`, and
+- **The docs give agents the wrong work.** `docs/future-work/archive/direction.md` says "substrate first". But
+  `docs/roadmap.md` (snapshot 2026-09-22), `docs/future-work/archive/backlog.md`, `README.md`, and
   `docs/spec/architecture/positioning.md` still say daemon, then chat, then coding. Agents take
   work from the backlog, and its fallback rows are coding-pack proofs.
 - **The quality gates cost more than they return.** The CRAP baseline has 5,777 entries and is
@@ -160,7 +160,7 @@ anything that can send one HTTP request can go around them.
 
 ### R3. The direction lives in one doc; the agent work queue lives in another (high)
 
-`docs/future-work/backlog.md` says it "is the only queue from which an agent should select
+`docs/future-work/archive/backlog.md` said it "is the only queue from which an agent should select
 implementation work". Its rows are CAS4 dogfooding, then R1 Codex PR review, then the C3
 cross-harness baseline, the completion gate, token economics, TurboVault, and Jev. No row covers
 tasks, reminders, budget, backup, or outside access. `README.md` still says "Daemon (life-ops)

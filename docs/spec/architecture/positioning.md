@@ -9,7 +9,7 @@ open_items: false
 
 # Positioning
 
-> **Historical.** This page is a July 2026 competitive note. It is not the product order. Current direction: [direction.md](../../direction.md). The work queue is the [backlog](../../future-work/backlog.md).
+> **Historical.** This page is a July 2026 competitive note. It is not the product order. Current direction and the work queue: [roadmap.md](../../roadmap.md).
 
 Liberado is **not** trying to win the agent-framework market. The goal is narrower and more honest:
 **build something objectively more useful *for its author* than the existing free alternatives** — the
@@ -100,7 +100,7 @@ capability model*, which is the one thing no competitor can retrofit cheaply.
 
 The self-improvement *engine* is not hypothetical: a tested Rust implementation (`riggers/`, an MCP
 "PR factory" that turns a plain-English task into a draft PR behind human approval) already exists and
-slots in as an MCP (see [direction.md](../../direction.md) and the Phase 2 report in
+slots in as an MCP (see [roadmap.md](../../roadmap.md) and the Phase 2 report in
 [`../../future-work/archive/phase-2-implementation-report.md`](../../future-work/archive/phase-2-implementation-report.md)). It is homelab-PR-shaped today and still
 needs the integration steps there, but it is concrete evidence the moat is buildable rather than only
 planned.

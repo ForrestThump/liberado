@@ -40,6 +40,8 @@ Everything removed from this directory remains in git history.
 | [daemon-pr-review-kickoff-grok46-critique.md](daemon-pr-review-kickoff-grok46-critique.md) | Historical Grok 4.6 critique of the daemon PR review kickoff (Sol pass 1 @ `848ad7da`) |
 | [property-testing-plan.md](property-testing-plan.md) | Historical 2026-07-31 property-testing plan — `proptest = "1"` is now a workspace dep and in use across multiple crates; not an implementation checklist |
 | [pr-dispatch-vtcode-no-write-finding.md](pr-dispatch-vtcode-no-write-finding.md) | Historical 2026-07-08 finding — `vtcode` is no longer Liberado's coding harness; retained as provenance for the rust-native pivot, not an open bug |
+| [direction.md](direction.md) | Former product direction — moved 2026-11-26; [`../../roadmap.md`](../../roadmap.md) is the current direction |
+| [backlog.md](backlog.md) | Former implementation queue — moved 2026-11-26; [`../../roadmap.md`](../../roadmap.md) is the current queue |
 | *Other retained records* | Same directory — treat as historical |
 
 Living roadmap: [`../../roadmap.md`](../../roadmap.md) · Future work index: [`../README.md`](../README.md).

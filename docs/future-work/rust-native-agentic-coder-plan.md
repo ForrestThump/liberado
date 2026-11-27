@@ -8,8 +8,8 @@ open_items: true
 ---
 
 > **Not the work queue** (2026-09-22). Retained design, not selectable work.
-> The only implementation queue is [`backlog.md`](backlog.md).
-> The work queue is [`backlog.md`](backlog.md). Take the first open row there. This file is not that queue.
+> The only implementation queue is [`roadmap.md`](../roadmap.md).
+> The work queue is [`roadmap.md`](../roadmap.md). This file is not that queue.
 
 # Rust-Native Agentic Orchestration Plan
 
@@ -563,7 +563,7 @@ the multi-role machinery. Until then, coding config is enough.
 | [`agentic-loops.md`](../spec/architecture/agentic-loops.md) | Canonical loop architecture |
 | This plan | Implementation roadmap + checkpoints |
 | [`overview.md`](../spec/architecture/overview.md) | Crate map + status pointer |
-| [`roadmap.md`](../roadmap.md) | High-level roadmap pointer |
+| [`roadmap.md`](../roadmap.md) | Product direction and the work queue |
 | Per-crate `ARCHITECTURE.md` | Zoomed contracts |
 | `config.example/` | Knobs and prompts, not source constants |
 | Contributing docs | "How to run coder evals" once evaluator exists |

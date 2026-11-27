@@ -12,8 +12,8 @@ own work. This document is the cold-start map. Each crate has its own zoomed-in
 ## Three pillars
 
 For how these pillars were compared with the free alternatives in July 2026, see
-[Positioning](positioning.md). That page is historical. Current direction is
-[`../../direction.md`](../../direction.md).
+[Positioning](positioning.md). That page is historical. Current direction and the work queue
+are [`../../roadmap.md`](../../roadmap.md).
 
 1. **Modular MCP/hook substrate.** Loose-coupled components (perceive / decide / execute / store) that
    talk through events; capability is composed from optional crates. TurboVault is the default,
@@ -38,9 +38,8 @@ The **general agentic orchestration kernel** (goal sessions, verifiers, subagent
 [`sessions.md`](sessions.md)). As of 2026-07-19 the **homelab daemon is live** (Telegram sticky chat,
 OpenClaw briefings cut over, TurboVault peer with **vector search + tasks**). As of 2026-07-23
 engineering hardened **module boundaries**, **MCP connection pooling** (default on), and a **partial
-Tier-1 live conformance suite**. Product direction is [`../../direction.md`](../../direction.md).
-The work queue is the [backlog](../../future-work/backlog.md). [`positioning.md`](positioning.md)
-is a historical competitive note. [`../../roadmap.md`](../../roadmap.md) points at those two.
+Tier-1 live conformance suite**. Product direction and the work queue are [`../../roadmap.md`](../../roadmap.md).
+[`positioning.md`](positioning.md) is a historical competitive note.
 Coding is a **domain pack** on a domain-neutral kernel, not the product identity, and explicitly
 *good-enough-and-integrated* rather than a Claude Code / Kilo rival. The coding pack is home-spun
 Liberado (`Provider` + `Executor` + `ToolRuntime` + `coder-*`) — not a VTCode wrap. Surfaces (TUI,
@@ -209,10 +208,8 @@ Docker-daemon smoke test. Rust-native agentic orchestration is now **built**, no
 Liberado goal-session crates replaced `vtcode`, and the unified Session model (D7) plus the one
 converged execution engine expose the same session/event backend to every surface (see
 [`sessions.md`](sessions.md)). Product direction is
-[`../../direction.md`](../../direction.md): personal infrastructure first, coding pack frozen,
-security and reliability basics next. Open work is the
-[backlog](../../future-work/backlog.md). [`positioning.md`](positioning.md) is historical.
-[`../../roadmap.md`](../../roadmap.md) points at the direction and the backlog.
+[`../../roadmap.md`](../../roadmap.md): personal infrastructure first, coding pack frozen,
+security and reliability basics next. [`positioning.md`](positioning.md) is historical.
 
 **Done:**
 1. ✅ **Reactive pipeline** — daemon watches → attributes → dispatches → orchestrates → executes, end-to-end wired and tested.
@@ -238,7 +235,7 @@ archive subtree) so the active `proposals/` dir shows only what still needs a hu
 pipeline picks up the write and archives it — closed the gap where an expired-but-untouched
 `Pending` proposal would sit forever with no status change.
 11. ✅ **Phase 1 — the general MCP agent** — chat now routes every turn through `Dispatcher::dispatch` before executing (the "main-agent depth" item below is done); the three independently-static capability catalogs (daemon/chat/API) are one live, shared `Arc<CapabilityCatalog>`; `Grant.component` narrows both dispatch routing and runtime tool surfacing. Full writeups: [`chat-dispatcher-and-component-scoping.md`](../../future-work/archive/chat-dispatcher-and-component-scoping.md), [`live-catalog-and-dispatcher-narrowed-tools.md`](../../future-work/archive/live-catalog-and-dispatcher-narrowed-tools.md).
-12. ✅ **Phase 2 — the self-improvement moat** — `riggers/` (`liberado-pr-dispatch-mcp`) registered as `code-dispatch` (reversible, human-approved draft PRs only), with a greenfield mode to scaffold brand-new MCPs from scratch. Full report: [`phase-2-implementation-report.md`](../../future-work/archive/phase-2-implementation-report.md). **Updated direction, 2026-07-09:** the PR factory workflow stays, but `vtcode` is no longer the strategic coding engine. Current direction is [`direction.md`](../../direction.md); [`roadmap.md`](../../roadmap.md) is only a pointer to the direction and the backlog. The July build plan is a retained draft: [`rust-native-agentic-coder-plan.md`](../../future-work/rust-native-agentic-coder-plan.md).
+12. ✅ **Phase 2 — the self-improvement moat** — `riggers/` (`liberado-pr-dispatch-mcp`) registered as `code-dispatch` (reversible, human-approved draft PRs only), with a greenfield mode to scaffold brand-new MCPs from scratch. Full report: [`phase-2-implementation-report.md`](../../future-work/archive/phase-2-implementation-report.md). **Updated direction, 2026-07-09:** the PR factory workflow stays, but `vtcode` is no longer the strategic coding engine. Current direction and the work queue are [`roadmap.md`](../../roadmap.md). The July build plan is a retained draft: [`rust-native-agentic-coder-plan.md`](../../future-work/rust-native-agentic-coder-plan.md).
 13. ✅ **`crates/tui`** — a ratatui TUI client hitting the same chat/SSE contract as the browser web UI and `liberado chat`; shares its SSE decoder and slash-command dispatcher with the other clients (`chat-client-contract`, `liberado-commands`) rather than hand-rolling its own.
 14. ✅ **Web UI flesh-out** — sidebar, MCP capability panel, Markdown rendering, and slash commands landed in `liberado-webui`. Design reference: [`webui-flesh-out-plan.md`](../../future-work/archive/webui-flesh-out-plan.md).
 15. ✅ **Pre-Phase-3 hardening pass** — the heuristics tuning engine (`liberado-heuristics-tuner`, now tuning the dispatcher, executor, and subagent layers), the zone-write-class guard (§6 #2), resource-budget bounds (`ResourceLimit`, wall-clock + token-count), and two-way Telegram proposal approval (`liberado-notify` + `liberado-telegram-approvals`: Approve/Reject are pure code, Revise is the one LLM-touching path and can only redraft content, never grant approval). Also found and fixed, via the tuner: a multi-step tool-chaining doom-loop bug (was the "Known limitations" entry below).
@@ -266,9 +263,8 @@ pipeline picks up the write and archives it — closed the gap where an expired-
     theme preference in platform `settings.toml`. Delegation journals under
     `<LIBERADO_DATA_DIR>/dispatches/`. Writeup: [`delegate_dogfood_issues.md`](../../future-work/archive/delegate_dogfood_issues.md).
 
-**Not the next slice.** The coding pack is on main, and it is frozen. Open work, in order, is the
-[backlog](../../future-work/backlog.md). [direction](../../direction.md) is the product order.
-[roadmap](../../roadmap.md) points at those two. This log's leftovers:
+**Not the next slice.** The coding pack is on main, and it is frozen. Open work, in order, and the
+product order, are both in the [roadmap](../../roadmap.md). This log's leftovers:
 
 - A product `/loop` (series memory across scheduled passes). Cron already fires one-shot goals.
   Design: [`loops-plan.md`](../../future-work/loops-plan.md). It is not a backlog row.

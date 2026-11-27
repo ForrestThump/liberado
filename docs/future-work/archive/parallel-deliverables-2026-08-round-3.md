@@ -19,7 +19,7 @@ the remaining selectable deliverables were verified in code and git history.
 | 1 | Delegated findings reach the face | ✅ **Done.** Payload fix landed `e0fde79` (2026-08-02); boundary tests PR #39 (2026-08-03). The `ExecuteDirect` residual closed as B1 (PR #162). |
 | 2 | Subagent vs direct execution in the journal | ✅ **Done.** Landed in PR #40. |
 | 3a | Measure redundant tool calls | ✅ **Done.** Landed in PR #41; cost reporting followed in PR #44. |
-| 3b | Stop paying for redundant tool calls | Historical caution only. It was never selectable work. Current implementation work comes only from `backlog.md`. |
+| 3b | Stop paying for redundant tool calls | Historical caution only. It was never selectable work. Current implementation work comes only from `docs/roadmap.md`. |
 
 **§1's residual is closed (B1, PR #162).** `ExecuteDirect` now carries `Delivery`. A research chat
 relay gets `relay_directive`; acting work stays short; vault delivery files the report. A blanket

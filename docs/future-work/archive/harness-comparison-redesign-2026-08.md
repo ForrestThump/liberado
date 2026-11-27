@@ -9,7 +9,7 @@ open_items: false
 
 # Harness comparison redesign — dispatch, wake, and fairness
 
-> **Archived.** This plan is not current truth. Open work lives in [backlog.md](../backlog.md) and
+> **Archived.** This plan is not current truth. Open work lives in [roadmap.md](../../roadmap.md) and
 > [roadmap.md](../../roadmap.md). See [doc-authority.md](../../spec/reference/doc-authority.md).
 
 **Status**: Implemented 2026-08-16 in six PRs reviewed and merged to `main` (#174 fairness pins,

@@ -8,8 +8,8 @@ open_items: true
 ---
 
 > **Not the work queue** (2026-09-22). Retained design, not selectable work.
-> The only implementation queue is [`backlog.md`](backlog.md).
-> The work queue is [`backlog.md`](backlog.md). Take the first open row there. This file is not that queue.
+> The only implementation queue is [`roadmap.md`](../roadmap.md).
+> The work queue is [`roadmap.md`](../roadmap.md). This file is not that queue.
 
 # Liberado TUI — Maturity Audit & Revamped Roadmap
 
@@ -576,4 +576,4 @@ The chat | agent surface mode (Reading B) is in flight on the WebUI side; spec a
 The TUI is **not** in that PR set: the brief de-prioritizes TUI work and the TUI already
 renders its own `SessionKind` chip from `goal.domain`. A TUI kind filter (parity with the
 WebUI shelves) is explicitly deferred until the WebUI shelves are dogfooded and stable. The
-[`backlog`](backlog.md) tracks the chat/agent item order.
+[`roadmap`](../roadmap.md) tracks the chat/agent item order.

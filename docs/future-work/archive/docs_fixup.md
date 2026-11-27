@@ -9,7 +9,7 @@ open_items: false
 
 > **Archived.** This plan is implemented and is not current authority. The current
 > lifecycle rules are in [doc-authority.md](../../spec/reference/doc-authority.md).
-> Open work lives in [backlog.md](../backlog.md) and [roadmap.md](../../roadmap.md).
+> Open work lives in [roadmap.md](../../roadmap.md).
 
 I’ll audit the documentation as an information system: volume and status distribution, entry points, duplicate subjects, archives, generated references, and where decisions or validation evidence currently live. Then I’ll propose a retention and navigation model that improves agent retrieval without losing useful history.
 
