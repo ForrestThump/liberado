@@ -1,9 +1,13 @@
 //! # liberado-common
 //!
 //! The shared vocabulary of the Liberado system. Every other crate (daemon, dispatcher,
-//! MCPs, hooks, TUI) compiles against these types, so this crate is deliberately
-//! dependency-light and free of any I/O or runtime concerns — it is *types and pure
-//! functions* only.
+//! MCPs, hooks, TUI) compiles against these types.
+//!
+//! This crate holds shared data types and their invariants, plus a small, focused set of I/O
+//! helpers. Most of it is types and pure functions. The I/O is narrow and deliberate:
+//! [`approval_ledger`] reads and writes an approval file through `tokio::fs`, [`process`]
+//! launches bounded subprocesses, and [`path`] wraps `std::fs::canonicalize` behaviour. The
+//! crate depends on `tokio`, so it also carries async runtime work.
 //!
 //! Modules map onto the resolved architecture decisions:
 //!
