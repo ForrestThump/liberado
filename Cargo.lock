@@ -11178,7 +11178,7 @@ dependencies = [
 [[package]]
 name = "turbovault"
 version = "1.6.0"
-source = "git+https://github.com/ForrestThump/turbovault?rev=179ded6003e05071b6609bbc8a5edbef04dc5fa9#179ded6003e05071b6609bbc8a5edbef04dc5fa9"
+source = "git+https://github.com/ForrestThump/turbovault?rev=e64c3bee28c45671b7c89c41dbf9cd3d66631238#e64c3bee28c45671b7c89c41dbf9cd3d66631238"
 dependencies = [
  "anyhow",
  "clap",
@@ -11207,7 +11207,7 @@ dependencies = [
 [[package]]
 name = "turbovault-audit"
 version = "1.6.0"
-source = "git+https://github.com/ForrestThump/turbovault?rev=179ded6003e05071b6609bbc8a5edbef04dc5fa9#179ded6003e05071b6609bbc8a5edbef04dc5fa9"
+source = "git+https://github.com/ForrestThump/turbovault?rev=e64c3bee28c45671b7c89c41dbf9cd3d66631238#e64c3bee28c45671b7c89c41dbf9cd3d66631238"
 dependencies = [
  "jiff",
  "log",
@@ -11224,7 +11224,7 @@ dependencies = [
 [[package]]
 name = "turbovault-batch"
 version = "1.6.0"
-source = "git+https://github.com/ForrestThump/turbovault?rev=179ded6003e05071b6609bbc8a5edbef04dc5fa9#179ded6003e05071b6609bbc8a5edbef04dc5fa9"
+source = "git+https://github.com/ForrestThump/turbovault?rev=e64c3bee28c45671b7c89c41dbf9cd3d66631238#e64c3bee28c45671b7c89c41dbf9cd3d66631238"
 dependencies = [
  "schemars",
  "serde",
@@ -11238,7 +11238,7 @@ dependencies = [
 [[package]]
 name = "turbovault-core"
 version = "1.6.0"
-source = "git+https://github.com/ForrestThump/turbovault?rev=179ded6003e05071b6609bbc8a5edbef04dc5fa9#179ded6003e05071b6609bbc8a5edbef04dc5fa9"
+source = "git+https://github.com/ForrestThump/turbovault?rev=e64c3bee28c45671b7c89c41dbf9cd3d66631238#e64c3bee28c45671b7c89c41dbf9cd3d66631238"
 dependencies = [
  "jiff",
  "log",
@@ -11257,7 +11257,7 @@ dependencies = [
 [[package]]
 name = "turbovault-export"
 version = "1.6.0"
-source = "git+https://github.com/ForrestThump/turbovault?rev=179ded6003e05071b6609bbc8a5edbef04dc5fa9#179ded6003e05071b6609bbc8a5edbef04dc5fa9"
+source = "git+https://github.com/ForrestThump/turbovault?rev=e64c3bee28c45671b7c89c41dbf9cd3d66631238#e64c3bee28c45671b7c89c41dbf9cd3d66631238"
 dependencies = [
  "serde",
  "serde_json",
@@ -11267,7 +11267,7 @@ dependencies = [
 [[package]]
 name = "turbovault-git"
 version = "1.6.0"
-source = "git+https://github.com/ForrestThump/turbovault?rev=179ded6003e05071b6609bbc8a5edbef04dc5fa9#179ded6003e05071b6609bbc8a5edbef04dc5fa9"
+source = "git+https://github.com/ForrestThump/turbovault?rev=e64c3bee28c45671b7c89c41dbf9cd3d66631238#e64c3bee28c45671b7c89c41dbf9cd3d66631238"
 dependencies = [
  "fs4",
  "git2",
@@ -11281,7 +11281,7 @@ dependencies = [
 [[package]]
 name = "turbovault-graph"
 version = "1.6.0"
-source = "git+https://github.com/ForrestThump/turbovault?rev=179ded6003e05071b6609bbc8a5edbef04dc5fa9#179ded6003e05071b6609bbc8a5edbef04dc5fa9"
+source = "git+https://github.com/ForrestThump/turbovault?rev=e64c3bee28c45671b7c89c41dbf9cd3d66631238#e64c3bee28c45671b7c89c41dbf9cd3d66631238"
 dependencies = [
  "anyhow",
  "dashmap",
@@ -11296,7 +11296,7 @@ dependencies = [
 [[package]]
 name = "turbovault-parser"
 version = "1.6.0"
-source = "git+https://github.com/ForrestThump/turbovault?rev=179ded6003e05071b6609bbc8a5edbef04dc5fa9#179ded6003e05071b6609bbc8a5edbef04dc5fa9"
+source = "git+https://github.com/ForrestThump/turbovault?rev=e64c3bee28c45671b7c89c41dbf9cd3d66631238#e64c3bee28c45671b7c89c41dbf9cd3d66631238"
 dependencies = [
  "log",
  "pulldown-cmark",
@@ -11310,7 +11310,7 @@ dependencies = [
 [[package]]
 name = "turbovault-plugin-api"
 version = "1.6.0"
-source = "git+https://github.com/ForrestThump/turbovault?rev=179ded6003e05071b6609bbc8a5edbef04dc5fa9#179ded6003e05071b6609bbc8a5edbef04dc5fa9"
+source = "git+https://github.com/ForrestThump/turbovault?rev=e64c3bee28c45671b7c89c41dbf9cd3d66631238#e64c3bee28c45671b7c89c41dbf9cd3d66631238"
 dependencies = [
  "async-trait",
  "serde",
@@ -11323,7 +11323,7 @@ dependencies = [
 [[package]]
 name = "turbovault-plugin-tasks"
 version = "1.6.0"
-source = "git+https://github.com/ForrestThump/turbovault?rev=179ded6003e05071b6609bbc8a5edbef04dc5fa9#179ded6003e05071b6609bbc8a5edbef04dc5fa9"
+source = "git+https://github.com/ForrestThump/turbovault?rev=e64c3bee28c45671b7c89c41dbf9cd3d66631238#e64c3bee28c45671b7c89c41dbf9cd3d66631238"
 dependencies = [
  "async-trait",
  "jiff",
@@ -11339,7 +11339,7 @@ dependencies = [
 [[package]]
 name = "turbovault-tools"
 version = "1.6.0"
-source = "git+https://github.com/ForrestThump/turbovault?rev=179ded6003e05071b6609bbc8a5edbef04dc5fa9#179ded6003e05071b6609bbc8a5edbef04dc5fa9"
+source = "git+https://github.com/ForrestThump/turbovault?rev=e64c3bee28c45671b7c89c41dbf9cd3d66631238#e64c3bee28c45671b7c89c41dbf9cd3d66631238"
 dependencies = [
  "anyhow",
  "futures",
@@ -11371,7 +11371,7 @@ dependencies = [
 [[package]]
 name = "turbovault-vault"
 version = "1.6.0"
-source = "git+https://github.com/ForrestThump/turbovault?rev=179ded6003e05071b6609bbc8a5edbef04dc5fa9#179ded6003e05071b6609bbc8a5edbef04dc5fa9"
+source = "git+https://github.com/ForrestThump/turbovault?rev=e64c3bee28c45671b7c89c41dbf9cd3d66631238#e64c3bee28c45671b7c89c41dbf9cd3d66631238"
 dependencies = [
  "anyhow",
  "dashmap",
@@ -11400,7 +11400,7 @@ dependencies = [
 [[package]]
 name = "turbovault-vector"
 version = "1.6.0"
-source = "git+https://github.com/ForrestThump/turbovault?rev=179ded6003e05071b6609bbc8a5edbef04dc5fa9#179ded6003e05071b6609bbc8a5edbef04dc5fa9"
+source = "git+https://github.com/ForrestThump/turbovault?rev=e64c3bee28c45671b7c89c41dbf9cd3d66631238#e64c3bee28c45671b7c89c41dbf9cd3d66631238"
 dependencies = [
  "anyhow",
  "async-trait",

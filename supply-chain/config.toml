@@ -3716,55 +3716,55 @@ version = "3.1.5@git:b7774c963adaf31999b2e6db7d7715c59b724646"
 criteria = "safe-to-deploy"
 
 [[exemptions.turbovault]]
-version = "1.6.0@git:179ded6003e05071b6609bbc8a5edbef04dc5fa9"
+version = "1.6.0@git:e64c3bee28c45671b7c89c41dbf9cd3d66631238"
 criteria = "safe-to-deploy"
-notes = "Git pin at the turbovault merge commit that landed the jiff migration (pull request #6, merged into `main`). The fork drops chrono and uses jiff for task dates and audit stamps. Same review debt as the previous git SHA exemption; the crates.io release is not the code Liberado builds."
+notes = "Git pin at the turbovault merge commit for pull request #7 (`fix/task-parser-filter-nesting-time`), which sits on the pull request #6 jiff merge. The fork drops chrono and uses jiff for task dates and audit stamps. Same review debt as the previous git SHA exemption; the crates.io release is not the code Liberado builds."
 
 [[exemptions.turbovault-audit]]
-version = "1.6.0@git:179ded6003e05071b6609bbc8a5edbef04dc5fa9"
+version = "1.6.0@git:e64c3bee28c45671b7c89c41dbf9cd3d66631238"
 criteria = "safe-to-deploy"
 
 [[exemptions.turbovault-batch]]
-version = "1.6.0@git:179ded6003e05071b6609bbc8a5edbef04dc5fa9"
+version = "1.6.0@git:e64c3bee28c45671b7c89c41dbf9cd3d66631238"
 criteria = "safe-to-deploy"
 
 [[exemptions.turbovault-core]]
-version = "1.6.0@git:179ded6003e05071b6609bbc8a5edbef04dc5fa9"
+version = "1.6.0@git:e64c3bee28c45671b7c89c41dbf9cd3d66631238"
 criteria = "safe-to-deploy"
 
 [[exemptions.turbovault-export]]
-version = "1.6.0@git:179ded6003e05071b6609bbc8a5edbef04dc5fa9"
+version = "1.6.0@git:e64c3bee28c45671b7c89c41dbf9cd3d66631238"
 criteria = "safe-to-deploy"
 
 [[exemptions.turbovault-git]]
-version = "1.6.0@git:179ded6003e05071b6609bbc8a5edbef04dc5fa9"
+version = "1.6.0@git:e64c3bee28c45671b7c89c41dbf9cd3d66631238"
 criteria = "safe-to-deploy"
 
 [[exemptions.turbovault-graph]]
-version = "1.6.0@git:179ded6003e05071b6609bbc8a5edbef04dc5fa9"
+version = "1.6.0@git:e64c3bee28c45671b7c89c41dbf9cd3d66631238"
 criteria = "safe-to-deploy"
 
 [[exemptions.turbovault-parser]]
-version = "1.6.0@git:179ded6003e05071b6609bbc8a5edbef04dc5fa9"
+version = "1.6.0@git:e64c3bee28c45671b7c89c41dbf9cd3d66631238"
 criteria = "safe-to-deploy"
 
 [[exemptions.turbovault-plugin-api]]
-version = "1.6.0@git:179ded6003e05071b6609bbc8a5edbef04dc5fa9"
+version = "1.6.0@git:e64c3bee28c45671b7c89c41dbf9cd3d66631238"
 criteria = "safe-to-deploy"
-notes = "Git pin at the turbovault merge commit that landed the jiff migration (pull request #6, merged into `main`). Also published on crates.io, so the policy entry above is required. Same review debt as the other fork exemptions."
+notes = "Git pin at the turbovault merge commit for pull request #7 (`fix/task-parser-filter-nesting-time`), which sits on the pull request #6 jiff merge. Also published on crates.io, so the policy entry above is required. Same review debt as the other fork exemptions."
 
 [[exemptions.turbovault-tools]]
-version = "1.6.0@git:179ded6003e05071b6609bbc8a5edbef04dc5fa9"
+version = "1.6.0@git:e64c3bee28c45671b7c89c41dbf9cd3d66631238"
 criteria = "safe-to-deploy"
 
 [[exemptions.turbovault-vault]]
-version = "1.6.0@git:179ded6003e05071b6609bbc8a5edbef04dc5fa9"
+version = "1.6.0@git:e64c3bee28c45671b7c89c41dbf9cd3d66631238"
 criteria = "safe-to-deploy"
 
 [[exemptions.turbovault-vector]]
-version = "1.6.0@git:179ded6003e05071b6609bbc8a5edbef04dc5fa9"
+version = "1.6.0@git:e64c3bee28c45671b7c89c41dbf9cd3d66631238"
 criteria = "safe-to-deploy"
-notes = "Git pin at the turbovault merge commit that landed the jiff migration (pull request #6, merged into `main`). Also published on crates.io, so the policy entry above is required. Same review debt as the other fork exemptions."
+notes = "Git pin at the turbovault merge commit for pull request #7 (`fix/task-parser-filter-nesting-time`), which sits on the pull request #6 jiff merge. Also published on crates.io, so the policy entry above is required. Same review debt as the other fork exemptions."
 
 [[exemptions.type-map]]
 version = "0.5.1"
