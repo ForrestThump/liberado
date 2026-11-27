@@ -3,7 +3,8 @@
 Every LLM call in the system — dispatcher classification, the executor's agent loop, subagents —
 passes through the [`Provider`] trait. Models and backends are swappable from config and tests inject
 a mock (Decision 13 + 16). This crate is intentionally minimal: a normalized request/response
-vocabulary and a mock. **It pulls in no HTTP stack and commits to no framework.**
+vocabulary and a mock. **It commits to no framework.** The `openai_compat` translation logic is pure;
+the only HTTP coupling is the `reqwest` SSE response adapter.
 
 ## Surface
 
@@ -36,17 +37,21 @@ vocabulary and a mock. **It pulls in no HTTP stack and commits to no framework.*
   OpenAI-compatible chat-completions backend: tool-name sanitization, request/response JSON mapping,
   SSE stream-delta accumulation. Added 2026-07-04 (`docs/future-work/archive/hygiene-audit-2026-07-04.md`) after
   `cargo dupes` found `provider-deepseek` and `provider-openrouter` had byte-for-byte identical copies
-  of this logic — both now import from here instead, keeping only their own HTTP round-trip, defaults,
-  env-var names, and status-code mapping.
+  of this logic. Both crates are gone: `liberado-provider-openai-compat` now carries DeepSeek,
+  OpenRouter, and other OpenAI-compatible backends in one config-driven crate, keeping only the
+  per-backend defaults, env-var names, and status-code mapping.
 
 ## Dependencies
 
-- Depends on: `liberado-common` is **not** required here — this crate is self-contained
-  (`serde`, `serde_json`, `async-trait`, `futures`, `tracing`). Concrete backends live in their own
-  crates.
-- Depended on by: `provider-deepseek`/`provider-openrouter` (implement `Provider`, both use
-  `openai_compat`), `dispatcher`, `executor`, `orchestrator`, `mcp` (tool types), `cli`,
-  `heuristics-tuner`.
+- Depends on: `liberado-common`, plus `serde`, `serde_json`, `async-trait`, `async-stream`,
+  `futures`, `reqwest`, `thiserror`, `tokio`, `tracing`. Concrete backends live in their own crates.
+- Depended on by: `liberado-provider-openai-compat` (implements `Provider` on top of `openai_compat`),
+  `liberado-dispatcher`, `liberado-executor`, `liberado-orchestrator`, `liberado-mcp` (tool types),
+  `liberado-agent-workspace`, `liberado-chat-search`, `liberado-conversation-store`,
+  `liberado-cost` (dev), `liberado-scratchpad`, `liberado-session-store`, `liberado-tool-runtime`,
+  `liberado-coder-*`, `liberado-dispatch-pack`, `liberado-eval`, `liberado-heuristics-tuner`,
+  `liberado-main-agent`, `liberado-acp-bridge`, `liberado-server`, `liberado-test-support`,
+  `liberado-telegram-approvals`, `liberado-bootstrap`, `liberado-daemon`, `liberado-config` (dev).
 
 ## Design notes
 

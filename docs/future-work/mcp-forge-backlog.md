@@ -19,6 +19,9 @@ open_items: true
 "build tightly coupled into the core crates" *before* building it, instead of defaulting to
 whichever feels easier in the moment.
 
+The "Phase 1/2/3" numbers below are from the July 2026 roadmap. That roadmap is now a pointer
+([`docs/roadmap.md`](../roadmap.md)), so the phase numbers are history, not a live order.
+
 ## The sorting test
 
 Not "does it look like a tool call" (see the MCP/A2A/hooks conversation this doc grew out of —
@@ -50,7 +53,7 @@ amount of ceremony:
   `code-dispatch`, `consequence = reversible`). Every entry below should look like this when
   finished: its own repo, registered by name, human-authored `description`/`consequence` in
   `topology.toml`, never auto-merging anything.
-- **A cron/scheduling MCP** (Phase 3's "cron as a bus listener," `docs/roadmap.md`) — the
+- **A cron/scheduling MCP** ("cron as a bus listener") — the
   *inbound trigger* half (a cron tick firing) is an event source, not an MCP (see "Core" below),
   but a **task-management surface** for the agent to itself schedule/cancel future wake-ups
   (the equivalent of this session's own `ScheduleWakeup`) is genuinely model-invoked, capability-
@@ -63,15 +66,15 @@ amount of ceremony:
 - **A hooks/webhook-receiver MCP** — inbound HTTP webhooks are event sources (core, below), but a
   companion tool letting the agent *register a new webhook endpoint for itself* (rather than one
   hand-wired in `topology.toml`) would be genuinely capability-gated, external-effect work.
-- **An A2A bridge, outbound direction** (`docs/ideas/a2a-protocol-idea.md`) — Liberado *delegating*
+- **An A2A bridge, outbound direction** (`docs/future-work/ideas/a2a-protocol-idea.md`) — Liberado *delegating*
   a goal to a remote peer agent is model-invoked, capability-gated (Decision 8's subagent-narrowing
   logic, but for a strictly-less-trusted peer), external-effect. Note: A2A itself is a full
-  protocol, not "an MCP" — per the saved conversation (`docs/ideas/archive/mcp_acp_protocol_difference_conversation.md`),
+  protocol, not "an MCP" — per the saved conversation (`docs/future-work/ideas/archive/mcp_acp_protocol_difference_conversation.md`),
   this should be its own sibling crate (e.g. `turbo-a2a`), not folded into `turbomcp` or shoehorned
   into the MCP transport. The *outbound-delegate* capability the dispatcher sees, though, can still
   be exposed to the model the same way any other capability is.
 - **Future real-world MCPs already flagged as pending**: caldav, calorie-counter, weather (blocked
-  on an upstream stdio fix per `docs/roadmap.md`'s Phase 1 section) — same pattern as
+  on an upstream stdio fix) — same pattern as
   everything else already `mcp-forge`-managed.
 
 ## Core, tightly coupled — not `mcp-forge` material
@@ -90,7 +93,7 @@ central":
   — same shape as `submit_report`: it's the executor watching its own `call_history` and adjusting
   its own next turn. Nothing about it is a capability an agent invokes.
 - **A task/scratchpad-tracking mechanism**, if built (deferred per the doom-loop finding doc's
-  "what works best" research, `docs/ideas/archive/doomloop_research.md`'s "external working memory" point)
+  "what works best" research, `docs/future-work/ideas/archive/doomloop_research.md`'s "external working memory" point)
   — fails test 2 the same way `call_history` does: it's bookkeeping about *this* execution's own
   progress, tightly coupled to the loop that produces it, zero external consequence. Could
   technically be built as an MCP (plenty of real systems do this) but the connection/discovery
@@ -116,7 +119,7 @@ central":
   doom-loop finding doc) — not scheduled.
 - Whether `liberado_common::Event` should be reshaped toward CloudEvents' envelope, or stay
   bespoke, is undecided — matters most once hooks/cron/A2A-inbound all need to share one shape.
-- Cron's own phased placement is already decided (Phase 3, `docs/roadmap.md`) — this doc
+- Cron's own phased placement is already decided — this doc
   doesn't move that up, just clarifies which *half* of it (inbound trigger vs. agent-scheduled
   wake-up) is core vs. `mcp-forge` material once it's picked up.
 - A2A is explicitly "not before Phase 3" per `a2a-protocol-idea.md` — this doc doesn't change that
@@ -124,12 +127,12 @@ central":
 
 ## Companion to
 
-- `docs/ideas/a2a-protocol-idea.md` — the A2A interop design, seams already in place, open questions.
-- `docs/ideas/archive/mcp_acp_protocol_difference_conversation.md` — the MCP/ACP/A2A protocol comparison
+- `docs/future-work/ideas/a2a-protocol-idea.md` — the A2A interop design, seams already in place, open questions.
+- `docs/future-work/ideas/archive/mcp_acp_protocol_difference_conversation.md` — the MCP/ACP/A2A protocol comparison
   this backlog's sorting test is grounded in.
-- `docs/ideas/archive/doomloop_research.md` — the "external working memory" research point behind the
+- `docs/future-work/ideas/archive/doomloop_research.md` — the "external working memory" research point behind the
   task-tracking entry above.
-- `docs/roadmap.md` — Phase 3 (cron, vault-decoupling) and the general phased sequence.
+- `docs/direction.md` — the current product direction and the layers it names.
 - `crates/mcp-forge/ARCHITECTURE.md` — the actual mechanism ("wire in via mcp-forge" means this).
 - `docs/spec/architecture/overview.md` — "MCPs vs hooks," the existing decided distinction this backlog
   extends rather than replaces.

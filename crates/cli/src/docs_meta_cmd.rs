@@ -145,8 +145,9 @@ fn generate_future_work_readme(docs: &[Document]) -> String {
         "---", "kind: index", "status: active", "authority: advisory", "generated: true", "---", "",
         "# Future Work", "", "Index of forward-looking work. **Generated** by `liberado docs metadata generate`.",
         "Do not edit the tables by hand — update document frontmatter and re-run generate.", "",
-        "| Doc | Role |", "|-----|------|", "| **[roadmap.md](../roadmap.md)** | **Living scoreboard** — open work in priority order |",
-        "| [backlog.md](backlog.md) | **Pick-from-here backlog** — only place agents should take next implementation items |",
+        "| Doc | Role |", "|-----|------|",
+        "| **[roadmap.md](../roadmap.md)** | Pointer to [direction.md](../direction.md) and the backlog. Not the queue. |",
+        "| **[backlog.md](backlog.md)** | **The implementation queue** — the only place agents take next implementation items. Start here. |",
         "| [archive/](archive/README.md) | Finished plans, closed audits — **not current truth** |",
         "| [CATALOG.md](../CATALOG.md) | Repository-wide document catalog |", "", "## Active documents", "",
         "Only root documents with `status: active` appear here. Active means current:",
@@ -193,7 +194,7 @@ fn generate_future_work_readme(docs: &[Document]) -> String {
     lines.extend(
         [
             "",
-            "Start every planning session at [roadmap.md](../roadmap.md).",
+            "Start every planning session at [backlog.md](backlog.md). [roadmap.md](../roadmap.md) is a pointer to the direction and the backlog, not the queue.",
             "",
         ]
         .into_iter()
@@ -920,6 +921,22 @@ mod tests {
             "non-future-work must not appear: {readme}"
         );
         assert!(readme.contains("## Active documents"), "{readme}");
+        // The generated index must point agents at the backlog, not at the roadmap.
+        assert!(
+            readme.contains("Start every planning session at [backlog.md](backlog.md)."),
+            "{readme}"
+        );
+        assert!(
+            readme.contains(
+                "Pointer to [direction.md](../direction.md) and the backlog. Not the queue."
+            ),
+            "{readme}"
+        );
+        assert!(!readme.contains("Living scoreboard"), "{readme}");
+        assert!(
+            !readme.contains("Start every planning session at [roadmap.md]"),
+            "{readme}"
+        );
     }
 
     // ── exact_file ──────────────────────────────────────────────────────

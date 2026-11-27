@@ -100,7 +100,8 @@ capability model*, which is the one thing no competitor can retrofit cheaply.
 
 The self-improvement *engine* is not hypothetical: a tested Rust implementation (`riggers/`, an MCP
 "PR factory" that turns a plain-English task into a draft PR behind human approval) already exists and
-slots in as an MCP (see the [roadmap](../../roadmap.md)). It is homelab-PR-shaped today and still
+slots in as an MCP (see [direction.md](../../direction.md) and the Phase 2 report in
+[`../../future-work/archive/phase-2-implementation-report.md`](../../future-work/archive/phase-2-implementation-report.md)). It is homelab-PR-shaped today and still
 needs the integration steps there, but it is concrete evidence the moat is buildable rather than only
 planned.
 

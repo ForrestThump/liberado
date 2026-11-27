@@ -4,7 +4,7 @@ Detailed design specs and the architecture decision log. Prefer [architecture/](
 
 | Spec | Topic |
 |------|--------|
-| [decisions/](../decisions/README.md) | Architecture Decision Records (ADR-0001…); stub at [architecture-decisions.md](../decisions/README.md) |
+| [decisions/](../decisions/README.md) | Architecture Decision Records (ADR-0001…); the superseded stub is [architecture-decisions.md](architecture-decisions.md) |
 | [liberado-architecture.md](liberado-architecture.md) | Early Liberado architecture writeup |
 | [config-spec.md](config-spec.md) | Config loading / validation |
 | [dispatch-logic-spec.md](dispatch-logic-spec.md) | Dispatcher / decision shape |

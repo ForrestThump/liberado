@@ -39,5 +39,5 @@ roadmap and **not** a source of implementation work.
 | [archive/](archive/README.md) | Dated architecture analyses, source conversations kept for provenance, and peer MCP studies |
 
 For what to build next: [backlog.md](../backlog.md).
-For direction: [roadmap.md](../../roadmap.md).
+For direction: [direction.md](../../direction.md) ([roadmap.md](../../roadmap.md) is a pointer to those two).
 For how the system works now: [architecture overview](../../spec/architecture/overview.md).

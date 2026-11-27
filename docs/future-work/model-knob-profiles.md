@@ -49,9 +49,10 @@ this system, because a profile that silently does not apply produces measurement
 and describe nothing.
 
 `crates/test-support/tests/config_literal_rules.rs` is the existing mechanical guard, and it is
-narrower than its name suggests: its `BANNED` list holds **one entry** — `HashlineConfig {` — checked
-across two surfaces (`coder-runner`, `acp-bridge`). Nine of the ten known config shadows are outside
-what it can see.
+narrower than its name suggests: it bans **two** literals — `HashlineConfig {` on the two outer
+surfaces (`coder-runner`, `acp-bridge`), and `CoderRunConfig {` on all three production assembly
+sites (`coder-runner`, `acp-bridge`, `coder-agent`). Nine of the ten known config shadows are
+outside what it can see. (Re-checked 2026-11-20.)
 
 **It has to grow to cover every knob before profiles are worth building**, and growing it is cheap:
 one line per config type. Do that first, because a profile that silently fails to apply is worse

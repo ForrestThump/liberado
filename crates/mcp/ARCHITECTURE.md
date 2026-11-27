@@ -125,13 +125,13 @@ URL or command change applies. Adding a peer starts a new task.
 
 ## Dependencies
 
-- Depends on: `liberado-executor` (`ToolRuntime`, and `RuntimeFactory`/`RuntimeSetupError` — moved here
-  from `liberado-orchestrator` specifically so this crate wouldn't need to depend sideways on the
-  dispatch-bridging crate), `liberado-provider` (`ToolDef`/`ToolInvocation`), `liberado-common`
-  (`WriteProvenance`, `mcp_of`), `turbomcp-client`, `turbomcp-transport`.
-- Depended on by: the daemon/cli wiring (assembles a factory + orchestrator). No cycle —
-  `orchestrator` does not depend on `mcp`, and (as of the `RuntimeFactory` move) `mcp` no longer
-  depends on `orchestrator` either.
+- Depends on: `liberado-tool-runtime` (`ToolRuntime`, `RuntimeFactory`, `RuntimeSetupError`),
+  `liberado-provider` (`ToolDef`/`ToolInvocation`), `liberado-common`
+  (`WriteProvenance`, `mcp_of`), `turbomcp-client`, `turbomcp-transport`. The tool-runtime contract
+  lives in `liberado-tool-runtime` (foundation), not in `liberado-executor`, so this crate does not
+  depend sideways on the dispatch-bridging crate.
+- Depended on by: `liberado-bootstrap`, `liberado-main-agent`, `liberado-server`. No cycle —
+  `orchestrator` does not depend on `mcp`, and `mcp` does not depend on `orchestrator` either.
 
 ## Tests
 

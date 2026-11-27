@@ -157,6 +157,11 @@ The journal's shape is a contract with a reader — `crates/cost/tests/journal_s
 so a writer change needs that test updated in the same PR, and the reader tolerates unknown fields
 already.
 
+> **Updated 2026-11-20.** The role landed: `AgentRole` is `Face | Dispatcher | Orchestrator |
+> Subagent | Unknown` ([`crates/provider/src/latency.rs:29`](../../crates/provider/src/latency.rs#L29)).
+> The dispatch-journal decision type did not, so a direct execution and a delegated run are still
+> separated by role, not by decision type. Re-run the day-long read before quoting the 92.8%.
+
 **Landmine:** `crates/provider/src/latency.rs` was deliberately owned by nobody in the round-2
 parallel work. Changing it is its own PR, not a side effect of another.
 

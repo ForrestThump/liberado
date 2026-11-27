@@ -133,8 +133,9 @@ today, and the residual risk if any.
 ### 10. `create_agent` — creating Agents-shelf chats
 
 - **Writes**: spawns a new chat session with the named profile.
-- **Gate**: operator profile (`operator`) grants this as an MCP-server-wide
-  capability; the `chat-default` profile does not.
+- **Gate**: operator profile (`operator`) grants this as a face-level capability; the
+  `chat-default` profile does not. `create_agent` is a face tool
+  (`crates/main-agent/src/face/create_agent.rs`), not an MCP-server tool.
 - **Verdict**: **covered by capability**. The chat-create capability is
   granted to `operator` and only `operator`; no profile accidentally
   inherits it.

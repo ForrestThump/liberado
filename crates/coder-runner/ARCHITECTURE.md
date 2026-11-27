@@ -23,7 +23,8 @@ future TUI/API can still use `liberado-coder-agent` as a normal library (see
 
 `liberado-pr-dispatch-mcp` is still a nested workspace with its own provider crate. Directly linking
 it to the root loop crates would create type and package-shape friction before we have learned enough
-from live loop runs. A JSON subprocess boundary is more stable: dispatch can swap `vtcode exec` for
-`liberado-coder-run` while the loop backend keeps maturing behind the core contracts.
+from live loop runs. A JSON subprocess boundary is more stable: the external
+`liberado-pr-dispatch-mcp` repo can swap `vtcode exec` for `liberado-coder-run` at its dispatch
+boundary while the loop backend keeps maturing behind the core contracts.
 
 Open product work for this binary lives in [`docs/future-work/backlog.md`](../../docs/future-work/backlog.md). This document covers the process boundary and role wiring only.

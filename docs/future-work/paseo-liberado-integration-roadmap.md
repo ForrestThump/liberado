@@ -28,7 +28,7 @@ dogfood-ready:** interactive coding, durable sessions, and Paseo permission prom
 - Install command: `liberado paseo install`
 - Config example: `config.example/paseo-liberado.json`
 - Bridge source: `crates/acp-bridge/`
-- Scoreboard: [`../roadmap.md`](../roadmap.md) (cross-cutting Paseo items)
+- Status updates: this file's status header, plus the [backlog](backlog.md) for open Paseo items. [`../roadmap.md`](../roadmap.md) is a pointer to the direction and the backlog, not a scoreboard
 
 ---
 
@@ -159,10 +159,11 @@ as open work.
 **Superseded 2026-08-09.** Both slices shipped, but P2.1 was answered with a *different* design than
 the one written below, so read the code before trusting the row.
 
-- **P2.1** — `session/set_mode` switches between **coding / chat / face** (`AgentMode`), three
-  engines on one Paseo provider, not the plan/explore PathPolicy presets specced here. The presets
-  still exist in `coder-core` and remain available if a read-only ACP mode is ever wanted; nothing
-  currently maps to them.
+- **P2.1** — `session/set_mode` switches between **coding / goal / chat / face** (`AgentMode`), four
+  engines on one Paseo provider, not the plan/explore PathPolicy presets specced here. (Updated
+  2026-11-20: the `Goal` mode was added after this line was written; `AgentMode::ALL` has four
+  variants.) The presets still exist in `coder-core` and remain available if a read-only ACP mode is
+  ever wanted; nothing currently maps to them.
 - **P2.2** — `session/set_model` hot-swaps the active model against the live OpenRouter catalog.
 
 | # | Slice | Original acceptance (kept for the record) |
@@ -318,5 +319,5 @@ mapping, and interactive coding (P7.1) are landed; install script dogfood on Win
 
 **Remote story:** P6 complete — separate from ACP comfort.
 
-Update this file’s status header and the Paseo bullets in [`../roadmap.md`](../roadmap.md)
-when phases land.
+Update this file's status header — and the [backlog](backlog.md) rows for open Paseo items —
+when phases land. [`../roadmap.md`](../roadmap.md) is a pointer, not a scoreboard.

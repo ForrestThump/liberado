@@ -7,9 +7,9 @@ domain: security
 
 # Deploy notes — `fix/vault-write-gate` (2026-10-11)
 
-**Status:** Changes ready to ship. The runtime fix and config wiring are
-implemented in this branch; the operator action needed at deploy time is
-listed here so the box update is mechanical.
+**Status:** Shipped. The runtime fix and the config wiring are on `main`; the
+operator action needed at deploy time is listed here so the box update is
+mechanical.
 
 ## What ships in the runtime
 
@@ -73,14 +73,21 @@ The required topology file change is:
 
 ## Verification before deploy
 
-Once the topology files are in place, the daemon refuses to boot if
-the lists overlap. A successful boot proves the operator's
-classification is internally consistent.
+Once the topology files are in place, the config loader refuses to load them
+if the lists overlap, if a path-addressed MCP lists no `write_tools`, or if a
+`write_path_args` key names a tool that is not a writer. A successful load
+proves the operator's classification is internally consistent.
 
 ```sh
-liberado validate                              # or `cargo run -p liberado-cli -- validate`
+liberado config check            # or `cargo run -p liberado-cli -- config check`
 ```
 
-The output lists every MCP and which classification shape it uses.
-For `turbovault`, expect: `path-addressed: write_tools=N read_tools=N vault_wide_writes=N`
-where N is the count of tools in each list.
+`config check` prints `config OK`, the resolved config directory, and the
+source file for each section. It does not print a per-MCP classification
+summary. To ask what a single write would do, use the explain command:
+
+```sh
+liberado config explain <component> <mcp:tool> <vault/path.md>
+```
+
+It prints every guard's verdict, so the first `no` is not the only answer.

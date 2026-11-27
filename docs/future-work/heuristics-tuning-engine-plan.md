@@ -67,13 +67,18 @@ the traced-run → fixture pipeline this plan builds on rather than replaces.
 
 A new crate, not an extension of `liberado-eval` — eval's scenarios are hand-written `&'static`
 Rust structs (compile-time, fixed); the tuner needs scenarios generated at runtime. But the tuner
-should *depend on* eval's scoring shape rather than duplicate it. Concretely: `liberado-eval` is
-currently bin-only (`crates/eval/Cargo.toml` has a `[[bin]]` target and no `[lib]`, so
-`scenarios.rs`'s `Scenario`/`ExpectKind` types aren't reachable from other crates) — giving it a
-thin `[lib]` target (or lifting `Scenario`/`ExpectKind` into `liberado-common` or a small shared
-crate) is a prerequisite step, not an afterthought.
+should *depend on* eval's scoring shape rather than duplicate it. Concretely: `liberado-eval` used
+to be bin-only (`crates/eval/Cargo.toml` had a `[[bin]]` target and no `[lib]`, so
+`scenarios.rs`'s `Scenario`/`ExpectKind` types were not reachable from other crates). It now has a
+`[lib]` target that exports `scenarios`, `scoring`, and `ExpectKind`, so this step is done.
+(Re-checked 2026-11-20.)
 
 ### Provider: OpenRouter backend
+
+> **Updated 2026-11-20.** The separate crates never existed as planned. `liberado-provider-deepseek`
+> and `liberado-provider-openrouter` were replaced by one config-driven crate,
+> `liberado-provider-openai-compat`, which serves DeepSeek, OpenRouter, and other OpenAI-compatible
+> backends. The design below is kept as the record of why.
 
 A new `liberado-provider-openrouter` crate implementing the existing `Provider` trait
 (`liberado-provider`, Decision 13) — same shape as `liberado-provider-deepseek`. This is what
@@ -84,11 +89,11 @@ specifically, since every LLM call in the system already goes through `Provider`
 ### Scenario generation
 
 - **v1 (shipped 2026-07-03)**: cold-prompt an LLM to generate candidate *prompts*, but scoring
-  itself reuses `liberado-eval`'s fixed, hand-written 19 scenarios as-is — no dynamic scenario
+  itself reuses `liberado-eval`'s fixed, hand-written 18 scenarios as-is — no dynamic scenario
   generation yet. This is a real, known gap, not an oversight: the first real tuning run (see
   `Dreams`-adjacent review, 2026-07-03) confirmed the fixed scenario set only ever exercises the
   MCPs someone thought to hand-write a case for at the time. Add a new MCP tomorrow and the tuner
-  has no way to know it exists — it will keep scoring the same 19 goals forever, none of which
+  has no way to know it exists — it will keep scoring the same 18 goals forever, none of which
   touch the new tool. That's fine for "does prompt-tuning work at all" (v1's actual goal), but it
   doesn't yet deliver the real goal above (re-adapting to a changing tool surface).
 - **Next, not yet built — topology-driven generation**: read the *live* `CapabilityCatalog` (the
@@ -96,9 +101,9 @@ specifically, since every LLM call in the system already goes through `Provider`
   truth, just a new consumer of an existing one) and synthesize plausible goals that would need
   each tool, weighted toward newly-added or reshaped ones. Fold these into the scoring pool
   *alongside* the fixed `liberado-eval` scenarios on every run — new tools get exercised, and the
-  hand-curated 19 keep acting as the regression net so a re-tune triggered by a new tool can't
+  hand-curated 18 keep acting as the regression net so a re-tune triggered by a new tool can't
   quietly break already-working routing. This is the mechanism that actually delivers "add a tool,
-  the engine adjusts automatically" rather than "the engine gets slightly better at 19 fixed
+  the engine adjusts automatically" rather than "the engine gets slightly better at 18 fixed
   goals forever."
 - **Later still** (once there's real usage to learn from): mine `liberado-conversation-store`'s
   history (Liberado's own chat logs — "user post history" means our own dogfooded history, not
@@ -213,7 +218,7 @@ architecture idea the way there is for a scored prompt candidate.
    on Windows without a restart).
 3. ✅ **Done (2026-07-03).** `liberado-heuristics-tuner` v1 — dispatcher-only, cold-start +
    mutation candidate generation, a beam-search-with-restarts loop over `liberado-eval`'s existing
-   19 scenarios, budget-capped (`Budget`, `Arc<AtomicUsize>` + `Ordering::Relaxed`). Required first
+   18 scenarios, budget-capped (`Budget`, `Arc<AtomicUsize>` + `Ordering::Relaxed`). Required first
    fixing a real blocker: `Dispatcher`'s system prompt was a private hardcoded `const`, with no way
    to test a candidate against the real `Dispatcher` type — `crates/dispatcher/src/lib.rs` gained a
    `pub const DEFAULT_SYSTEM_PROMPT` and a `with_system_prompt()` builder (backward-compatible, no
@@ -258,7 +263,7 @@ architecture idea the way there is for a scored prompt candidate.
 7. **Topology-driven scenario generation** (see "Scenario generation" above) — read the live
    `CapabilityCatalog` and synthesize goals per tool, weighted toward newly-added/reshaped ones,
    folded in alongside the fixed `liberado-eval` scenarios. This is the mechanism that actually
-   delivers the "re-adapts when you add a tool" goal, not just "gets slightly better at 19 fixed
+   delivers the "re-adapts when you add a tool" goal, not just "gets slightly better at 18 fixed
    goals" — identified as the real next step after reviewing the first live run's results.
 8. ✅ **Done (2026-07-04).** Multi-sample, multi-model scoring — each scenario is now sampled
    `samples_per_scenario` times against every configured model in `scoring_models` (both default to
@@ -430,7 +435,7 @@ reasoning trace, instead of reconstructing "why" from outcomes alone.
 First full comprehensive run (5 models — Claude Haiku dropped per item 9's decision, GLM/MiMo
 dropped per the smoke-test findings above — `samples_per_scenario = 10`, no `max_scenarios` limit,
 2 generations) surfaced a serious bug, not a prompt problem: the reported "winner" **regressed
-routing accuracy from the baseline's 0.77 to 0.33**, flipping 11 of ~19 scenarios from passing to
+routing accuracy from the baseline's 0.77 to 0.33**, flipping 11 of ~18 scenarios from passing to
 failing, while `unsafe_acts` dropped from 1 (baseline) to 0 (winner) and safe-default rate held at
 1.00 — the safety numbers looked fine, masking a severe accuracy collapse.
 
@@ -502,7 +507,7 @@ neither confirmed yet:
 
 **Decision (2026-07-06)**: both models are dropped from the comprehensive 10-samples-per-scenario
 run (kept only in `config.example/tuner.toml` as a documented "known bad, needs debugging" note, not
-silently deleted) — burning 10 samples × ~19 scenarios × 2 models = ~380 calls per candidate on two
+silently deleted) — burning 10 samples × ~18 scenarios × 2 models = ~380 calls per candidate on two
 models that may be fundamentally miswired isn't worth the cost until this is diagnosed. **Not
 investigated further this session** — deferred to the next session with hands-on access to log raw
 per-model decisions directly. When picked back up: add a debug path that dumps the raw

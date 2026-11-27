@@ -1,10 +1,18 @@
 # liberado-common — shared types (the vocabulary)
 
-The foundation crate: pure data types and their invariants, **no logic, no I/O, no async**. Every
-other crate speaks in these types, so they are the system's shared vocabulary. If a type is used by
-two or more crates, it lives here.
+The foundation crate: shared data types and their invariants, plus a small, focused set of I/O
+helpers that other crates need. Most of the crate is types and pure functions. The I/O is narrow
+and deliberate: `approval_ledger` reads and writes an approval file through `tokio::fs`, `process`
+launches bounded subprocesses, and `path` wraps `std::fs::canonicalize` behaviour. The crate
+depends on `tokio`, so it also carries async runtime work. Every other crate speaks in these
+types, so they are the system's shared vocabulary. If a type is used by two or more crates, it
+lives here.
 
 ## Modules
+
+### Vocabulary subset
+
+The rows below cover the types other crates name most often. The full inventory follows.
 
 | Module | What it defines | Decision |
 |---|---|---|
@@ -17,6 +25,38 @@ two or more crates, it lives here.
 | `model` | `ModelProfile`, `ModelRole`, `ModelTier`, `ModelChoice`, `RequiredCaps` — role-tiered capability floors | 13 |
 | `proposal` | `Proposal`, `ProposalStatus`, `ProposedAction` — the human-in-the-loop artifact written to `proposals/` | 11 |
 | `error` | `Error`, `Result` | — |
+
+### Full inventory
+
+`crates/common/src/lib.rs` declares 25 modules: 22 public, 3 private.
+
+| Module | Visibility |
+|---|---|
+| `approval_ledger` | public |
+| `bundled_vault` | private |
+| `capability` | public |
+| `catalog` | public |
+| `civil_schedule` | public |
+| `clock` | public |
+| `permission` | public |
+| `write_target` | private |
+| `dispatch` | public |
+| `error` | public |
+| `event` | public |
+| `failure_excerpt` | public |
+| `frontmatter` | public |
+| `guidance` | public |
+| `local_time` | public |
+| `model` | public |
+| `path` | public |
+| `process` | public |
+| `proposal` | public |
+| `provenance` | public |
+| `redact` | public |
+| `risk_waiver` | public |
+| `session_grants` | public |
+| `sweeping` | private |
+| `utc_stamp` | public |
 
 The typed config model (`Config`/`Topology`/`Policy`/`Tuning`) used to live here as a `config`
 module — moved to `liberado-config-loader` 2026-07-04 (`docs/future-work/archive/hygiene-audit-2026-07-04.md`,
@@ -49,7 +89,8 @@ vocabulary every crate compiles against regardless of whether it touches config.
 
 ## Dependencies
 
-- Depends on: `serde`, `jiff`, `thiserror`, and the other crates in `Cargo.toml` (no internal crates).
+- Depends on: no internal crates. External: `async-trait`, `serde`, `serde_json`, `serde_norway`,
+  `jiff`, `thiserror`, `tokio`, `toml`, `hmac`, `sha2`, `rand`.
 - Depended on by: essentially everything (`vault`, `dispatcher`, `executor`, `mcp`, `orchestrator`,
   `daemon`, `provider-*` indirectly).
 

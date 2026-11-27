@@ -120,7 +120,7 @@ What the port cost, and the gotchas the next repo will hit — **read before por
 | `caldav-mcp` | Rust | TBD | `gh:…/**liberado-**caldav-mcp` | ✅ GitHub URL | ⚠️ service name ≠ repo |
 | `rentcast-mcp` | Rust | TBD | `gh:…/**liberado-**rentcast-mcp` | ✅ GitHub URL | ⚠️ name ≠ repo; **403** |
 | `mem0-mcp` | Rust | TBD | `gh:…/**liberado-tool-helper-mcp**` | ✅ GitHub URL | ⚠️ **semantic drift**: repo says tool-helper, runs as mem0 |
-| `actual-mcp` | **Node/TS** | JS MCP | `gh:…/liberado-actual-mcp` | ⚠️ **local** `../services/…` | ⚠️ name ≠ repo; **404 `/http`**; not Rust |
+| `actual-mcp` | **Node/TS** | JS MCP | `gh:…/liberado-actual-mcp` | ⚠️ **local** `../services/…` | ⚠️ name ≠ repo; **404 `/http`**; not Rust — **retired**, replaced by a Rust/turbomcp server on `:8000` (re-checked 2026-11-20) |
 | `spider-mcp` | Rust | **axum (hand-rolled)** | ⚠️ **Gitea** `shiloh/spider-mcp` | ⚠️ local `../spider-mcp` | ⚠️ unbranded; Gitea; **401** |
 | `search-orchestrator` | Rust | **axum (hand-rolled)** | ⚠️ **Gitea** `shiloh/search-orchestrator-mcp` | ⚠️ local | ⚠️ unbranded; Gitea; MCP at `/` |
 | `subagent-manager-mcp` | Rust | TBD | ⚠️ **Gitea** `shiloh/subagent-manager-mcp` | not in ai.yml | ⚠️ unbranded; pkg is `context_manager_mcp` |
@@ -164,6 +164,8 @@ mostly achieved. The real remaining work is smaller than it looks.
 2. **`actual-mcp` is Node/TS** — the only non-Rust server. Options: (a) rewrite in Rust/turbomcp
    (real work, fixes the `/http` 404 for free), (b) keep as the documented exception and fix only its
    path, (c) drop it. It is currently **failing** either way.
+   → **Resolved (2026-11-20): option (a).** The Node/TS server is retired; a Rust/turbomcp
+   replacement serves `liberado-actual-mcp` on `:8000` (`deploy/homelab/config/topology.toml`).
 3. **`subagent-manager-mcp`** — package is `context_manager_mcp`. Which name is right? Is it still
    wanted?
 
@@ -222,7 +224,7 @@ docker logs liberado --tail 60 | grep -E "MCP failed|SSE connection established"
 4. **Free wins**: `actual-mcp` build-from-URL + the three renames (+ config in lockstep).
 5. **turbomcp swap for the 7 already-on-GitHub repos** — one at a time, verify each live.
 6. **Drop `searxng-mcp`** once search-orchestrator is connected.
-7. **Decide `actual-mcp`** (rewrite / exception / drop).
+7. **Decide `actual-mcp`** (rewrite / exception / drop). → **Done:** rewritten in Rust/turbomcp.
 
 **Do not batch these.** Each step changes a container DNS name or an endpoint; the failure-modes
 doctrine applies — one MCP at a time, `docker logs liberado` after each, and confirm no

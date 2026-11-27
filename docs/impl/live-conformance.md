@@ -16,7 +16,7 @@ ground-truth outcomes, not only that a request returned without error.
 
 Tier 1 runs in CI with a mock provider and real session, store, grant, and API seams. Its L1–L11
 cases live in `crates/server/src/t1_conformance.rs`; the daemon reaction-path L9 case lives in
-`crates/daemon/src/tests.rs`.
+`crates/daemon/src/tests/sessions.rs`.
 
 Run the focused suites with:
 
@@ -30,9 +30,9 @@ configuration, credentials, mounts, or external connectivity.
 
 ## Tier 2 — optional model-in-the-loop checks
 
-Tier 2 is deliberately optional and ignored by default. Use it only when a change requires model
-behavior rather than deterministic transport or state-machine evidence. Do not replace Tier 1 or
-Tier 3 assertions with a model judgment.
+Tier 2 is a reserved slot, not a shipped suite. No Tier 2 command, file, or ignored test exists in
+the tree today. Use it only when a change requires model behavior rather than deterministic transport
+or state-machine evidence. Do not replace Tier 1 or Tier 3 assertions with a model judgment.
 
 ## Tier 3 — deployed-daemon paths
 
@@ -54,7 +54,7 @@ An installed binary can use the same file:
 liberado-conformance --config /path/to/conformance.toml
 ```
 
-The default set is P1a–P4. P5 is advisory. P6 uses two real-inference background turns. P7 restarts
+The default set is P1a, P1b, P2, P3, and P4. P5 is advisory. P6 uses two real-inference background turns. P7 restarts
 the daemon and therefore requires an explicit restart command and a runner that survives the
 restart. Select optional paths with `--path p5,p6,p7`. Use `--advisory-counts` only when an advisory
 P5 failure must fail the run.

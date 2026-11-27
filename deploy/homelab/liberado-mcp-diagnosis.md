@@ -29,7 +29,7 @@ docker logs liberado --tail 80
 
 ## Liberado HTTP MCP client contract (do not break this)
 
-From `life-os` / Liberado’s `HttpConnector` + turbomcp client:
+From Liberado’s `HttpConnector` + turbomcp client:
 
 1. Topology `url` is a **base origin only** (scheme + host + port).  
    Example: `http://turbovault:3001` — **not** `…/mcp`.
@@ -45,7 +45,7 @@ From `life-os` / Liberado’s `HttpConnector` + turbomcp client:
 
 **Auth headers:** Liberado’s HTTP connector currently has **no** config for `Authorization` / bearer tokens. Peers that **require** a bearer on every MCP request (e.g. spider-mcp) will fail until either:
 - the peer allows unauthenticated LAN access on the `homelab` network, or  
-- Liberado gains header support (life-os code change — out of scope for a pure-homelab fix unless requested).
+- Liberado gains header support (a Liberado code change — out of scope for a pure-homelab fix unless requested).
 
 ---
 
@@ -131,7 +131,7 @@ There is **no** `/mcp` route. Liberado will call `POST http://search-orchestrato
 
 Keep existing `/` routes if anything else still POSTs MCP to root (LibreChat / OpenClaw may depend on `/`).  
 Rebuild/redeploy `search-orchestrator`.  
-Then Liberado topology entry (life-os deploy or host config):
+Then Liberado topology entry (Liberado deploy or host config):
 
 ```toml
 [[mcps]]
@@ -179,7 +179,7 @@ Liberado calls `…:3600/mcp` → **404**.
 1. **Preferred if the server supports it:** configure Actual MCP HTTP path to `/mcp` (env/docs for `actual-mcp-server` / MCP bridge path).  
 2. Or change its default advertised path in the image’s config so streamable HTTP is at `/mcp`.  
 3. Do **not** use an nginx sidecar (user veto).  
-4. Do **not** require Liberado path customization unless life-os is intentionally changed.
+4. Do **not** require Liberado path customization unless Liberado is intentionally changed.
 
 **Name consistency:** align running container name with compose (`actual-mcp` vs `liberado-actual-mcp`) so topology DNS matches forever.
 
@@ -219,7 +219,7 @@ transport = { kind = "http", url = "http://actual-mcp:3600" }
 **Fix options:**
 
 1. **Homelab KISS:** allow unauthenticated MCP on the internal Docker network only (bind internal, no public auth for `:8080` on the bridge), keep token for any published/Traefik route.  
-2. **life-os change:** add optional headers/token env to `McpTransport::Http` (out of band for pure-homelab agent unless coordinated).  
+2. **Liberado change:** add optional headers/token env to `McpTransport::Http` (out of band for pure-homelab agent unless coordinated).  
 3. Leave spider unwired until (1) or (2).
 
 ---
@@ -241,7 +241,7 @@ transport = { kind = "http", url = "http://actual-mcp:3600" }
 | `~/homelab/services/liberado/config/topology.toml` | `[[mcps]]` list + provider |
 | `~/homelab/services/liberado/config/policy.toml` | `ExecuteMcp` grants (dispatcher / life / coding) |
 | `~/homelab/services/liberado/.env` | Secrets only (API keys, Telegram) — mode 600 |
-| Repo mirror (Windows): `life-os/deploy/homelab/config/*` | Same files; SCP if keeping deploy tree in sync |
+| Repo mirror (Windows): `liberado/deploy/homelab/config/*` | Same files; SCP if keeping deploy tree in sync |
 
 **Current topology policy (high level):**
 

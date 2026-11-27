@@ -13,7 +13,7 @@ open_items: true
 
 # Agentic Coding TUI — Plan (goal-driven session surface + kernel completion gate)
 
-**Status**: plan, 2026-07-31; **updated 2026-08-06**. **S1 (completion gate) landed; S2 (wire events + goal surface) partial; S3 (project auth) landed (#66); S4 (checkpoints + mid-build resume + rewind) landed (#73); S5 (/loop) still unbuilt; S6 (coding fan-out + merge-back) landed (#72); S7 (strategist evals + gate default-on) still open.** (Slice tracking in [`roadmap.md`](../roadmap.md) §Priority 3). Pulled forward from
+**Status**: plan, 2026-07-31; **updated 2026-08-06; re-checked 2026-11-20**. **S1 (completion gate) landed; S2 (wire events + goal surface) landed — the wire events, `hub.park()`, `/api/goals/{id}/park`, `/api/goals/{id}/diff`, and the TUI goal view are all in the tree; S3 (project auth) landed (#66); S4 (checkpoints + mid-build resume + rewind) landed (#73); S5 (/loop) still unbuilt; S6 (coding fan-out + merge-back) landed (#72); S7 (strategist evals + gate default-on) still open.** ([`roadmap.md`](../roadmap.md) is now a pointer to the backlog; the slice numbers live here.) Pulled forward from
 Priority 3 by owner decision (2026-07-24): the daily-driver automation work continues in parallel;
 this is the chosen frontend-adjacent track because the TUI already exists and the engine underneath
 it is done.
@@ -60,12 +60,12 @@ authorization, new wire events, the loop scheduler).
 | Frozen acceptance criteria | `coder-core::{intake, verify}` + `GoalContract` | Grok's "acceptance contract" already exists as intake-frozen criteria + `VerifierSpec`s |
 | One event vocabulary for chat + goals | `liberado-session` `SessionEventKind` + `chat-client-contract` wire mirror | `RoleStarted{role:"critic"}`, `ValidationFinished`, `LoopGuard`, `AwaitingInput`, `ToolStarted/Finished` — the wire already speaks roles and validation |
 | Session streaming (catch-up + live) | `GET /api/goals/{id}/stream` | `subscribe()` returns history + broadcast receiver |
-| The TUI itself | `crates/tui` (~7.2k lines) | Pure HTTP/SSE client; panes, slash palette, session switcher, model browser, themes, markdown |
+| The TUI itself | `crates/tui` (~15.6k lines, re-counted 2026-11-20) | Pure HTTP/SSE client; panes, slash palette, session switcher, model browser, themes, markdown |
 | Shared slash-command crate | `liberado-commands` | `/spawn`, `/join`, `/fork`, `/session`… adding `/goal`/`/loop` is an enum + parser + handler |
 | Chat context compaction | `liberado-main-agent` (CH3, 2026-07-23) | Persisted rolling-summary markers — the pattern goal sessions will reuse |
 | Subagent delegation path | face `delegate` → hub → dispatch pack | Capability-narrowed child sessions, no `AskHuman` on delegated sessions (D-e) |
 | Evals | `heuristics-tuner` `TUNER_LAYER=coder` + curriculum | Mock curriculum in CI; live tiers opt-in |
-| **vtcode: already excised** | — | **Zero** workspace crates depend on vtcode. Remainder: one dead const (`VTCODE_BACKEND`, `coder-core/src/lib.rs:47`), one config comment, doc references, and the external `liberado-pr-dispatch-mcp` legacy backend (separate repo). Blast radius: delete a constant + comments |
+| **vtcode: no dependency, not yet scrubbed from the docs** | — | **Zero** workspace crates depend on vtcode. The `VTCODE_BACKEND` const and the `config.example/tuning.toml` comment are gone (re-checked 2026-11-26). Doc mentions remain in `docs/spec/architecture/overview.md`, `docs/spec/architecture/agentic-loops.md`, `crates/coder-runner/ARCHITECTURE.md`, `crates/tui/ROADMAP.md`, `docs/future-work/tui-maturity-roadmap.md`, `docs/future-work/rust-native-agentic-coder-plan.md`, and this file. The generated `docs/CATALOG.md` and the `docs/future-work/archive/` records still carry the name as history. Rust comments in `executor` and `main-agent` cite VTCode as a peer or a failure mode. What is left as code is the external `liberado-pr-dispatch-mcp` legacy backend (separate repo) |
 
 ### The gaps (what this plan builds)
 
@@ -347,15 +347,20 @@ S2 makes it visible; S3 makes it safe against real repos; S4 makes it reversible
   events added here will make a future WebUI goal view mostly free).
 - **No auto-merge, ever.** Gate approval returns work to the *human*; publication stays
   draft-PR/proposal-gated (Decision 14).
-- **vtcode doc cleanup** rides along with S1's PR (delete the `VTCODE_BACKEND` const
-  (`coder-core/src/lib.rs:47` + its mention in `coder-core/ARCHITECTURE.md:41`), the stale
-  `config.example/tuning.toml` comment, and refresh the references in
-  `rust-native-agentic-coder-plan.md` and `archive/pr-dispatch-vtcode-no-write-finding.md` status), not a
-  separate slice.
+- **vtcode doc cleanup** was partial. The `VTCODE_BACKEND` const and the stale
+  `config.example/tuning.toml` comment are gone, and no workspace crate depends on vtcode. The
+  `coder-core/ARCHITECTURE.md` line that called a vtcode wrapper "existing" was wrong — there is no
+  vtcode wrapper in this repository — and is now corrected. Live mentions also remain in
+  `docs/spec/architecture/overview.md`, `docs/spec/architecture/agentic-loops.md`,
+  `crates/coder-runner/ARCHITECTURE.md`, `crates/tui/ROADMAP.md`,
+  `docs/future-work/tui-maturity-roadmap.md`, and `docs/future-work/rust-native-agentic-coder-plan.md`.
+  The generated `docs/CATALOG.md` row and the historical
+  `archive/pr-dispatch-vtcode-no-write-finding.md` status line stay.
 
 ## Docs this plan updates when slices land
 
 `agentic-loops.md` (gate row in the kernel table), `verifiers.md` (gate as the critic layer's
 generalization), `session-surface-contract.md` (goal-view conformance rows), `overview.md` (crate
 map: `completion_gate` module, checkpoint service), `reference/api.md` (`/api/projects`,
-`/api/loops*`, park/resume/rewind/diff endpoints), `roadmap.md` (slice tracking).
+`/api/loops*`, park/resume/rewind/diff endpoints). Slice tracking lives in this file: `roadmap.md` is
+now a pointer to the backlog and the direction.

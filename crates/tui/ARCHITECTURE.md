@@ -90,7 +90,7 @@ App {
     conversations: Vec<ConvHeader>, // sidebar list
 
     // Focus
-    focus: Focus,               // Input | SidebarConversations
+    focus: Focus,               // Input | SessionBrowser | SessionSwitcher | ModelBrowser | ChatMessages
     scroll_offset: usize,       // chat scrollback
 }
 ```
@@ -128,8 +128,11 @@ per pane/input-mode rather than one monolithic `ui.rs`/input-handling function.
 | `conversations.rs` | Pure functions building/flattening a conversation tree from `ConvHeader` data for the sidebar list |
 | `effects.rs` | `EffectRunner`: owns the shared state needed to actually execute the `Effect` instructions `App::update` produces (HTTP calls, SSE streams, terminal actions) |
 | `format.rs` | Pure formatting utilities (timestamps, previews) shared by `app.rs`/`render/` |
-| `handlers/` | Keyboard/mouse input handlers, one file per concern (`chat.rs`, `dialog.rs`, `input.rs`, `mouse.rs`, `sidebar.rs`) — each a free `handle(app, key) -> Vec<Effect>`, dispatched by focus |
-| `render/` | Rendering, one file per pane (`chat.rs`, `dialog.rs`, `input.rs`, `sidebar_conversations.rs`, `sidebar_reactions.rs`, `sidebar_status.rs`, `status_bar.rs`) behind a `draw()` entry point that lays out the frame and dispatches to each. Pure rendering — reads `App`, never mutates |
+| `handlers/` | Keyboard/mouse input handlers, one file per concern (`chat.rs`, `dialog.rs`, `input.rs`, `models.rs`, `mouse.rs`, `sidebar.rs`, `switcher.rs`) — each a free `handle(app, key) -> Vec<Effect>`, dispatched by focus |
+| `render/` | Rendering, one file per pane (`chat.rs`, `chat/assistant.rs`, `dialog.rs`, `goal_sidebar.rs`, `input.rs`, `models.rs`, `sessions.rs`, `sidebar_conversations.rs`, `sidebar_reactions.rs`, `sidebar_status.rs`, `slash_palette.rs`, `status_bar.rs`, `switcher.rs`) behind a `draw()` entry point that lays out the frame and dispatches to each. Pure rendering — reads `App`, never mutates |
+| `api_bearer.rs` | Attaches `LIBERADO_API_TOKEN` to outbound daemon requests |
+| `md_cache.rs` | Content-keyed cache of parsed markdown (`Vec<MarkdownLine>`) |
+| `ui.rs` | Shared ratatui styling helpers and theme color resolution |
 | `terminal.rs` | `TerminalGuard`: raw mode, alternate screen, mouse capture lifecycle |
 | `tuning.rs` | Tunable constants (scrollback limits, poll intervals, etc.) kept in one place |
 

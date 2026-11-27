@@ -174,8 +174,9 @@ liberado coder compare prepare <run-dir> --commit main
 ```
 
 The command copies leftover `turbovault/` and `turbomcp/` trees into each worktree when those
-directories are present locally. They are not required: Cargo fetches the ForrestThump git+tag
-pins. When a leftover tree is copied, the copy rejects
+directories are present locally. They are not required: Cargo fetches the ForrestThump forks by git
+rev (commit SHA), pinned to the merge commits that landed each fork's jiff migration. When a
+leftover tree is copied, the copy rejects
 symlinks and Windows reparse points, and excludes rebuildable or repository-local `.git/`,
 `target/`, `.liberado/`, and `.fastembed_cache/` directories. It never links a worktree to a leftover
 checkout.

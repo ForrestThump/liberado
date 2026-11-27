@@ -191,10 +191,10 @@ folder surface. CAS is what replaces "move" where moving is not available.
 ### 14.2 Triggering is a hybrid, and the flag decides which half owns a note
 
 * **No flag → the schedule owns it.** The sweep processes only notes with no *human* edit in the
-  last `inbox_settle_window_secs` (default 10 min). The schedule interval doubles as most of the
+  last `inbox_settle_window_secs` (default 15 min). The schedule interval doubles as most of the
   settle window, so this path needs no separate quiescence machinery.
 * **`#now` present → the watcher owns it.** Processing fires `ready_now_settle_secs` (default
-  5 min) after the last human edit, resetting on each edit. Long enough to keep tweaking a note
+  2 min) after the last human edit, resetting on each edit. Long enough to keep tweaking a note
   without it being swept mid-sentence; short enough to mean "now".
 * **`#hold-off` → neither.** Unchanged from §3.
 
