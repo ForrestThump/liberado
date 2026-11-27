@@ -87,7 +87,7 @@
         },
         {
           "file": "crates/cli/src/docs_meta_cmd.rs",
-          "line": 231,
+          "line": 230,
           "column": 20,
           "method": "unwrap",
           "snippet": "doc.meta.as_ref().unwrap()",
@@ -98,7 +98,7 @@
         },
         {
           "file": "crates/cli/src/docs_meta_cmd.rs",
-          "line": 721,
+          "line": 720,
           "column": 28,
           "method": "expect",
           "snippet": "path.parent().expect(\"document has parent\")",
