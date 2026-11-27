@@ -37,7 +37,7 @@ pub struct PreflightReport {
     pub credential_environment: String,
 }
 
-/// Leftover local `turbovault/` / `turbomcp/` trees are optional. Cargo fetches the git+tag pins.
+/// Leftover local `turbovault/` / `turbomcp/` trees are optional. Cargo fetches the git+rev pins.
 fn optional_sibling_bytes(repository: &Path) -> Result<u64, Box<dyn Error>> {
     ["turbovault", "turbomcp"]
         .iter()
