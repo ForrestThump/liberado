@@ -170,7 +170,8 @@ fn task_ping_applies_the_global_filter_to_the_raw_task_line() {
     assert!(!message.contains("nested copy"), "{message}");
 }
 
-/// A nested bullet is a task of its own. It never joins the task above it.
+/// A nested task is an entry of its own. It never shares a line with the
+/// task above it.
 #[test]
 fn task_ping_lists_a_nested_task_on_its_own() {
     let root = tempfile::tempdir().unwrap();
@@ -188,8 +189,36 @@ fn task_ping_lists_a_nested_task_on_its_own() {
     );
 
     let message = task_ping_message(root.path(), 10, today());
-    assert!(message.contains("parent task"), "{message}");
-    assert!(message.contains("nested task"), "{message}");
+    assert!(message.contains("1. parent task —"), "{message}");
+    assert!(message.contains("2. nested task —"), "{message}");
+}
+
+/// A nested note never joins the task above it.
+///
+/// TurboVault keeps the list items apart, so the note under a task stays out
+/// of the task's text.
+#[test]
+fn task_ping_keeps_a_nested_note_out_of_the_task_above_it() {
+    let root = tempfile::tempdir().unwrap();
+    write_tasks_data(
+        root.path(),
+        r##"{"globalFilter":"#task","removeGlobalFilter":false}"##,
+    );
+    write_note(
+        root.path(),
+        "Tasks/Home.md",
+        "\
+- [ ] parent task #task 📅 2026-09-28
+  - 📝 prescription is somewhere in the house
+",
+    );
+
+    let message = task_ping_message(root.path(), 10, today());
+    assert!(message.contains("1. parent task —"), "{message}");
+    assert!(
+        !message.contains("prescription is somewhere in the house"),
+        "{message}"
+    );
 }
 
 /// TurboVault reads a clock-face time next to its date, an ISO date-time,

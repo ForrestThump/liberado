@@ -68,8 +68,9 @@ pub(super) fn parse_tasks_for_jobs(text: &str) -> Vec<TaskItem> {
 /// TurboVault's parser reads a time of day as its own token, so
 /// `📅 2026-09-28 14:00` and `📅 2026-09-28 🕘 14:00` both parse. Two shapes
 /// need a rewrite: an ISO date-time is one token
-/// (`📅 2026-09-28T14:00`), and a time with seconds is not a time of day the
-/// parser can read (`📅 2026-09-28 14:00:30`).
+/// (`📅 2026-09-28T14:00`), and a time with seconds leaves `:30` behind, which
+/// makes the whole trailing metadata section impure
+/// (`📅 2026-09-28 14:00:30`).
 fn normalize_task_lines_for_parser(text: &str) -> String {
     text.lines()
         .map(|line| {
@@ -104,14 +105,18 @@ fn normalize_task_line_for_parser(line: &str) -> String {
         match split_iso_datetime(date) {
             Some((date, time)) => {
                 out.push(date);
-                out.push(time);
+                if takes_a_time(token) {
+                    out.push(time);
+                }
                 index += 1;
             }
             None => {
                 out.push(date.to_string());
                 index += 1;
                 if let Some(clock) = parts.get(index).and_then(|token| parse_clock(token)) {
-                    out.push(format_hhmm(clock));
+                    if takes_a_time(token) {
+                        out.push(format_hhmm(clock));
+                    }
                     index += 1;
                 }
             }
@@ -122,6 +127,16 @@ fn normalize_task_line_for_parser(line: &str) -> String {
 
 fn is_date_marker(token: &str) -> bool {
     matches!(token, "📅" | "⏳" | "🛫" | "✅" | "❌" | "➕")
+}
+
+/// Whether a date marker can carry a time of day.
+///
+/// TurboVault attaches a time to a due, scheduled or start date. A done,
+/// cancelled or created marker has no time field: the time beside it is a
+/// metadata item of its own, and it makes the trailing metadata section
+/// impure, so the time is dropped there.
+fn takes_a_time(token: &str) -> bool {
+    matches!(token, "📅" | "⏳" | "🛫")
 }
 
 /// Split an ISO date-time (`2026-09-28T14:00`) into a date and a time.
