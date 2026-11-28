@@ -11,9 +11,11 @@ local run is how you keep GitHub from sending the work back.
 ## Build and test
 
 **Cargo fetches the co-developed forks by git rev.** `turbovault*` and `turbomcp*` crates are
-pinned to the ForrestThump forks at the merge commits that landed their jiff migrations, one
-commit SHA per fork. Nested `turbovault/` and `turbomcp/` clones inside this repo are
-not required; leftover directories stay gitignored if present.
+pinned to the ForrestThump forks at their merge commits, one commit SHA per fork. The
+turbovault pin is the pull request #7 merge (task-parser filter nesting and time handling) on
+top of the pull request #6 jiff merge; the turbomcp pin is still the pull request #4 jiff
+merge. Nested `turbovault/` and `turbomcp/` clones inside this repo are not required; leftover
+directories stay gitignored if present.
 
 `.github/workflows/ci.yml` is the authority on what CI runs, and preflight mirrors it.
 

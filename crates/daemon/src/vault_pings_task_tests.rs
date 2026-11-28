@@ -141,3 +141,113 @@ fn future_start_stays_hidden_and_due_clock_stays_visible() {
     assert!(message.contains("now"), "{message}");
     assert!(!message.contains("later"), "{message}");
 }
+
+/// The Tasks plugin matches its global filter against the raw task line, so a
+/// `#task` token survives trailing text that keeps the rest of the line from
+/// being parsed as metadata. The match stays a token match.
+#[test]
+fn task_ping_applies_the_global_filter_to_the_raw_task_line() {
+    let root = tempfile::tempdir().unwrap();
+    write_tasks_data(
+        root.path(),
+        r##"{"globalFilter":"#task","removeGlobalFilter":false}"##,
+    );
+    write_note(
+        root.path(),
+        "Tasks/Home.md",
+        "\
+- [ ] Buy new eyeglasses #task — see [[2026-10-08]] 📅 2026-11-07
+- [ ] force copy #taskforce — see [[2026-10-08]] 📅 2026-11-07
+- [ ] plural copy #tasks — see [[2026-10-08]] 📅 2026-11-07
+- [ ] nested copy #task/sub — see [[2026-10-08]] 📅 2026-11-07
+",
+    );
+
+    let message = task_ping_message(root.path(), 10, today());
+    assert!(message.contains("Buy new eyeglasses"), "{message}");
+    assert!(!message.contains("force copy"), "{message}");
+    assert!(!message.contains("plural copy"), "{message}");
+    assert!(!message.contains("nested copy"), "{message}");
+}
+
+/// A nested task is an entry of its own. It never shares a line with the
+/// task above it.
+#[test]
+fn task_ping_lists_a_nested_task_on_its_own() {
+    let root = tempfile::tempdir().unwrap();
+    write_tasks_data(
+        root.path(),
+        r##"{"globalFilter":"#task","removeGlobalFilter":false}"##,
+    );
+    write_note(
+        root.path(),
+        "Tasks/Home.md",
+        "\
+- [ ] parent task #task 📅 2026-09-28
+  - [ ] nested task #task 📅 2026-09-29
+",
+    );
+
+    let message = task_ping_message(root.path(), 10, today());
+    assert!(message.contains("1. parent task —"), "{message}");
+    assert!(message.contains("2. nested task —"), "{message}");
+}
+
+/// A nested note never joins the task above it.
+///
+/// TurboVault keeps the list items apart, so the note under a task stays out
+/// of the task's text.
+#[test]
+fn task_ping_keeps_a_nested_note_out_of_the_task_above_it() {
+    let root = tempfile::tempdir().unwrap();
+    write_tasks_data(
+        root.path(),
+        r##"{"globalFilter":"#task","removeGlobalFilter":false}"##,
+    );
+    write_note(
+        root.path(),
+        "Tasks/Home.md",
+        "\
+- [ ] parent task #task 📅 2026-09-28
+  - 📝 prescription is somewhere in the house
+",
+    );
+
+    let message = task_ping_message(root.path(), 10, today());
+    assert!(message.contains("1. parent task —"), "{message}");
+    assert!(
+        !message.contains("prescription is somewhere in the house"),
+        "{message}"
+    );
+}
+
+/// TurboVault reads a clock-face time next to its date, an ISO date-time,
+/// and a time that has no date at all. Each one belongs in the digest.
+#[test]
+fn task_ping_shows_every_time_the_parser_finds() {
+    let root = tempfile::tempdir().unwrap();
+    write_tasks_data(
+        root.path(),
+        r##"{"globalFilter":"#task","removeGlobalFilter":false}"##,
+    );
+    write_note(
+        root.path(),
+        "Tasks/Home.md",
+        "\
+- [ ] clinic #task 📅 2026-09-28 🕘 09:00
+- [ ] iso clinic #task 📅 2026-09-29T15:45
+- [ ] standup #task [dueTime:: 09:00]
+",
+    );
+
+    let message = task_ping_message(root.path(), 10, today());
+    assert!(
+        message.contains("clinic — due 2026-09-28 at 09:00 (today)"),
+        "{message}"
+    );
+    assert!(
+        message.contains("iso clinic — due 2026-09-29 at 15:45"),
+        "{message}"
+    );
+    assert!(message.contains("standup — due at 09:00"), "{message}");
+}

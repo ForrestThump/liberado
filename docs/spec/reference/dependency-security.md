@@ -85,24 +85,25 @@ stays in the graph for other crates, so 0.12.2 is an added exemption with
 the same `safe-to-deploy` criteria. `hashbrown` 0.17.1, which 0.12.2 uses,
 was already exempt. This exemption is debt, not an audit.
 
-`turbovault*` is pinned to commit `179ded6003e05071b6609bbc8a5edbef04dc5fa9`,
-the merge commit that landed the fork's jiff migration (pull request #6, into
-`main`). That commit's
-`turbovault-vector` requires `rusqlite` 0.41.1 with the `bundled` feature,
-so the graph has one `libsqlite3-sys`, 0.39.1. The previous pin, tag
-`liberado-2026-11-10` (`260dc271`), required `rusqlite` ^0.39 and kept
-`libsqlite3-sys` 0.37.0 in the graph. The git-SHA vet exemptions for the
-TurboVault crates moved from `260dc271` to `179ded6`. The criteria stay
-`safe-to-deploy`. The exemptions are still debt, not audits. TurboVault's own
-lockfile on this commit also bumps its transitive crates. Liberado resolves
-those crates from the published requirements, and this bump did not add a new
-crates.io version to Liberado's graph.
+`turbovault*` is pinned to commit `e64c3bee28c45671b7c89c41dbf9cd3d66631238`,
+the merge commit of the fork's pull request #7
+(`fix/task-parser-filter-nesting-time`), which sits on the pull request #6
+jiff merge. That commit's `turbovault-vector` requires `rusqlite` 0.41.1 with
+the `bundled` feature, so the graph has one `libsqlite3-sys`, 0.39.1. The
+previous pin, tag `liberado-2026-11-10` (`260dc271`), required `rusqlite`
+^0.39 and kept `libsqlite3-sys` 0.37.0 in the graph. The git-SHA vet
+exemptions for the TurboVault crates moved from `260dc271` to `179ded6`, and
+then to `e64c3be`. The criteria stay `safe-to-deploy`. The exemptions are
+still debt, not audits. TurboVault's own lockfile on this commit also bumps
+its transitive crates. Liberado resolves those crates from the published
+requirements, and this bump did not add a new crates.io version to Liberado's
+graph.
 
 GitHub Actions use full commit SHAs. Dependabot proposes Action SHA changes.
 `turbovault*` and `turbomcp*` are the ForrestThump forks, pinned by commit SHA
-at the merge commits that landed their jiff migrations: `179ded6` for
-turbovault (pull request #6, into `main`) and `b7774c9` for turbomcp (pull
-request #4, into `develop`). Those merges carry the same change this
+at their merge commits: `e64c3be` for turbovault (pull request #7, into
+`main`, on top of the pull request #6 jiff merge) and `b7774c9` for turbomcp
+(pull request #4, into `develop`). Those merges carry the same change this
 branch carries: `chrono` and `chrono-tz` are gone and `jiff` replaces them.
 Every pin is one `rev` per fork in the root manifest, so a bump is one
 search-and-replace per SHA. The forks publish no `liberado-*` tag for these

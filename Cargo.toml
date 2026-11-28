@@ -132,9 +132,11 @@ liberado-sysmap-gui = { path = "crates/sysmap-gui" }
 sysmap-core = { path = "crates/sysmap-core" }
 
 # --- co-developed git+rev pins (Decision 7) ---
-# ForrestThump forks, pinned at the merge commits that landed the jiff
-# migration: turbovault pull request #6 on `main`, turbomcp pull request #4 on
-# `develop`. Those merges carry the same time-code change this branch carries:
+# ForrestThump forks. The turbovault pin is the merge of pull request #7
+# (`fix/task-parser-filter-nesting-time`) on `main`, which sits on top of the
+# pull request #6 jiff merge: it fixes the task parser's global filter, its
+# nested-bullet handling, and its time-of-day parsing. The turbomcp pin is
+# still the pull request #4 merge on `develop`. The jiff change is in both:
 # `chrono` and `chrono-tz` are gone and `jiff` replaces them. The forks
 # publish no `liberado-*` tag for these merges, so the pins stay on the merge
 # commits. If a tag does appear, swap the `rev` below for it. Do not invent a
@@ -145,15 +147,15 @@ sysmap-core = { path = "crates/sysmap-core" }
 # `turbovault*` lines; turbomcp's only on the `turbomcp*` lines and in the
 # `[patch.crates-io]` list below. A bump is therefore one search-and-replace per
 # SHA in this file.
-turbovault-core = { git = "https://github.com/ForrestThump/turbovault", rev = "179ded6003e05071b6609bbc8a5edbef04dc5fa9" }
-turbovault-vault = { git = "https://github.com/ForrestThump/turbovault", rev = "179ded6003e05071b6609bbc8a5edbef04dc5fa9" }
-turbovault-audit = { git = "https://github.com/ForrestThump/turbovault", rev = "179ded6003e05071b6609bbc8a5edbef04dc5fa9" }
-turbovault = { git = "https://github.com/ForrestThump/turbovault", rev = "179ded6003e05071b6609bbc8a5edbef04dc5fa9" } # umbrella (ObsidianMcpServer) — test-only
+turbovault-core = { git = "https://github.com/ForrestThump/turbovault", rev = "e64c3bee28c45671b7c89c41dbf9cd3d66631238" }
+turbovault-vault = { git = "https://github.com/ForrestThump/turbovault", rev = "e64c3bee28c45671b7c89c41dbf9cd3d66631238" }
+turbovault-audit = { git = "https://github.com/ForrestThump/turbovault", rev = "e64c3bee28c45671b7c89c41dbf9cd3d66631238" }
+turbovault = { git = "https://github.com/ForrestThump/turbovault", rev = "e64c3bee28c45671b7c89c41dbf9cd3d66631238" } # umbrella (ObsidianMcpServer) — test-only
 # liberado-memory-store's semantic recall.
-turbovault-vector = { git = "https://github.com/ForrestThump/turbovault", rev = "179ded6003e05071b6609bbc8a5edbef04dc5fa9" }
+turbovault-vector = { git = "https://github.com/ForrestThump/turbovault", rev = "e64c3bee28c45671b7c89c41dbf9cd3d66631238" }
 # Obsidian Tasks lines and the Tasks plugin global filter. Used by task-ping.
-turbovault-parser = { git = "https://github.com/ForrestThump/turbovault", rev = "179ded6003e05071b6609bbc8a5edbef04dc5fa9" }
-turbovault-plugin-tasks = { git = "https://github.com/ForrestThump/turbovault", rev = "179ded6003e05071b6609bbc8a5edbef04dc5fa9" }
+turbovault-parser = { git = "https://github.com/ForrestThump/turbovault", rev = "e64c3bee28c45671b7c89c41dbf9cd3d66631238" }
+turbovault-plugin-tasks = { git = "https://github.com/ForrestThump/turbovault", rev = "e64c3bee28c45671b7c89c41dbf9cd3d66631238" }
 turbomcp = { git = "https://github.com/ForrestThump/turbomcp", rev = "b7774c963adaf31999b2e6db7d7715c59b724646" }
 turbomcp-client = { git = "https://github.com/ForrestThump/turbomcp", rev = "b7774c963adaf31999b2e6db7d7715c59b724646" }
 turbomcp-transport = { git = "https://github.com/ForrestThump/turbomcp", rev = "b7774c963adaf31999b2e6db7d7715c59b724646" } # ChildProcessTransport (stdio connector)

@@ -133,6 +133,24 @@ fn a_tasks_rollover_logs_one_row() {
     assert_eq!(world.rows()[0].precision, PRECISION_TICK);
 }
 
+/// A time of day beside a done date must not cost the done date.
+///
+/// TurboVault has no time field for a done marker, and a time beside one
+/// leaves the trailing metadata section impure.
+#[test]
+fn a_done_date_with_a_time_of_day_still_reads_the_done_date() {
+    let world = World::new();
+    world.write("Home.md", "- [ ] Call dentist\n");
+    world.run(noon());
+    world.write(
+        "Home.md",
+        "- [x] Call dentist ✅ 2026-11-10 09:00\n- [ ] Call dentist\n",
+    );
+    world.run(noon());
+    assert_eq!(world.rows().len(), 1);
+    assert_eq!(world.rows()[0].done_date.as_deref(), Some("2026-11-10"));
+}
+
 #[test]
 fn a_recent_done_hint_supplies_tap_time_and_an_old_hint_does_not() {
     let world = World::new();
